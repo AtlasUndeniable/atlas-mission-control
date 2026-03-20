@@ -70,7 +70,7 @@ export default function SystemPerformance() {
         <div className="flex justify-between items-center">
           <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>Model</span>
           <span className="type-data" style={{ fontSize: "13px", fontWeight: 600, color: "#0088FF" }}>
-            Sonnet 4.5
+            Opus 4.6
           </span>
         </div>
 

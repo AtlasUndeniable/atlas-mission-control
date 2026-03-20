@@ -32,15 +32,44 @@ function getLogPaths(): string[] {
   return paths;
 }
 
+// Lines that are noise — skip them
+const NOISE_PATTERNS = [
+  /No new Rhys calls to process/i,
+  /Polling Fireflies for new transcripts/i,
+  /Polling every \d+ minutes/i,
+  /Call processor health endpoint/i,
+  /Bridges: Fireflies/i,
+  /ATLAS Call Processor starting/i,
+  /socket mode connected/i,
+  /users resolved:/i,
+];
+
+function isNoise(line: string): boolean {
+  return NOISE_PATTERNS.some((p) => p.test(line));
+}
+
+function inferStatus(line: string, emoji: string): string {
+  if (emoji.includes("✅") || emoji.includes("🚀")) return "success";
+  if (emoji.includes("❌") || emoji.includes("💀")) return "error";
+  if (emoji.includes("⚠️")) return "warning";
+  if (/\bsent\b/i.test(line) || /\bdelivered\b/i.test(line) || /\bprocessed\b/i.test(line)) return "success";
+  if (/\berror\b/i.test(line) || /\bfailed\b/i.test(line) || /\brejected\b/i.test(line)) return "error";
+  return "info";
+}
+
 function parseLogEntries(content: string, source: string): Array<{ timestamp: string; action: string; status: string; source: string }> {
   const lines = content.split("\n").filter(Boolean);
   const entries: Array<{ timestamp: string; action: string; status: string; source: string }> = [];
 
   for (const line of lines) {
-    // Pattern 1: [date] emoji message
-    const match1 = line.match(/\[([^\]]+)\]\s*(.+)/);
-    // Pattern 2: ISO timestamp [component] message
+    if (isNoise(line)) continue;
+
+    // Pattern 1: ISO timestamp [component] message (gateway log)
     const match2 = line.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})\s*\[([^\]]*)\]\s*(.+)/);
+    // Pattern 2: [dd/mm/yyyy, time] emoji message (call processor, slack bridge)
+    const match1 = line.match(/\[([^\]]+)\]\s*(.+)/);
+    // Pattern 3: ISO timestamp followed by plain text (gateway briefing output)
+    const match3 = line.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})\s+(.+)/);
 
     let timestamp = "";
     let action = "";
@@ -49,14 +78,21 @@ function parseLogEntries(content: string, source: string): Array<{ timestamp: st
     if (match2) {
       const ts = new Date(match2[1]);
       timestamp = ts.toLocaleString("en-AU", { timeZone: "Australia/Brisbane", hour: "2-digit", minute: "2-digit", hour12: true });
-      action = `[${match2[2]}] ${match2[3]}`;
+      const component = match2[2];
+      const msg = match2[3];
+      action = `[${component}] ${msg}`;
+      status = inferStatus(msg, "");
     } else if (match1) {
       timestamp = match1[1];
-      action = match1[2].replace(/^[^\w\s]*\s*/, "");
-      const emoji = match1[2].match(/^([^\w\s]*)/)?.[1] || "";
-      if (emoji.includes("✅") || emoji.includes("🚀")) status = "success";
-      else if (emoji.includes("❌") || emoji.includes("💀")) status = "error";
-      else if (emoji.includes("⚠️")) status = "warning";
+      const raw = match1[2];
+      const emoji = raw.match(/^([^\w\s]*)/)?.[1] || "";
+      action = raw.replace(/^[^\w\s]*\s*/, "");
+      status = inferStatus(action, emoji);
+    } else if (match3) {
+      const ts = new Date(match3[1]);
+      timestamp = ts.toLocaleString("en-AU", { timeZone: "Australia/Brisbane", hour: "2-digit", minute: "2-digit", hour12: true });
+      action = match3[2];
+      status = inferStatus(action, "");
     } else {
       continue;
     }
@@ -74,7 +110,7 @@ export async function GET() {
   for (const logPath of logPaths) {
     try {
       const content = readFileSync(logPath, "utf8");
-      const tail = content.slice(-4000);
+      const tail = content.slice(-8000);
       const source = logPath.includes("gateway") ? "gateway"
         : logPath.includes("call-processor") ? "processor"
         : logPath.includes("slack") ? "slack"

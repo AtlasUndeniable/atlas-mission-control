@@ -52,13 +52,14 @@ export default function PipelinePanel({ data }: { data: unknown }) {
 
   // Shorten stage names for compact display
   const SHORT_NAMES: Record<string, string> = {
-    "Lead Magnet": "Lead",
-    "Enquired": "Enquired",
-    "Booked Triage": "Triage",
-    "Booked IA": "BOOKED",
-    "Pending": "Pending",
-    "Closed Deal": "Closed",
-    "No Sale": "No Sale",
+    "lead magnet": "Lead",
+    "enquired": "Enquired",
+    "booked triage": "Triage",
+    "booked launch": "Launch",
+    "booked ia": "Booked",
+    "pending": "Pending",
+    "closed deal": "Closed",
+    "no sale": "No Sale",
   };
   const shortName = (name: string) => {
     for (const [key, val] of Object.entries(SHORT_NAMES)) {
@@ -132,7 +133,7 @@ export default function PipelinePanel({ data }: { data: unknown }) {
               <div key={i} className="flex justify-between items-center py-1.5">
                 <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "rgba(255,255,255,0.75)" }} className="truncate">{p.name}</span>
                 <span className="type-data" style={{ fontSize: "11px", color: "#6B7280" }}>
-                  {p.stages.length} stages
+                  {p.stages.reduce((sum, s) => sum + (s.count ?? 0), 0)} leads · {p.stages.length} stages
                 </span>
               </div>
             ))}

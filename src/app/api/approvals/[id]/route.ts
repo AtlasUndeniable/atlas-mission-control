@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 
-const QUEUE_PATH = "/tmp/atlas-approvals.json";
+const QUEUE_PATH = "/Users/atlasai/.openclaw/data/approvals.json";
 
 export async function POST(
   request: NextRequest,
