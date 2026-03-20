@@ -313,7 +313,19 @@ export default function Dashboard() {
           <KpiCard label="Daily Ad Spend" value="—" connecting subtext="Meta — Manus handles" accentClass="kpi-accent-amber" />
           <KpiCard label="ROAS" value="—" connecting subtext="Meta — Manus handles" accentClass="kpi-accent-amber" />
           <KpiCard label="Slack Channels" value={overview?.slack?.totalChannels ?? "—"} subtext="Total monitored" accentClass="kpi-accent-white" />
-          <KpiCard label="Close Rate" value="—" connecting subtext="GHL pipeline" accentClass="kpi-accent-cyan" />
+          <KpiCard
+            label="Close Rate"
+            value={(() => {
+              const sales = (overview?.pipeline as Record<string, unknown>)?.pipelines as Array<{ name: string; totalOpportunities?: number; stages?: Array<{ name: string; count?: number }> }> | undefined;
+              const salesPipeline = sales?.find((p) => p.name === "SALES");
+              if (!salesPipeline?.totalOpportunities) return "—";
+              const closed = salesPipeline.stages?.find((s) => s.name === "CLOSED DEAL")?.count || 0;
+              return salesPipeline.totalOpportunities > 0 ? Math.round((closed / salesPipeline.totalOpportunities) * 100) + "%" : "—";
+            })()}
+            subtext="SALES pipeline"
+            connecting={!overview?.pipeline}
+            accentClass="kpi-accent-cyan"
+          />
         </div>
 
         {/* Row 3-4: Main Panels (4 columns) */}

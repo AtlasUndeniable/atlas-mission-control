@@ -40,6 +40,8 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
 
   const beepRef = useRef(0);
   const cancelledRef = useRef(false);
+  const soundRef = useRef(soundEngine);
+  soundRef.current = soundEngine;
 
   // ===== PHASE TIMELINE =====
   useEffect(() => {
@@ -58,8 +60,8 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
     const t2 = setTimeout(() => {
       if (!cancelledRef.current) {
         setShowLogo(true);
-        soundEngine.playPowerUp();
-        soundEngine.startAmbient();
+        soundRef.current.playPowerUp();
+        soundRef.current.startAmbient();
       }
     }, 700);
 
@@ -83,7 +85,8 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
       clearTimeout(t3);
       clearTimeout(t4);
     };
-  }, [skipped, soundEngine]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skipped]);
 
   // ===== INIT LINE TYPEWRITER =====
   useEffect(() => {
@@ -99,8 +102,8 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
 
       if (charIdx >= fullText.length) {
         // Line complete — play beep + init line blip
-        soundEngine.playConnectionBeep(beepRef.current++);
-        soundEngine.playInitLine();
+        soundRef.current.playConnectionBeep(beepRef.current++);
+        soundRef.current.playInitLine();
 
         // 200ms pause then next line
         setTimeout(() => {
@@ -110,7 +113,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
             setInitCharIndex(0);
           } else {
             // All lines done — play system online chime
-            soundEngine.playSystemOnline();
+            soundRef.current.playSystemOnline();
             // 500ms pause then fade out boot, hand off to briefing
             setTimeout(() => {
               if (cancelledRef.current) return;
@@ -131,7 +134,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
 
       // Keystroke sound every 5th char
       if (charIdx % 5 === 0) {
-        soundEngine.playKeystroke();
+        soundRef.current.playKeystroke();
       }
 
       setTimeout(typeNext, 15);

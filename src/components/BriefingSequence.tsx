@@ -87,6 +87,8 @@ export default function BriefingSequence({ onComplete, soundEngine, data }: Brie
   const [cursorVisible, setCursorVisible] = useState(true);
 
   const cancelledRef = useRef(false);
+  const soundRef = useRef(soundEngine);
+  soundRef.current = soundEngine;
   const linesRef = useRef<string[]>([]);
   const lineBlipPlayedRef = useRef<Set<number>>(new Set());
   const [linesReady, setLinesReady] = useState(false);
@@ -141,7 +143,7 @@ export default function BriefingSequence({ onComplete, soundEngine, data }: Brie
       // Play line blip on first char of each non-empty line
       if (charIdx === 0 && currentLine.length > 0 && !lineBlipPlayedRef.current.has(lineIdx)) {
         lineBlipPlayedRef.current.add(lineIdx);
-        soundEngine.playInitLine();
+        soundRef.current.playInitLine();
       }
 
       // Blank line — pause
@@ -214,13 +216,14 @@ export default function BriefingSequence({ onComplete, soundEngine, data }: Brie
     const holdTimer = setTimeout(() => {
       if (!cancelledRef.current) {
         setFadeOut(true);
-        soundEngine.playBootComplete();
-        soundEngine.startAmbient();
+        soundRef.current.playBootComplete();
+        soundRef.current.startAmbient();
       }
     }, 2000);
 
     return () => clearTimeout(holdTimer);
-  }, [typingDone, soundEngine]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typingDone]);
 
   // ===== FADE OUT → COMPLETE =====
   useEffect(() => {
@@ -238,10 +241,10 @@ export default function BriefingSequence({ onComplete, soundEngine, data }: Brie
   // ===== SKIP =====
   const handleSkip = useCallback(() => {
     cancelledRef.current = true;
-    soundEngine.playClick();
-    soundEngine.startAmbient();
+    soundRef.current.playClick();
+    soundRef.current.startAmbient();
     onComplete();
-  }, [onComplete, soundEngine]);
+  }, [onComplete]);
 
   // ===== RENDER =====
   const lines = linesRef.current;

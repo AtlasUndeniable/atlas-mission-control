@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -707,8 +708,8 @@ export function SoundProvider({ children }: { children: ReactNode }) {
   const notification = playNotification;
   const boot = playBoot;
 
-  // ===== CONTEXT VALUE =====
-  const engine: SoundEngine = {
+  // ===== CONTEXT VALUE (memoised to prevent effect re-fires in consumers) =====
+  const engine: SoundEngine = useMemo(() => ({
     isMuted,
     toggleMute,
     setMasterVolume,
@@ -732,7 +733,8 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     refresh,
     notification,
     boot,
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [isMuted, isAmbientPlaying]);
 
   return (
     <SoundContext.Provider value={engine}>

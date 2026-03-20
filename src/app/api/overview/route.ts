@@ -105,6 +105,14 @@ async function gatherOverview() {
     }
   }
 
+  // Count opportunities per pipeline
+  const pipelineCounts: Record<string, number> = {};
+  for (const opp of opportunities) {
+    if (opp.status === "open" || opp.status === "won") {
+      pipelineCounts[opp.pipelineId] = (pipelineCounts[opp.pipelineId] || 0) + 1;
+    }
+  }
+
   // Enrich pipelines with counts
   const enrichedPipelines = pipelines.map((p) => ({
     ...p,
@@ -112,6 +120,7 @@ async function gatherOverview() {
       ...s,
       count: stageCounts[s.id] || 0,
     })),
+    totalOpportunities: pipelineCounts[p.id] || 0,
   }));
 
   // Slack
