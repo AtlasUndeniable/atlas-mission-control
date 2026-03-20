@@ -7,6 +7,7 @@ const SERVICES = {
   fireflies: "http://127.0.0.1:4005/health",
   slack: "http://127.0.0.1:4006/health",
   call_processor: "http://127.0.0.1:4007/health",
+  knowledge: "http://127.0.0.1:4008/health",
 };
 
 async function checkService(url: string): Promise<{ status: string; latency_ms: number }> {
