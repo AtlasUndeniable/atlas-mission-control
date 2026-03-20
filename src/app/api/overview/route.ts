@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 let cachedData: { data: unknown; ts: number } | null = null;
-const CACHE_TTL = 30_000; // 30 seconds
+const CACHE_TTL = 30_000;
 
 async function fetchJSON(url: string) {
   try {
@@ -14,12 +14,11 @@ async function fetchJSON(url: string) {
 }
 
 async function gatherOverview() {
-  const [mondayRaw, firefliesRaw, ghlPipeline, ghlContacts, slackRaw, callHealth] =
+  const [mondayRaw, firefliesRaw, ghlRaw, slackRaw, callHealth] =
     await Promise.all([
       fetchJSON("http://127.0.0.1:4004/boards"),
       fetchJSON("http://127.0.0.1:4005/transcripts?limit=10"),
-      fetchJSON("http://127.0.0.1:4003/pipeline"),
-      fetchJSON("http://127.0.0.1:4003/contacts"),
+      fetchJSON("http://127.0.0.1:4003/pipelines"),
       fetchJSON("http://127.0.0.1:4006/channels"),
       fetchJSON("http://127.0.0.1:4007/health"),
     ]);
@@ -30,7 +29,7 @@ async function gatherOverview() {
     (b: { name: string }) => !b.name.toLowerCase().startsWith("subitems of")
   );
 
-  // Count items by status across all boards
+  // Count items by status
   let highPriority = 0;
   let tasksDone = 0;
   let tasksWorking = 0;
@@ -67,8 +66,8 @@ async function gatherOverview() {
     date: t.date,
   }));
 
-  // GHL: pipeline
-  const pipeline = ghlPipeline?.pipelines || ghlPipeline?.pipeline || ghlPipeline || null;
+  // GHL: pipelines (note: endpoint is /pipelines not /pipeline)
+  const pipelines = ghlRaw?.pipelines || null;
 
   // Slack
   const slackTotal = slackRaw?.total || slackRaw?.channels?.length || 0;
@@ -89,8 +88,7 @@ async function gatherOverview() {
       callsProcessed,
       recentCalls,
     },
-    pipeline,
-    contacts: ghlContacts,
+    pipeline: { pipelines },
     slack: {
       totalChannels: slackTotal,
     },

@@ -8,45 +8,55 @@ interface OperationsData {
   tasksStuck: number;
 }
 
+function Metric({ label, value, color, max }: { label: string; value: number; color: string; max: number }) {
+  const display = value === 0 ? "—" : value;
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-xs text-text-secondary">{label}</span>
+        <span className="text-sm tracking-[0.05em]"
+              style={{ fontFamily: "var(--font-bebas)", color }}>
+          {display}
+        </span>
+      </div>
+      <div className="progress-bar">
+        <div className="progress-bar-fill" style={{ width: `${pct}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
 export default function OperationsPanel({ data }: { data: OperationsData | null }) {
   if (!data) {
     return (
-      <div className="glass-card p-4 fade-in pulse-border">
-        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
-          Operations
-        </h3>
-        <p className="text-sm text-text-muted">Connecting...</p>
-        <p className="text-xs text-text-muted mt-1">Monday.com bridge</p>
+      <div className="glass-card p-4 pulse-border">
+        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-3"
+           style={{ fontFamily: "var(--font-inter)" }}>Operations</p>
+        <div className="shimmer" style={{ height: 120 }} />
       </div>
     );
   }
 
+  const total = data.tasksDone + data.tasksWorking + data.tasksStuck + data.highPriority || 1;
+
   return (
-    <div className="glass-card p-4 fade-in">
-      <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
-        Operations
-      </h3>
+    <div className="glass-card p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-4"
+         style={{ fontFamily: "var(--font-inter)" }}>Operations</p>
       <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">High Priority</span>
-          <span className="text-sm font-mono font-bold text-warning">{data.highPriority}</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">In Progress</span>
-          <span className="text-sm font-mono font-bold text-accent">{data.tasksWorking}</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">Stuck</span>
-          <span className="text-sm font-mono font-bold text-error">{data.tasksStuck}</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">Completed</span>
-          <span className="text-sm font-mono font-bold text-success">{data.tasksDone}</span>
-        </div>
-        <div className="border-t border-card-border pt-2 mt-2">
+        <Metric label="High Priority" value={data.highPriority} color="#FFB224" max={total} />
+        <Metric label="In Progress" value={data.tasksWorking} color="#0DFFC6" max={total} />
+        <Metric label="Stuck" value={data.tasksStuck} color="#FF4D4D" max={total} />
+        <Metric label="Completed" value={data.tasksDone} color="#0DFFC6" max={total} />
+        <div className="border-t border-white/[0.06] pt-3 mt-3">
           <div className="flex justify-between items-center">
-            <span className="text-sm text-text-secondary">Active Clients</span>
-            <span className="text-sm font-mono font-bold text-text-primary">{data.activeClients}</span>
+            <span className="text-xs text-text-secondary">Active Clients</span>
+            <span className="text-lg tracking-[0.05em] text-text-primary"
+                  style={{ fontFamily: "var(--font-bebas)" }}>
+              {data.activeClients}
+            </span>
           </div>
         </div>
       </div>

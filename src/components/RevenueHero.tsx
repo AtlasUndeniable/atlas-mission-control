@@ -2,25 +2,42 @@
 
 export default function RevenueHero() {
   return (
-    <div className="glass-card p-6 fade-in pulse-border">
-      <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-4">
+    <div className="glass-card hero-gradient-border p-6 lg:p-8 h-full relative overflow-hidden fade-in fade-delay-1">
+      {/* Watermark logo at 3% opacity */}
+      <div
+        className="absolute top-4 right-4 w-20 h-20 opacity-[0.03]"
+        style={{
+          backgroundImage: "url(https://d2xsxph8kpxj0f.cloudfront.net/310519663188771024/XmxQSFnpPg3J5HZeRBxZ5e/transparentwhiteundeniable_411fb48a.png)",
+          backgroundSize: "contain",
+          backgroundRepeat: "no-repeat",
+        }}
+      />
+
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-4"
+         style={{ fontFamily: "var(--font-inter)" }}>
         Revenue
-      </h3>
-      <div className="flex items-baseline gap-3 mb-2">
-        <span className="text-4xl font-bold font-mono text-text-muted">$—</span>
-        <span className="text-sm text-text-muted">MTD</span>
+      </p>
+
+      {/* Shimmer skeleton for the big number */}
+      <div className="flex items-baseline gap-3 mb-3">
+        <div className="shimmer inline-block" style={{ width: 220, height: 52 }} />
+        <span className="text-sm text-muted">MTD</span>
       </div>
-      <div className="flex gap-6 text-sm">
+
+      <div className="flex gap-8 text-sm mb-4">
         <div>
-          <span className="text-text-muted">Projected: </span>
-          <span className="font-mono text-text-muted">—</span>
+          <span className="text-muted">Projected: </span>
+          <div className="shimmer inline-block align-middle" style={{ width: 80, height: 16 }} />
         </div>
         <div>
-          <span className="text-text-muted">Target: </span>
-          <span className="font-mono text-text-muted">—</span>
+          <span className="text-muted">Target: </span>
+          <div className="shimmer inline-block align-middle" style={{ width: 80, height: 16 }} />
         </div>
       </div>
-      <p className="text-xs text-text-muted mt-3">Connecting... Awaiting Newie integration</p>
+
+      <p className="text-xs text-muted connecting-pulse">
+        Revenue tracking activates when Newie connects
+      </p>
     </div>
   );
 }

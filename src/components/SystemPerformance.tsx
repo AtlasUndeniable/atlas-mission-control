@@ -6,6 +6,12 @@ interface HealthMap {
   [key: string]: { status: string; latency_ms: number };
 }
 
+function latencyClass(ms: number): string {
+  if (ms < 100) return "online";
+  if (ms < 500) return "degraded";
+  return "offline";
+}
+
 export default function SystemPerformance() {
   const [health, setHealth] = useState<HealthMap>({});
 
@@ -26,31 +32,38 @@ export default function SystemPerformance() {
   const totalCount = services.length || 6;
 
   return (
-    <div className="glass-card p-4 fade-in">
-      <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
+    <div className="glass-card p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-4"
+         style={{ fontFamily: "var(--font-inter)" }}>
         System Performance
-      </h3>
+      </p>
       <div className="space-y-3">
         <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">Services Online</span>
-          <span className={`text-sm font-mono font-bold ${onlineCount === totalCount ? "text-success" : "text-warning"}`}>
+          <span className="text-xs text-text-secondary">Services Online</span>
+          <span className={`text-2xl tracking-[0.05em] ${onlineCount === totalCount ? "text-accent" : "text-warning"}`}
+                style={{ fontFamily: "var(--font-bebas)" }}>
             {onlineCount}/{totalCount}
           </span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-sm text-text-secondary">Model</span>
-          <span className="text-sm font-mono text-accent">Sonnet 4.5</span>
+          <span className="text-xs text-text-secondary">Model</span>
+          <span className="text-sm text-accent" style={{ fontFamily: "var(--font-jetbrains)" }}>
+            Sonnet 4.5
+          </span>
         </div>
-        <div className="border-t border-card-border pt-2 mt-2">
-          <p className="text-xs text-text-muted mb-2">Service Latency</p>
+
+        <div className="border-t border-white/[0.06] pt-3 mt-3">
+          <p className="text-[0.65rem] text-muted mb-2 uppercase tracking-[0.1em]">Service Latency</p>
           <div className="space-y-1.5">
             {services.map(([name, svc]) => (
               <div key={name} className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
-                  <span className={`status-dot ${svc.status === "online" ? "online" : svc.status === "degraded" ? "degraded" : "offline"}`} />
+                  <span className={`status-dot ${latencyClass(svc.latency_ms)}`} />
                   <span className="text-xs text-text-secondary capitalize">{name.replace("_", " ")}</span>
                 </div>
-                <span className="text-xs font-mono text-text-muted">{svc.latency_ms}ms</span>
+                <span className="text-[0.65rem] text-muted" style={{ fontFamily: "var(--font-jetbrains)" }}>
+                  {svc.latency_ms}ms
+                </span>
               </div>
             ))}
           </div>

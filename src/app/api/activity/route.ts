@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-function getTodayLogPath(): string | null {
+function getLogPaths(): string[] {
+  const paths: string[] = [];
+
+  // 1. Today's OpenClaw log
   const logDir = "/tmp/openclaw";
   try {
     const files = readdirSync(logDir)
@@ -10,56 +13,77 @@ function getTodayLogPath(): string | null {
       .sort()
       .reverse();
     if (files.length > 0) {
-      return join(logDir, files[0]);
+      paths.push(join(logDir, files[0]));
     }
   } catch {}
 
-  // Fallback: gateway log
+  // 2. Gateway log
   const gatewayLog = "/Users/atlasai/.openclaw/logs/gateway.log";
-  try {
-    readFileSync(gatewayLog, "utf8");
-    return gatewayLog;
-  } catch {}
+  if (existsSync(gatewayLog)) paths.push(gatewayLog);
 
-  return null;
+  // 3. Call processor log
+  const callLog = "/Users/atlasai/.openclaw/logs/call-processor.log";
+  if (existsSync(callLog)) paths.push(callLog);
+
+  // 4. Slack bridge log
+  const slackLog = "/Users/atlasai/.openclaw/logs/slack-bridge.log";
+  if (existsSync(slackLog)) paths.push(slackLog);
+
+  return paths;
 }
 
-function parseLogEntries(content: string): Array<{ timestamp: string; action: string; status: string }> {
+function parseLogEntries(content: string, source: string): Array<{ timestamp: string; action: string; status: string; source: string }> {
   const lines = content.split("\n").filter(Boolean);
-  const entries: Array<{ timestamp: string; action: string; status: string }> = [];
+  const entries: Array<{ timestamp: string; action: string; status: string; source: string }> = [];
 
   for (const line of lines) {
-    // Match patterns like [20/03/2026, 1:15:44 pm] 🚀 ATLAS Call Processor starting
-    const match = line.match(/\[([^\]]+)\]\s*(.+)/);
-    if (match) {
-      const action = match[2].replace(/^[^\w\s]*\s*/, ""); // strip leading emoji
-      const emoji = match[2].match(/^([^\w\s]*)/)?.[1] || "";
-      let status = "info";
+    // Pattern 1: [date] emoji message
+    const match1 = line.match(/\[([^\]]+)\]\s*(.+)/);
+    // Pattern 2: ISO timestamp [component] message
+    const match2 = line.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+[+-]\d{2}:\d{2})\s*\[([^\]]*)\]\s*(.+)/);
+
+    let timestamp = "";
+    let action = "";
+    let status = "info";
+
+    if (match2) {
+      const ts = new Date(match2[1]);
+      timestamp = ts.toLocaleString("en-AU", { timeZone: "Australia/Brisbane", hour: "2-digit", minute: "2-digit", hour12: true });
+      action = `[${match2[2]}] ${match2[3]}`;
+    } else if (match1) {
+      timestamp = match1[1];
+      action = match1[2].replace(/^[^\w\s]*\s*/, "");
+      const emoji = match1[2].match(/^([^\w\s]*)/)?.[1] || "";
       if (emoji.includes("✅") || emoji.includes("🚀")) status = "success";
       else if (emoji.includes("❌") || emoji.includes("💀")) status = "error";
       else if (emoji.includes("⚠️")) status = "warning";
-
-      entries.push({ timestamp: match[1], action, status });
+    } else {
+      continue;
     }
+
+    entries.push({ timestamp, action, status, source });
   }
 
-  return entries.slice(-20);
+  return entries;
 }
 
 export async function GET() {
-  const logPath = getTodayLogPath();
+  const logPaths = getLogPaths();
+  const allEntries: Array<{ timestamp: string; action: string; status: string; source: string }> = [];
 
-  if (!logPath) {
-    return NextResponse.json([]);
+  for (const logPath of logPaths) {
+    try {
+      const content = readFileSync(logPath, "utf8");
+      const tail = content.slice(-4000);
+      const source = logPath.includes("gateway") ? "gateway"
+        : logPath.includes("call-processor") ? "processor"
+        : logPath.includes("slack") ? "slack"
+        : "openclaw";
+      const entries = parseLogEntries(tail, source);
+      allEntries.push(...entries.slice(-10));
+    } catch {}
   }
 
-  try {
-    const content = readFileSync(logPath, "utf8");
-    // Read last 5000 chars to keep it fast
-    const tail = content.slice(-5000);
-    const entries = parseLogEntries(tail);
-    return NextResponse.json(entries);
-  } catch {
-    return NextResponse.json([]);
-  }
+  // Return last 20 entries
+  return NextResponse.json(allEntries.slice(-20));
 }

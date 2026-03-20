@@ -29,14 +29,15 @@ const SERVICE_MAP: Record<string, string> = {
 };
 
 const STATUS_COLOURS: Record<ServiceStatus, string> = {
-  online: "#22c55e",
-  offline: "#ef4444",
-  degraded: "#f59e0b",
-  checking: "#64748b",
+  online: "#0DFFC6",
+  offline: "#FF4D4D",
+  degraded: "#FFB224",
+  checking: "#8B8FA3",
 };
 
 export default function ConstellationNetwork() {
   const [health, setHealth] = useState<HealthMap>({});
+  const [tooltip, setTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     async function fetchHealth() {
@@ -58,15 +59,25 @@ export default function ConstellationNetwork() {
     return svc.status as ServiceStatus;
   }
 
+  function getLatency(nodeId: string): number {
+    const key = SERVICE_MAP[nodeId];
+    return health[key]?.latency_ms ?? 0;
+  }
+
   const center = NODES[0];
 
   return (
-    <div className="glass-card p-4 h-full fade-in">
-      <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
+    <div className="glass-card p-4 h-full fade-in fade-delay-2 relative">
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-3"
+         style={{ fontFamily: "var(--font-inter)" }}>
         System Constellation
-      </h3>
-      <svg viewBox="0 0 400 280" className="w-full h-auto">
-        {/* Connection lines from center to each node */}
+      </p>
+      <svg
+        viewBox="0 0 400 280"
+        className="w-full h-auto"
+        onMouseLeave={() => setTooltip(null)}
+      >
+        {/* Connection lines with flowing dash animation */}
         {NODES.slice(1).map((node) => {
           const status = getStatus(node.id);
           const colour = STATUS_COLOURS[status];
@@ -79,8 +90,8 @@ export default function ConstellationNetwork() {
               y2={node.y}
               stroke={colour}
               strokeWidth={1.5}
-              className={status === "online" ? "constellation-line" : ""}
-              strokeOpacity={status === "online" ? 0.6 : 0.2}
+              className={status === "online" ? "constellation-flow" : ""}
+              strokeOpacity={status === "online" ? 0.5 : 0.15}
             />
           );
         })}
@@ -92,60 +103,105 @@ export default function ConstellationNetwork() {
           const isCenter = node.id === "ATLAS";
 
           return (
-            <g key={node.id}>
-              {/* Glow for center */}
+            <g
+              key={node.id}
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => setTooltip({ id: node.id, x: node.x, y: node.y })}
+              onMouseLeave={() => setTooltip(null)}
+            >
+              {/* Pulsing glow ring for ATLAS */}
               {isCenter && (
-                <circle
-                  cx={node.x}
-                  cy={node.y}
-                  r={node.r + 8}
-                  fill="none"
-                  stroke="#06b6d4"
-                  strokeWidth={1}
-                  opacity={0.3}
-                  className="constellation-line"
-                />
+                <>
+                  <circle
+                    cx={node.x}
+                    cy={node.y}
+                    r={node.r + 14}
+                    fill="none"
+                    stroke="#0DFFC6"
+                    strokeWidth={1}
+                    className="atlas-glow"
+                  />
+                  <circle
+                    cx={node.x}
+                    cy={node.y}
+                    r={node.r + 8}
+                    fill="none"
+                    stroke="#0DFFC6"
+                    strokeWidth={0.5}
+                    opacity={0.3}
+                    className="constellation-line"
+                  />
+                </>
               )}
               {/* Node circle */}
               <circle
                 cx={node.x}
                 cy={node.y}
                 r={node.r}
-                fill={isCenter ? "rgba(6, 182, 212, 0.15)" : "rgba(15, 20, 35, 0.9)"}
-                stroke={isCenter ? "#06b6d4" : "rgba(255,255,255,0.15)"}
-                strokeWidth={isCenter ? 2 : 1}
+                fill={isCenter ? "rgba(13, 255, 198, 0.08)" : "rgba(10, 14, 20, 0.9)"}
+                stroke={isCenter ? "#0DFFC6" : "rgba(255,255,255,0.1)"}
+                strokeWidth={isCenter ? 1.5 : 0.5}
               />
               {/* Status dot */}
-              <circle
-                cx={node.x + node.r - 4}
-                cy={node.y - node.r + 4}
-                r={4}
-                fill={colour}
-              >
-                {status === "online" && (
-                  <animate
-                    attributeName="opacity"
-                    values="1;0.4;1"
-                    dur="2s"
-                    repeatCount="indefinite"
-                  />
-                )}
-              </circle>
+              {!isCenter && (
+                <circle
+                  cx={node.x + node.r - 4}
+                  cy={node.y - node.r + 4}
+                  r={4}
+                  fill={colour}
+                >
+                  {status === "online" && (
+                    <animate
+                      attributeName="opacity"
+                      values="1;0.4;1"
+                      dur="2s"
+                      repeatCount="indefinite"
+                    />
+                  )}
+                </circle>
+              )}
+              {/* Glow behind status dot for online */}
+              {!isCenter && status === "online" && (
+                <circle
+                  cx={node.x + node.r - 4}
+                  cy={node.y - node.r + 4}
+                  r={6}
+                  fill={colour}
+                  opacity={0.2}
+                />
+              )}
               {/* Label */}
               <text
                 x={node.x}
                 y={node.y + 3}
                 textAnchor="middle"
-                fill={isCenter ? "#06b6d4" : "#94a3b8"}
-                fontSize={isCenter ? 11 : 9}
+                fill={isCenter ? "#0DFFC6" : "#8B8FA3"}
+                fontSize={isCenter ? 11 : 8}
                 fontWeight={isCenter ? 700 : 500}
-                fontFamily="var(--font-mono)"
+                fontFamily="var(--font-jetbrains)"
+                letterSpacing="0.05em"
               >
                 {node.id}
               </text>
             </g>
           );
         })}
+
+        {/* Tooltip */}
+        {tooltip && (
+          <foreignObject
+            x={tooltip.x - 60}
+            y={tooltip.y - 50}
+            width={120}
+            height={40}
+          >
+            <div className="tooltip text-center">
+              <span className="text-text-secondary">{tooltip.id}</span>
+              <span className="ml-2 text-accent">{getStatus(tooltip.id)}</span>
+              <span className="ml-2 text-muted">{getLatency(tooltip.id)}ms</span>
+            </div>
+          </foreignObject>
+        )}
       </svg>
     </div>
   );
