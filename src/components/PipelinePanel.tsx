@@ -33,44 +33,91 @@ export default function PipelinePanel({ data }: { data: unknown }) {
 
   if (pipelines.length === 0) {
     return (
-      <div className="glass-card p-4 pulse-border">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-3"
-           style={{ fontFamily: "var(--font-inter)" }}>Pipeline</p>
-        <div className="shimmer" style={{ height: 80 }} />
+      <div className="glass-card hud-corners p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Pipeline</p>
+          <span className="module-tag module-tag-growth">GROWTH</span>
+        </div>
+        <div className="flex flex-col items-center justify-center py-6">
+          <p style={{ fontFamily: "var(--font-mono)", fontSize: "clamp(32px, 3vw, 48px)", fontWeight: 700, color: "#374151", marginBottom: "12px" }}>—</p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#6B7280", fontStyle: "italic" }}>
+            Awaiting GHL pipeline data
+          </p>
+        </div>
       </div>
     );
   }
 
-  // Show the main sales pipeline as a funnel
   const mainPipeline = pipelines.find((p) => p.name === "SALES") || pipelines[0];
 
-  return (
-    <div className="glass-card p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-1"
-         style={{ fontFamily: "var(--font-inter)" }}>Pipeline</p>
-      <p className="text-[0.6rem] text-muted mb-3">{mainPipeline.name}</p>
+  // Shorten stage names for compact display
+  const SHORT_NAMES: Record<string, string> = {
+    "Lead Magnet": "Lead",
+    "Enquired": "Enquired",
+    "Booked Triage": "Triage",
+    "Booked IA": "BOOKED",
+    "Pending": "Pending",
+    "Closed Deal": "Closed",
+    "No Sale": "No Sale",
+  };
+  const shortName = (name: string) => {
+    for (const [key, val] of Object.entries(SHORT_NAMES)) {
+      if (name.toLowerCase().startsWith(key.toLowerCase())) return val;
+    }
+    return name.length > 8 ? name.slice(0, 7) + "." : name;
+  };
 
-      {/* Horizontal funnel */}
-      <div className="flex gap-1 mb-3 overflow-x-auto">
+  const maxCount = Math.max(...mainPipeline.stages.map((s) => s.count ?? 0), 1);
+
+  return (
+    <div className="glass-card hud-corners p-6">
+      <div className="flex items-center gap-3 mb-2">
+        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Pipeline</p>
+        <span className="module-tag module-tag-growth">GROWTH</span>
+      </div>
+      <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "#6B7280", marginBottom: "16px" }}>{mainPipeline.name}</p>
+
+      {/* Horizontal funnel with visible bars */}
+      <div className="flex gap-1.5 mb-4 overflow-x-auto">
         {mainPipeline.stages.map((stage, i) => {
-          const opacity = 1 - (i / (mainPipeline.stages.length)) * 0.6;
+          const count = stage.count ?? 0;
+          const barHeight = count > 0 ? Math.max(20, (count / maxCount) * 48) : 4;
+          const opacity = 1 - (i / mainPipeline.stages.length) * 0.5;
           return (
             <div
               key={i}
-              className="funnel-stage flex-1 min-w-0 text-center"
-              style={{
-                borderBottom: `2px solid rgba(13, 255, 198, ${opacity})`,
-              }}
+              className="flex-1 min-w-0 text-center"
+              title={stage.name}
             >
-              <p className="text-[0.55rem] text-text-secondary truncate leading-tight">
-                {stage.name}
+              {/* Count above bar */}
+              <p style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "14px",
+                fontWeight: 700,
+                color: "#FFFFFF",
+                marginBottom: "4px",
+              }}>
+                {count}
               </p>
-              {stage.count !== undefined && (
-                <p className="text-xs text-text-primary mt-0.5"
-                   style={{ fontFamily: "var(--font-bebas)" }}>
-                  {stage.count}
-                </p>
-              )}
+              {/* Bar */}
+              <div
+                style={{
+                  height: `${barHeight}px`,
+                  background: `rgba(0, 136, 255, ${opacity * 0.3})`,
+                  borderRadius: "3px",
+                  marginBottom: "6px",
+                  transition: "height 0.5s ease",
+                }}
+              />
+              {/* Label */}
+              <p style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "9px",
+                color: "#9CA3AF",
+                lineHeight: 1.2,
+              }}>
+                {shortName(stage.name)}
+              </p>
             </div>
           );
         })}
@@ -78,13 +125,13 @@ export default function PipelinePanel({ data }: { data: unknown }) {
 
       {/* Other pipelines as compact list */}
       {pipelines.length > 1 && (
-        <div className="border-t border-white/[0.06] pt-2 mt-2">
+        <div className="pt-3 mt-3" style={{ borderTop: "1px solid rgba(0,136,255,0.1)" }}>
           {pipelines
             .filter((p) => p.name !== mainPipeline.name)
             .map((p, i) => (
-              <div key={i} className="flex justify-between items-center py-1">
-                <span className="text-[0.65rem] text-text-secondary truncate">{p.name}</span>
-                <span className="text-[0.65rem] text-muted" style={{ fontFamily: "var(--font-jetbrains)" }}>
+              <div key={i} className="flex justify-between items-center py-1.5">
+                <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "rgba(255,255,255,0.75)" }} className="truncate">{p.name}</span>
+                <span className="type-data" style={{ fontSize: "11px", color: "#6B7280" }}>
                   {p.stages.length} stages
                 </span>
               </div>

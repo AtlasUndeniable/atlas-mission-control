@@ -2,7 +2,7 @@
 
 export default function RevenueHero() {
   return (
-    <div className="glass-card hero-gradient-border p-6 lg:p-8 h-full relative overflow-hidden fade-in fade-delay-1">
+    <div className="glass-card hud-corners hero-gradient-border p-8 lg:p-10 relative overflow-hidden revenue-glow" style={{ minHeight: 200 }}>
       {/* Watermark logo at 3% opacity */}
       <div
         className="absolute top-4 right-4 w-20 h-20 opacity-[0.03]"
@@ -13,29 +13,37 @@ export default function RevenueHero() {
         }}
       />
 
-      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-4"
-         style={{ fontFamily: "var(--font-inter)" }}>
-        Revenue
+      <div className="flex items-center gap-3 mb-6">
+        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Revenue</p>
+        <span className="module-tag module-tag-growth">GROWTH</span>
+      </div>
+
+      {/* Big revenue number placeholder */}
+      <p style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "clamp(48px, 5vw, 72px)",
+        fontWeight: 700,
+        lineHeight: 1,
+        color: "#6B7280",
+        letterSpacing: "0.03em",
+        marginBottom: "16px",
+      }}>
+        —
       </p>
+      <span className="type-data" style={{ fontSize: "16px", color: "#6B7280" }}>MTD</span>
 
-      {/* Shimmer skeleton for the big number */}
-      <div className="flex items-baseline gap-3 mb-3">
-        <div className="shimmer inline-block" style={{ width: 220, height: 52 }} />
-        <span className="text-sm text-muted">MTD</span>
-      </div>
-
-      <div className="flex gap-8 text-sm mb-4">
+      <div className="flex gap-10 mt-6 mb-6">
         <div>
-          <span className="text-muted">Projected: </span>
-          <div className="shimmer inline-block align-middle" style={{ width: 80, height: 16 }} />
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "#9CA3AF" }}>Projected: </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "13px", color: "#6B7280" }}>—</span>
         </div>
         <div>
-          <span className="text-muted">Target: </span>
-          <div className="shimmer inline-block align-middle" style={{ width: 80, height: 16 }} />
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "#9CA3AF" }}>Target: </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "13px", color: "#6B7280" }}>—</span>
         </div>
       </div>
 
-      <p className="text-xs text-muted connecting-pulse">
+      <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.1em", color: "#6B7280", fontStyle: "italic" }}>
         Revenue tracking activates when Newie connects
       </p>
     </div>

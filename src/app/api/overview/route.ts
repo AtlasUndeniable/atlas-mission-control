@@ -66,7 +66,7 @@ async function gatherOverview() {
     date: t.date,
   }));
 
-  // GHL: pipelines (note: endpoint is /pipelines not /pipeline)
+  // GHL: pipeline data
   const pipelines = ghlRaw?.pipelines || null;
 
   // Slack

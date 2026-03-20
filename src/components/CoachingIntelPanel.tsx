@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState, useRef } from "react";
+
 interface CoachingData {
   callsThisWeek: number;
   callsProcessed: number;
@@ -7,7 +9,6 @@ interface CoachingData {
 }
 
 function getInitials(title: string): string {
-  // Extract non-Rhys participant name
   const cleaned = title
     .replace(/\b(rhys|livingstone|x|vs|and|with)\b/gi, "")
     .replace(/\(.*?\)/g, "")
@@ -18,60 +19,97 @@ function getInitials(title: string): string {
   return "??";
 }
 
-const AVATAR_COLOURS = ["#0DFFC6", "#FFB224", "#a855f7", "#06b6d4", "#FF4D4D"];
+const AVATAR_COLOURS = ["#0088FF", "#F59E0B", "#8B5CF6", "#00D4FF", "#EF4444"];
+
+function TypewriterText({ text, speed = 30 }: { text: string; speed?: number }) {
+  const [displayed, setDisplayed] = useState("");
+  const [done, setDone] = useState(false);
+  const prevText = useRef("");
+
+  useEffect(() => {
+    if (text === prevText.current) {
+      setDisplayed(text);
+      setDone(true);
+      return;
+    }
+    prevText.current = text;
+    setDisplayed("");
+    setDone(false);
+
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) {
+        clearInterval(timer);
+        setDone(true);
+      }
+    }, speed);
+
+    return () => clearInterval(timer);
+  }, [text, speed]);
+
+  return (
+    <span>
+      {displayed}
+      {!done && <span className="typing-cursor" />}
+    </span>
+  );
+}
 
 export default function CoachingIntelPanel({ data }: { data: CoachingData | null }) {
   if (!data) {
     return (
-      <div className="glass-card p-4 pulse-border">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-3"
-           style={{ fontFamily: "var(--font-inter)" }}>Coaching Intel</p>
+      <div className="glass-card hud-corners p-6 pulse-border">
+        <div className="flex items-center gap-3 mb-4">
+          <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Coaching Intel</p>
+          <span className="module-tag module-tag-coaching">COACHING</span>
+        </div>
         <div className="shimmer" style={{ height: 120 }} />
       </div>
     );
   }
 
   return (
-    <div className="glass-card p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted mb-4"
-         style={{ fontFamily: "var(--font-inter)" }}>Coaching Intel</p>
+    <div className="glass-card hud-corners p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Coaching Intel</p>
+        <span className="module-tag module-tag-coaching">COACHING</span>
+      </div>
       <div className="space-y-3">
-        {/* Prominent calls this week */}
         <div className="flex justify-between items-center">
-          <span className="text-xs text-text-secondary">Calls This Week</span>
-          <span className="text-2xl tracking-[0.05em] text-accent"
-                style={{ fontFamily: "var(--font-bebas)" }}>
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>Calls This Week</span>
+          <span className="type-data" style={{ fontSize: "24px", fontWeight: 700, color: "#FFFFFF" }}>
             {data.callsThisWeek}
           </span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-xs text-text-secondary">Total Processed</span>
-          <span className="text-sm tracking-[0.05em] text-text-primary"
-                style={{ fontFamily: "var(--font-bebas)" }}>
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>Total Processed</span>
+          <span className="type-data" style={{ fontSize: "16px", fontWeight: 600, color: "#FFFFFF" }}>
             {data.callsProcessed}
           </span>
         </div>
 
-        <div className="border-t border-white/[0.06] pt-3 mt-3">
-          <p className="text-[0.65rem] text-muted mb-2 uppercase tracking-[0.1em]">Recent Calls</p>
-          <div className="space-y-2.5">
+        <div className="pt-4 mt-4" style={{ borderTop: "1px solid rgba(0,136,255,0.1)" }}>
+          <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#6B7280", marginBottom: "12px" }}>Recent Calls</p>
+          <div className="space-y-3">
             {data.recentCalls.map((call, i) => {
               const initials = getInitials(call.title);
               const colour = AVATAR_COLOURS[i % AVATAR_COLOURS.length];
               return (
                 <div key={i} className="flex items-center gap-2.5">
-                  {/* Avatar circle */}
                   <div
-                    className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-[0.55rem] font-semibold"
-                    style={{ background: `${colour}20`, color: colour, border: `1px solid ${colour}40` }}
+                    className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{ background: `${colour}15`, color: colour, border: `1px solid ${colour}30`, fontFamily: "var(--font-mono)", fontSize: "9px", fontWeight: 700, letterSpacing: "0.05em" }}
                   >
                     {initials}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-text-secondary truncate">{call.title}</p>
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "rgba(255,255,255,0.80)" }} className="truncate">
+                      <TypewriterText text={call.title} speed={25} />
+                    </p>
                   </div>
-                  <p className="text-[0.6rem] text-muted whitespace-nowrap"
-                     style={{ fontFamily: "var(--font-jetbrains)" }}>
+                  <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "#6B7280", whiteSpace: "nowrap" }}>
                     {new Date(call.date).toLocaleDateString("en-AU", { day: "2-digit", month: "short" })}
                   </p>
                 </div>
