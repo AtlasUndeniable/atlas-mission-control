@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Bind to localhost only — never expose externally
+  serverExternalPackages: [],
 };
 
 export default nextConfig;
