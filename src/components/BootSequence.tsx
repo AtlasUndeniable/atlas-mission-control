@@ -211,7 +211,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
             className="text-glow-strong"
             style={{
               fontFamily: "var(--font-heading)",
-              fontSize: "64px",
+              fontSize: "clamp(36px, 10vw, 64px)",
               fontWeight: 700,
               letterSpacing: "0.35em",
               color: "#0088FF",
@@ -257,7 +257,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
               const statusStart = fullText.length - line.status.length;
 
               return (
-                <div key={i} style={{ whiteSpace: "pre", position: "relative" }}>
+                <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", position: "relative" }}>
                   {/* Prefix — blue */}
                   <span style={{ color: "rgba(0,136,255,0.5)" }}>
                     {displayText.slice(0, Math.min(displayText.length, prefixLen))}

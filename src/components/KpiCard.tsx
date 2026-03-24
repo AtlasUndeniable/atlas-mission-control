@@ -50,29 +50,14 @@ export default function KpiCard({
   subtext,
   accentClass = "kpi-accent-cyan",
 }: KpiCardProps) {
+  const isDash = value === "—" || value === "";
+
   return (
-    <div className={`glass-card hud-corners p-6 ${accentClass} ${connecting ? "pulse-border" : ""}`} style={{ position: "relative" }}>
-      {/* Change indicator or "Awaiting" badge — top right */}
+    <div className={`glass-card hud-corners p-5 ${accentClass}`} style={{ position: "relative" }}>
+      {/* Change indicator — top right */}
       {change !== undefined && (
-        <div style={{ position: "absolute", top: "12px", right: "12px" }}>
+        <div style={{ position: "absolute", top: "10px", right: "10px" }}>
           <ChangeBadge change={change} />
-        </div>
-      )}
-      {connecting && (
-        <div style={{ position: "absolute", top: "12px", right: "12px" }}>
-          <span style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "9px",
-            letterSpacing: "0.1em",
-            padding: "3px 8px",
-            borderRadius: "4px",
-            background: "rgba(245,158,11,0.08)",
-            color: "#F59E0B",
-            border: "1px solid rgba(245,158,11,0.15)",
-            fontWeight: 600,
-          }}>
-            AWAITING
-          </span>
         </div>
       )}
 
@@ -82,44 +67,29 @@ export default function KpiCard({
         fontWeight: 700,
         letterSpacing: "0.15em",
         textTransform: "uppercase",
-        color: "#9CA3AF",
-        marginBottom: "12px",
+        color: "#B0B8C4",
+        marginBottom: "8px",
       }}>
         {label}
       </p>
 
-      {connecting ? (
-        <div>
-          <p style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "clamp(32px, 3vw, 48px)",
-            fontWeight: 700,
-            lineHeight: 1,
-            color: "#6B7280",
-            letterSpacing: "0.03em",
-          }}>
-            —
-          </p>
-          {subtext && (
-            <p className="mt-2" style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "#6B7280" }}>{subtext}</p>
-          )}
-        </div>
-      ) : (
-        <div>
-          <p style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "clamp(32px, 3vw, 48px)",
-            fontWeight: 700,
-            lineHeight: 1,
-            color: "#FFFFFF",
-            letterSpacing: "0.03em",
-          }}>
-            <AnimatedValue value={value} />
-          </p>
-          {subtext && (
-            <p className="mt-2" style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "#6B7280" }}>{subtext}</p>
-          )}
-        </div>
+      <p style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "42px",
+        fontWeight: 700,
+        lineHeight: 1,
+        color: isDash ? "#374151" : "#FFFFFF",
+        letterSpacing: "-0.02em",
+        marginBottom: "6px",
+      }}>
+        {connecting ? (
+          <span className="connecting-pulse">—</span>
+        ) : (
+          <AnimatedValue value={value} />
+        )}
+      </p>
+      {subtext && (
+        <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "#6B7280", letterSpacing: "0.05em" }}>{subtext}</p>
       )}
     </div>
   );

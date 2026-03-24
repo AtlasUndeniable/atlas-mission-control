@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+
 import RevenueHero from "@/components/RevenueHero";
 import ConstellationNetwork from "@/components/ConstellationNetwork";
 import KpiCard from "@/components/KpiCard";
@@ -9,7 +10,8 @@ import CoachingIntelPanel from "@/components/CoachingIntelPanel";
 import AgentActivityFeed from "@/components/AgentActivityFeed";
 import SystemPerformance from "@/components/SystemPerformance";
 import PipelinePanel from "@/components/PipelinePanel";
-import PlaceholderPanel from "@/components/PlaceholderPanel";
+import MetaAdsPanel from "@/components/MetaAdsPanel";
+import RevenueTrendPanel from "@/components/RevenueTrendPanel";
 import AtlasChatBar from "@/components/AtlasChatBar";
 import BootSequence from "@/components/BootSequence";
 import BriefingSequence from "@/components/BriefingSequence";
@@ -17,6 +19,7 @@ import ConstellationCanvas from "@/components/ConstellationCanvas";
 import MuteToggle from "@/components/MuteToggle";
 import HeroBriefing from "@/components/HeroBriefing";
 import ApprovalQueue from "@/components/ApprovalQueue";
+import CommsToast from "@/components/CommsToast";
 import { useSoundContext } from "@/components/SoundEngine";
 
 interface OverviewData {
@@ -36,6 +39,21 @@ interface OverviewData {
   slack: {
     totalChannels: number;
   };
+  calendar?: {
+    todaysMeetings: number;
+  };
+  kpis?: {
+    activeClients: number;
+    callsBookedThisWeek: number;
+    closeRate: number;
+    totalContacts: number;
+    totalOpportunities: number;
+    tasksInProgress: number;
+    taskCompletion: number;
+    servicesOnline: number;
+    servicesTotal: number;
+  };
+  generatedAt?: string;
 }
 
 interface HealthMap {
@@ -62,31 +80,72 @@ function useGreeting(): string {
   return greeting;
 }
 
-// ===== LIVE CLOCK =====
-function useLiveClock(): string {
-  const [time, setTime] = useState("");
+// ===== UPTIME COUNTER =====
+function useUptime(): string {
+  const [uptime, setUptime] = useState("UP 0d 00:00:00");
+  const startRef = useRef(Date.now());
   useEffect(() => {
     const update = () => {
-      const now = new Date();
-      const dateStr = now.toLocaleDateString("en-AU", {
-        weekday: "short",
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
-      const timeStr = now.toLocaleTimeString("en-AU", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      });
-      setTime(`${dateStr} · ${timeStr}`);
+      const elapsed = Date.now() - startRef.current;
+      const totalSec = Math.floor(elapsed / 1000);
+      const days = Math.floor(totalSec / 86400);
+      const hrs = Math.floor((totalSec % 86400) / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      const pad = (n: number) => String(n).padStart(2, "0");
+      setUptime(`UP ${days}d ${pad(hrs)}:${pad(mins)}:${pad(secs)}`);
     };
     update();
-    const interval = setInterval(update, 10000);
+    const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, []);
-  return time;
+  return uptime;
 }
+
+// ===== ROTATING STATUS MESSAGES =====
+function useRotatingStatus(overview: OverviewData | null, servicesOnline: number, servicesTotal: number): string {
+  const [msg, setMsg] = useState("All systems operational");
+  const idxRef = useRef(0);
+
+  useEffect(() => {
+    const tick = () => {
+      const messages: string[] = [];
+      if (servicesOnline === servicesTotal && servicesTotal > 0) {
+        messages.push("All integrations connected");
+      } else if (servicesTotal > 0) {
+        messages.push(`${servicesTotal - servicesOnline} service${servicesTotal - servicesOnline > 1 ? "s" : ""} degraded`);
+      }
+      if (overview?.fireflies?.callsThisWeek) {
+        messages.push(`${overview.fireflies.callsThisWeek} calls processed this week`);
+      }
+      if (overview?.monday?.activeClients) {
+        messages.push(`${overview.monday.activeClients} client boards active`);
+      }
+      if (overview?.slack?.totalChannels) {
+        messages.push(`Monitoring ${overview.slack.totalChannels} Slack channels`);
+      }
+      if (overview?.monday?.tasksStuck && overview.monday.tasksStuck > 0) {
+        messages.push(`${overview.monday.tasksStuck} stuck item${overview.monday.tasksStuck > 1 ? "s" : ""} flagged`);
+      }
+      if (messages.length === 0) messages.push("Initialising...");
+      idxRef.current = (idxRef.current + 1) % messages.length;
+      setMsg(messages[idxRef.current]);
+    };
+    tick();
+    const interval = setInterval(tick, 8000);
+    return () => clearInterval(interval);
+  }, [overview, servicesOnline, servicesTotal]);
+  return msg;
+}
+
+// ===== NAMED SERVICES for header =====
+const HEADER_SERVICES = [
+  { key: "gateway", label: "CLAUDE" },
+  { key: "slack", label: "SLACK" },
+  { key: "ghl", label: "GHL" },
+  { key: "monday", label: "MONDAY" },
+  { key: "fireflies", label: "FIREFLIES" },
+];
 
 export default function Dashboard() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
@@ -96,31 +155,28 @@ export default function Dashboard() {
   const [phase, setPhase] = useState<Phase>("boot");
   const sound = useSoundContext();
   const greeting = useGreeting();
-  const clock = useLiveClock();
-
+  const uptime = useUptime();
   const dashboardReady = phase === "dashboard";
+
+  const healthEntries = Object.values(health);
+  const servicesOnline = healthEntries.filter((s) => s.status === "online").length;
+  const servicesTotal = healthEntries.length || 7;
+
+  const rotatingStatus = useRotatingStatus(overview, servicesOnline, servicesTotal);
 
   // ===== ON MOUNT: Check sessionStorage for returning visitors =====
   useEffect(() => {
     if (sessionStorage.getItem("atlas-booted") === "1") {
-      // Check if briefing was recent (< 30 min)
-      const lastBriefing = parseInt(localStorage.getItem("atlas-last-briefing") || "0");
-      if (Date.now() - lastBriefing < 30 * 60 * 1000) {
-        setPhase("dashboard");
-      } else {
-        // Show boot but skip to briefing quickly? No — just skip all for returning visitors.
-        setPhase("dashboard");
-      }
+      setPhase("dashboard");
       setConstellationOpacity(1);
     }
   }, []);
 
-  // Constellation visible whenever we're past initial boot
   useEffect(() => {
     if (phase !== "boot") setConstellationOpacity(1);
   }, [phase]);
 
-  // ===== FETCH DATA EARLY — during boot, parallel to init lines =====
+  // ===== FETCH DATA =====
   const fetchOverview = useCallback(async () => {
     try {
       setRefreshing(true);
@@ -136,19 +192,16 @@ export default function Dashboard() {
   }, [sound, dashboardReady]);
 
   useEffect(() => {
-    // Fetch immediately on mount (not waiting for boot to finish)
     fetchOverview();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-fetch periodically once dashboard is visible
   useEffect(() => {
     if (!dashboardReady) return;
     const interval = setInterval(fetchOverview, 30000);
     return () => clearInterval(interval);
   }, [dashboardReady, fetchOverview]);
 
-  // Fetch health data early too
   useEffect(() => {
     async function fetchHealth() {
       try {
@@ -161,7 +214,6 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // ===== Start ambient on first user interaction (returning visitors) =====
   useEffect(() => {
     if (!dashboardReady) return;
     const startOnClick = () => {
@@ -178,8 +230,6 @@ export default function Dashboard() {
   }, [dashboardReady, sound]);
 
   // ===== PHASE TRANSITIONS =====
-
-  // Boot skip → straight to dashboard
   const handleBootSkip = useCallback(() => {
     setPhase("dashboard");
     setConstellationOpacity(1);
@@ -188,44 +238,52 @@ export default function Dashboard() {
     sound.startAmbient();
   }, [sound]);
 
-  // Boot init lines done → briefing phase
   const handleInitLinesComplete = useCallback(() => {
     setPhase("briefing");
     setConstellationOpacity(1);
     sessionStorage.setItem("atlas-booted", "1");
   }, []);
 
-  // Briefing done → dashboard
   const handleBriefingComplete = useCallback(() => {
     setPhase("dashboard");
     localStorage.setItem("atlas-last-briefing", String(Date.now()));
   }, []);
 
   // ===== DERIVED STATE =====
-  const healthEntries = Object.values(health);
-  const servicesOnline = healthEntries.filter((s) => s.status === "online").length;
-  const servicesTotal = healthEntries.length || 7;
-
-  // Briefing data (passed to BriefingSequence)
   const briefingData = useMemo(() => ({
     callsBooked: overview?.fireflies?.callsThisWeek,
     activeClients: overview?.monday?.activeClients,
     callsProcessed: overview?.fireflies?.callsProcessed,
     servicesOnline,
     totalServices: servicesTotal,
-    pendingApprovals: 0, // from approvals API in future
+    pendingApprovals: 0,
     slackChannels: overview?.slack?.totalChannels,
+    todaysMeetings: overview?.calendar?.todaysMeetings,
+    tasksStuck: overview?.monday?.tasksStuck,
+    tasksWorking: overview?.monday?.tasksWorking,
+    tasksDone: overview?.monday?.tasksDone,
+    highPriority: overview?.monday?.highPriority,
+    recentCalls: overview?.fireflies?.recentCalls,
+    pipeline: overview?.pipeline as {
+      pipelines?: Array<{
+        name: string;
+        totalOpportunities?: number;
+        stages?: Array<{ name: string; count?: number }>;
+      }>;
+    },
   }), [overview, servicesOnline, servicesTotal]);
 
-  // Panel reveal class helper — stagger 80ms per panel
+  // Close rate from metrics engine KPIs
+  const closeRate = overview?.kpis?.closeRate != null ? `${overview.kpis.closeRate}%` : "—";
+
   const pr = useMemo(() => (i: number) =>
     dashboardReady ? `panel-reveal panel-reveal-${i}` : "opacity-0",
   [dashboardReady]);
 
   return (
     <div className="min-h-screen pb-20 ambient-bg">
-      {/* ===== CONSTELLATION BACKGROUND ===== */}
-      <ConstellationCanvas opacity={constellationOpacity} />
+      {/* ===== CONSTELLATION BACKGROUND — heavily dimmed in dashboard ===== */}
+      <ConstellationCanvas opacity={constellationOpacity} dimmed={dashboardReady} />
 
       {/* ===== CRT SCAN LINE OVERLAY ===== */}
       <div className="crt-scanlines" />
@@ -250,43 +308,67 @@ export default function Dashboard() {
       )}
 
       {/* ===== HEADER BAR ===== */}
-      <header className={`sticky top-0 z-40 px-4 lg:px-6 py-3 ${pr(0)}`}
-              style={{ background: "rgba(5, 5, 16, 0.9)", backdropFilter: "blur(12px)" }}>
-        <div className="max-w-[1440px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="status-dot online" />
-            <h1 className="text-sm font-bold tracking-[0.3em] uppercase text-glow"
-                style={{ fontFamily: "var(--font-heading)", color: "#0088FF" }}>
+      <header
+        className={`sticky top-0 z-40 px-4 lg:px-6 py-2.5 ${pr(0)}`}
+        style={{ background: "rgba(5, 5, 16, 0.92)", backdropFilter: "blur(16px)" }}
+      >
+        <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-4">
+          {/* Left: Logo + Undeniable icon */}
+          <div className="flex items-center gap-2.5 flex-shrink-0">
+            <h1
+              className="text-sm font-bold tracking-[0.3em] uppercase text-glow"
+              style={{ fontFamily: "var(--font-heading)", color: "#0088FF", fontSize: "15px" }}
+            >
               ATLAS
             </h1>
-            <span className="text-xs tracking-[0.15em] uppercase"
-                  style={{ fontFamily: "var(--font-mono)", color: "rgba(255,255,255,0.40)" }}>
-              Mission Control
-            </span>
-            {refreshing && <div className="refresh-dot ml-2" />}
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="hidden md:block"
-                  style={{ fontFamily: "var(--font-mono)", fontSize: "9px", letterSpacing: "0.15em", color: "rgba(255,255,255,0.40)" }}>
-              Undeniable Mentoring
-            </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "9px", letterSpacing: "0.15em", color: "rgba(255,255,255,0.40)" }}>
-              {clock}
-            </span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" className="hidden lg:block">
+            <div style={{ width: "1px", height: "14px", background: "rgba(255,255,255,0.1)" }} />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
           </div>
+
+          {/* Centre: Named service dots + rotating status */}
+          <div className="flex items-center gap-5 flex-1 justify-center overflow-hidden">
+            <div className="header-services">
+              {HEADER_SERVICES.map((svc) => {
+                const isOnline = health[svc.key]?.status === "online";
+                return (
+                  <div key={svc.key} className="header-svc">
+                    <span className={`header-svc-dot ${isOnline ? "on" : "off"}`} />
+                    <span>{svc.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ width: "1px", height: "12px", background: "rgba(255,255,255,0.08)" }} />
+            <span className="header-status-text">{rotatingStatus}</span>
+          </div>
+
+          {/* Right: Uptime + Lock + Volume + Refresh indicator */}
+          <div className="flex items-center gap-4 flex-shrink-0">
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "10px",
+                letterSpacing: "0.08em",
+                color: "rgba(255,255,255,0.3)",
+              }}
+            >
+              {uptime}
+            </span>
+            <MuteToggle inline />
+            {refreshing && <div className="refresh-dot" />}
+          </div>
         </div>
-        <div className="absolute bottom-0 left-0 right-0 h-px"
-             style={{ background: "linear-gradient(90deg, transparent, rgba(0,136,255,0.4), transparent)" }} />
+        <div
+          className="absolute bottom-0 left-0 right-0 h-px"
+          style={{ background: "linear-gradient(90deg, transparent, rgba(0,136,255,0.3), transparent)" }}
+        />
       </header>
 
-      {/* ===== DASHBOARD GRID ===== */}
+      {/* ===== DASHBOARD CONTENT ===== */}
       <main className="dashboard-grid max-w-[1440px] mx-auto relative z-[2]">
-
-        {/* Row 0: Compact status bar (post-briefing summary) */}
+        {/* Row 0: Greeting bar */}
         <div className={`hero-briefing-row ${pr(0)}`}>
           <HeroBriefing
             greeting={greeting}
@@ -298,59 +380,84 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Row 1: Revenue Hero (3 cols) + System Constellation (1 col) */}
-        <div className={`revenue-hero ${pr(1)}`} onMouseEnter={sound.playHover}>
+        {/* Row 1: Revenue Hero (3fr) + Constellation (1fr) */}
+        <div className={`hero-row ${pr(1)}`}>
           <RevenueHero />
-        </div>
-        <div className={`system-constellation ${pr(1)}`} onMouseEnter={sound.playHover}>
           <ConstellationNetwork />
         </div>
 
-        {/* Row 2: KPI Cards (6 across) */}
+        {/* Row 2: 6 KPI Cards */}
         <div className={`kpi-row ${pr(2)}`}>
-          <KpiCard label="Calls Booked" value={overview?.fireflies?.callsThisWeek ?? "—"} subtext="This week" accentClass="kpi-accent-cyan" />
-          <KpiCard label="Active Clients" value={overview?.monday?.activeClients ?? "—"} subtext="Monday boards" accentClass="kpi-accent-cyan" />
-          <KpiCard label="Daily Ad Spend" value="—" connecting subtext="Meta — Manus handles" accentClass="kpi-accent-amber" />
-          <KpiCard label="ROAS" value="—" connecting subtext="Meta — Manus handles" accentClass="kpi-accent-amber" />
-          <KpiCard label="Slack Channels" value={overview?.slack?.totalChannels ?? "—"} subtext="Total monitored" accentClass="kpi-accent-white" />
+          <KpiCard
+            label="Calls Booked"
+            value={overview?.fireflies?.callsThisWeek ?? "—"}
+            subtext="This week"
+            accentClass="kpi-accent-cyan"
+          />
+          <KpiCard
+            label="Active Clients"
+            value={overview?.monday?.activeClients ?? "—"}
+            subtext="Monday boards"
+            accentClass="kpi-accent-cyan"
+          />
+          <KpiCard
+            label="Daily Ad Spend"
+            value="—"
+            subtext="Awaiting Manus"
+            accentClass="kpi-accent-amber"
+          />
+          <KpiCard
+            label="ROAS"
+            value="—"
+            subtext="Awaiting Manus"
+            accentClass="kpi-accent-amber"
+          />
+          <KpiCard
+            label="Slack Channels"
+            value={overview?.slack?.totalChannels ?? "—"}
+            subtext="Monitored"
+            accentClass="kpi-accent-white"
+          />
           <KpiCard
             label="Close Rate"
-            value={(() => {
-              const sales = (overview?.pipeline as Record<string, unknown>)?.pipelines as Array<{ name: string; totalOpportunities?: number; stages?: Array<{ name: string; count?: number }> }> | undefined;
-              const salesPipeline = sales?.find((p) => p.name === "SALES");
-              if (!salesPipeline?.totalOpportunities) return "—";
-              const closed = salesPipeline.stages?.find((s) => s.name === "CLOSED DEAL")?.count || 0;
-              return salesPipeline.totalOpportunities > 0 ? Math.round((closed / salesPipeline.totalOpportunities) * 100) + "%" : "—";
-            })()}
+            value={closeRate}
             subtext="SALES pipeline"
-            connecting={!overview?.pipeline}
-            accentClass="kpi-accent-cyan"
+            accentClass="kpi-accent-green"
           />
         </div>
 
-        {/* Row 3-4: Main Panels (4 columns) */}
-        <div className={`space-y-5 ${pr(8)}`} onMouseEnter={sound.playHover}>
-          <PlaceholderPanel title="Meta Ads" source="Meta Ads dashboard connects when Manus integration is live" tag="growth" />
-          <PipelinePanel data={overview?.pipeline} />
-        </div>
-        <div className={`space-y-5 ${pr(9)}`} onMouseEnter={sound.playHover}>
-          <OperationsPanel data={overview?.monday ?? null} />
-          <CoachingIntelPanel data={overview?.fireflies ?? null} />
-        </div>
-        <div className={`space-y-5 ${pr(10)}`} onMouseEnter={sound.playHover}>
-          <PlaceholderPanel title="Trend" source="Revenue chart appears when Newie connects" tag="growth" />
-          <SystemPerformance />
-        </div>
-        <div className={`space-y-5 ${pr(11)}`} onMouseEnter={sound.playHover}>
-          <ApprovalQueue />
-          <AgentActivityFeed />
+        {/* Row 3+: 4-Column Panel Grid (Manus layout) */}
+        <div className={`panel-grid ${pr(3)}`}>
+          {/* Column 1: Meta Ads + Pipeline */}
+          <div className="space-y-4">
+            <MetaAdsPanel />
+            <PipelinePanel data={overview?.pipeline} />
+          </div>
+
+          {/* Column 2: Operations + Coaching Intel */}
+          <div className="space-y-4">
+            <OperationsPanel data={overview?.monday ?? null} />
+            <CoachingIntelPanel data={overview?.fireflies ?? null} />
+          </div>
+
+          {/* Column 3: Revenue Trend + System Performance */}
+          <div className="space-y-4">
+            <RevenueTrendPanel />
+            <SystemPerformance />
+          </div>
+
+          {/* Column 4: Agent Activity + Approvals */}
+          <div className="space-y-4">
+            <AgentActivityFeed />
+            <ApprovalQueue />
+          </div>
         </div>
       </main>
 
-      {/* ===== MUTE TOGGLE ===== */}
-      <MuteToggle />
+      {/* ===== COMMS TOAST NOTIFICATIONS ===== */}
+      {dashboardReady && <CommsToast />}
 
-      {/* ===== CHAT BAR (fixed bottom) ===== */}
+      {/* ===== CHAT BAR ===== */}
       <AtlasChatBar soundEngine={sound} />
     </div>
   );

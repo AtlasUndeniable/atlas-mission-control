@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 
 type ServiceStatus = "online" | "offline" | "degraded" | "checking";
 
@@ -48,21 +48,53 @@ function generateParticles(count: number) {
   return particles;
 }
 
+// Data transfer pulse: a dot that travels along a connection line
+function DataPulse({ x1, y1, x2, y2, delay, dur }: { x1: number; y1: number; x2: number; y2: number; delay: number; dur: number }) {
+  return (
+    <circle r="2" fill="#0088FF" opacity="0">
+      <animateMotion
+        path={`M${x1},${y1} L${x2},${y2}`}
+        dur={`${dur}s`}
+        begin={`${delay}s`}
+        repeatCount="indefinite"
+      />
+      <animate attributeName="opacity" values="0;0.7;0.7;0" dur={`${dur}s`} begin={`${delay}s`} repeatCount="indefinite" />
+      <animate attributeName="r" values="1.5;2.5;1.5" dur={`${dur}s`} begin={`${delay}s`} repeatCount="indefinite" />
+    </circle>
+  );
+}
+
 export default function ConstellationNetwork() {
   const [health, setHealth] = useState<HealthMap>({});
   const [tooltip, setTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const particles = useMemo(() => generateParticles(12), []);
+  const prevHealthRef = useRef<HealthMap>({});
+
+  // Stable pulse seeds per node (so pulses don't re-randomise on re-render)
+  const pulseSeeds = useMemo(() => {
+    return NODES.slice(1).map((_, i) => ({
+      delay1: (i * 2.3) % 5,
+      delay2: (i * 3.7 + 1.5) % 7,
+      dur1: 1.8 + (i % 3) * 0.4,
+      dur2: 2.2 + (i % 4) * 0.3,
+    }));
+  }, []);
 
   useEffect(() => {
     async function fetchHealth() {
       try {
         const res = await fetch("/api/health");
-        if (res.ok) setHealth(await res.json());
+        if (res.ok) {
+          const data = await res.json();
+          prevHealthRef.current = health;
+          setHealth(data);
+        }
       } catch {}
     }
     fetchHealth();
     const interval = setInterval(fetchHealth, 15000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function getStatus(nodeId: string): ServiceStatus {
@@ -83,7 +115,7 @@ export default function ConstellationNetwork() {
   return (
     <div className="glass-card hud-corners p-4 relative">
       <div className="flex items-center gap-3 mb-3">
-        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>
+        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#B0B8C4" }}>
           System Constellation
         </p>
         <span className="module-tag module-tag-system">SYSTEM</span>
@@ -93,6 +125,29 @@ export default function ConstellationNetwork() {
         className="w-full h-auto max-h-[240px]"
         onMouseLeave={() => setTooltip(null)}
       >
+        <defs>
+          <radialGradient id="atlasRadialGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#0088FF" stopOpacity="0.08" />
+            <stop offset="100%" stopColor="#0088FF" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="nodeGlowGreen" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#00FF88" stopOpacity="0.15" />
+            <stop offset="100%" stopColor="#00FF88" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="nodeGlowRed" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FF3344" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#FF3344" stopOpacity="0" />
+          </radialGradient>
+          {/* Line glow filter */}
+          <filter id="lineGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
         {/* Background floating particles */}
         {particles.map((p, i) => (
           <circle
@@ -107,7 +162,27 @@ export default function ConstellationNetwork() {
           />
         ))}
 
-        {/* Connection lines with flowing dash animation */}
+        {/* Connection lines — glow layer (behind) */}
+        {NODES.slice(1).map((node) => {
+          const status = getStatus(node.id);
+          const isOnline = status === "online";
+          if (!isOnline) return null;
+          return (
+            <line
+              key={`glow-${node.id}`}
+              x1={center.x}
+              y1={center.y}
+              x2={node.x}
+              y2={node.y}
+              stroke="#0088FF"
+              strokeWidth={3}
+              strokeOpacity={0.08}
+              filter="url(#lineGlow)"
+            />
+          );
+        })}
+
+        {/* Connection lines — main */}
         {NODES.slice(1).map((node) => {
           const status = getStatus(node.id);
           const colour = STATUS_COLOURS[status];
@@ -120,11 +195,34 @@ export default function ConstellationNetwork() {
               y1={center.y}
               x2={node.x}
               y2={node.y}
-              stroke={isOnline ? "#0088FF" : colour}
-              strokeWidth={0.8}
+              stroke={isOffline ? colour : "#0088FF"}
+              strokeWidth={isOnline ? 1 : 0.6}
               className={isOnline ? "constellation-flow" : isOffline ? "constellation-offline" : ""}
-              strokeOpacity={isOnline ? 0.5 : 0.15}
+              strokeOpacity={isOnline ? 0.45 : 0.12}
             />
+          );
+        })}
+
+        {/* Data transfer pulses along connections (online only) */}
+        {NODES.slice(1).map((node, i) => {
+          const status = getStatus(node.id);
+          if (status !== "online") return null;
+          const seeds = pulseSeeds[i];
+          return (
+            <g key={`pulses-${node.id}`}>
+              {/* Outbound pulse: ATLAS -> service */}
+              <DataPulse
+                x1={center.x} y1={center.y}
+                x2={node.x} y2={node.y}
+                delay={seeds.delay1} dur={seeds.dur1}
+              />
+              {/* Inbound pulse: service -> ATLAS */}
+              <DataPulse
+                x1={node.x} y1={node.y}
+                x2={center.x} y2={center.y}
+                delay={seeds.delay2} dur={seeds.dur2}
+              />
+            </g>
           );
         })}
 
@@ -133,6 +231,8 @@ export default function ConstellationNetwork() {
           const status = getStatus(node.id);
           const colour = STATUS_COLOURS[status];
           const isCenter = node.id === "ATLAS";
+          const isOnline = status === "online";
+          const isOffline = status === "offline";
 
           return (
             <g
@@ -142,7 +242,7 @@ export default function ConstellationNetwork() {
               onMouseEnter={() => setTooltip({ id: node.id, x: node.x, y: node.y })}
               onMouseLeave={() => setTooltip(null)}
             >
-              {/* Pulsing glow rings for ATLAS */}
+              {/* ATLAS center glow rings */}
               {isCenter && (
                 <>
                   <circle cx={node.x} cy={node.y} r={node.r + 18}
@@ -157,30 +257,50 @@ export default function ConstellationNetwork() {
                     fill="url(#atlasRadialGlow)" className="atlas-glow" />
                 </>
               )}
-              {/* Node circle */}
+
+              {/* Service node ambient glow (green pulse or red pulse) */}
+              {!isCenter && (isOnline || isOffline) && (
+                <circle
+                  cx={node.x} cy={node.y}
+                  r={node.r + 8}
+                  fill={isOnline ? "url(#nodeGlowGreen)" : "url(#nodeGlowRed)"}
+                  className={isOnline ? "node-pulse-green" : "node-pulse-red"}
+                />
+              )}
+
+              {/* Node ring — colour reflects status */}
               <circle
                 cx={node.x} cy={node.y} r={node.r}
                 fill={isCenter ? "rgba(0, 136, 255, 0.08)" : "rgba(5, 5, 16, 0.9)"}
-                stroke={isCenter ? "#0088FF" : "rgba(0, 136, 255, 0.12)"}
-                strokeWidth={isCenter ? 1.5 : 0.5}
+                stroke={isCenter ? "#0088FF" : isOnline ? "rgba(0, 255, 136, 0.2)" : isOffline ? "rgba(255, 51, 68, 0.3)" : "rgba(255,255,255,0.08)"}
+                strokeWidth={isCenter ? 1.5 : isOffline ? 1 : 0.7}
               />
-              {/* Status dot */}
+
+              {/* Status dot (top-right corner) */}
               {!isCenter && (
-                <circle cx={node.x + node.r - 4} cy={node.y - node.r + 4} r={4} fill={colour}>
-                  {status === "online" && (
-                    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />
-                  )}
-                </circle>
+                <>
+                  {/* Glow behind status dot */}
+                  <circle
+                    cx={node.x + node.r - 4} cy={node.y - node.r + 4} r={7}
+                    fill={colour} opacity={0.15}
+                    className={isOnline ? "node-dot-glow" : isOffline ? "node-dot-glow-red" : ""}
+                  />
+                  <circle cx={node.x + node.r - 4} cy={node.y - node.r + 4} r={4} fill={colour}>
+                    {isOnline && (
+                      <animate attributeName="opacity" values="1;0.5;1" dur="2.5s" repeatCount="indefinite" />
+                    )}
+                    {isOffline && (
+                      <animate attributeName="opacity" values="1;0.3;1" dur="0.8s" repeatCount="indefinite" />
+                    )}
+                  </circle>
+                </>
               )}
-              {/* Glow behind status dot for online */}
-              {!isCenter && status === "online" && (
-                <circle cx={node.x + node.r - 4} cy={node.y - node.r + 4} r={6} fill={colour} opacity={0.2} />
-              )}
+
               {/* Label */}
               <text
                 x={node.x} y={node.y + 3}
                 textAnchor="middle"
-                fill={isCenter ? "#0088FF" : "rgba(255,255,255,0.55)"}
+                fill={isCenter ? "#0088FF" : isOffline ? "rgba(255,51,68,0.7)" : "rgba(255,255,255,0.55)"}
                 fontSize={isCenter ? 11 : 8}
                 fontWeight={isCenter ? 700 : 400}
                 fontFamily="var(--font-mono)"
@@ -192,19 +312,12 @@ export default function ConstellationNetwork() {
           );
         })}
 
-        <defs>
-          <radialGradient id="atlasRadialGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#0088FF" stopOpacity="0.08" />
-            <stop offset="100%" stopColor="#0088FF" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-
         {/* Tooltip */}
         {tooltip && (
           <foreignObject x={tooltip.x - 60} y={tooltip.y - 50} width={120} height={40}>
             <div className="tooltip text-center">
               <span style={{ color: "rgba(255,255,255,0.65)" }}>{tooltip.id}</span>
-              <span className="ml-2" style={{ color: "#0088FF" }}>{getStatus(tooltip.id)}</span>
+              <span className="ml-2" style={{ color: STATUS_COLOURS[getStatus(tooltip.id)] }}>{getStatus(tooltip.id)}</span>
               <span className="ml-2 type-data" style={{ color: "rgba(255,255,255,0.40)", fontSize: "9px" }}>{getLatency(tooltip.id)}ms</span>
             </div>
           </foreignObject>

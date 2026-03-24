@@ -57,55 +57,86 @@ function TypewriterText({ text, speed = 30 }: { text: string; speed?: number }) 
   );
 }
 
+function MetricRow({ label, value, color }: { label: string; value: number | string; color?: string }) {
+  return (
+    <div className="flex justify-between items-center py-0.5">
+      <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>{label}</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: "14px", fontWeight: 600, color: color || "#FFFFFF" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 export default function CoachingIntelPanel({ data }: { data: CoachingData | null }) {
   if (!data) {
     return (
-      <div className="glass-card hud-corners p-6 pulse-border">
+      <div className="glass-card hud-corners p-5 pulse-border">
         <div className="flex items-center gap-3 mb-4">
-          <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Coaching Intel</p>
+          <span className="status-dot degraded" style={{ width: "6px", height: "6px" }} />
+          <p className="type-section-header">Coaching Intel</p>
           <span className="module-tag module-tag-coaching">COACHING</span>
         </div>
-        <div className="shimmer" style={{ height: 120 }} />
+        <div className="shimmer" style={{ height: 140 }} />
       </div>
     );
   }
 
   return (
-    <div className="glass-card hud-corners p-6">
+    <div className="glass-card hud-corners p-5">
       <div className="flex items-center gap-3 mb-4">
-        <p className="type-section-header" style={{ fontSize: "11px", letterSpacing: "0.15em", color: "#9CA3AF" }}>Coaching Intel</p>
+        <span className="status-dot online" style={{ width: "6px", height: "6px" }} />
+        <p className="type-section-header">Coaching Intel</p>
         <span className="module-tag module-tag-coaching">COACHING</span>
       </div>
-      <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>Calls This Week</span>
-          <span className="type-data" style={{ fontSize: "24px", fontWeight: 700, color: "#FFFFFF" }}>
-            {data.callsThisWeek}
-          </span>
-        </div>
-        <div className="flex justify-between items-center">
-          <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>Total Processed</span>
-          <span className="type-data" style={{ fontSize: "16px", fontWeight: 600, color: "#FFFFFF" }}>
-            {data.callsProcessed}
-          </span>
-        </div>
 
-        <div className="pt-4 mt-4" style={{ borderTop: "1px solid rgba(0,136,255,0.1)" }}>
-          <p style={{ fontFamily: "var(--font-mono)", fontSize: "10px", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#6B7280", marginBottom: "12px" }}>Recent Calls</p>
-          <div className="space-y-3">
+      {/* Aggregate metrics */}
+      <div className="space-y-0.5 mb-4">
+        <MetricRow label="Calls This Week" value={data.callsThisWeek} />
+        <MetricRow label="Processed" value={data.callsProcessed} color="#22C55E" />
+      </div>
+
+      {/* Recent calls */}
+      {data.recentCalls.length > 0 && (
+        <div className="pt-3" style={{ borderTop: "1px solid rgba(0,136,255,0.08)" }}>
+          <p
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "9px",
+              fontWeight: 700,
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              color: "#6B7280",
+              marginBottom: "10px",
+            }}
+          >
+            Recent Calls
+          </p>
+          <div className="space-y-2.5">
             {data.recentCalls.map((call, i) => {
               const initials = getInitials(call.title);
               const colour = AVATAR_COLOURS[i % AVATAR_COLOURS.length];
               return (
                 <div key={i} className="flex items-center gap-2.5">
                   <div
-                    className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
-                    style={{ background: `${colour}15`, color: colour, border: `1px solid ${colour}30`, fontFamily: "var(--font-mono)", fontSize: "9px", fontWeight: 700, letterSpacing: "0.05em" }}
+                    className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{
+                      background: `${colour}15`,
+                      color: colour,
+                      border: `1px solid ${colour}30`,
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "8px",
+                      fontWeight: 700,
+                      letterSpacing: "0.05em",
+                    }}
                   >
                     {initials}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "rgba(255,255,255,0.80)" }} className="truncate">
+                    <p
+                      style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "rgba(255,255,255,0.85)" }}
+                      className="truncate"
+                    >
                       <TypewriterText text={call.title} speed={25} />
                     </p>
                   </div>
@@ -117,7 +148,7 @@ export default function CoachingIntelPanel({ data }: { data: CoachingData | null
             })}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

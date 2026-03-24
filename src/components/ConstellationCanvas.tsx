@@ -17,6 +17,8 @@ interface Node {
 interface ConstellationCanvasProps {
   /** 0→1 opacity, allows boot sequence to fade it in */
   opacity?: number;
+  /** When true, dims the canvas to a subtle texture so panels are readable */
+  dimmed?: boolean;
 }
 
 // ===== CONSTANTS =====
@@ -27,7 +29,7 @@ const MOUSE_REPEL_RADIUS = 100;
 const REPEL_FORCE = 2.0;
 
 // ===== COMPONENT =====
-export default function ConstellationCanvas({ opacity = 1 }: ConstellationCanvasProps) {
+export default function ConstellationCanvas({ opacity = 1, dimmed = false }: ConstellationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<Node[]>([]);
   const mouseRef = useRef<{ x: number; y: number; active: boolean }>({ x: -1000, y: -1000, active: false });
@@ -157,7 +159,9 @@ export default function ConstellationCanvas({ opacity = 1 }: ConstellationCanvas
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist > CONNECTION_DISTANCE) continue;
 
-          let lineOpacity = 0.12 * (1 - dist / CONNECTION_DISTANCE);
+          // Breathing modulation on connections
+          const breathFactor = 0.8 + 0.2 * ((Math.sin(time * 0.6) + 1) * 0.5);
+          let lineOpacity = 0.12 * (1 - dist / CONNECTION_DISTANCE) * breathFactor;
 
           // Mouse brightness boost for connections
           if (mouse.active) {
@@ -181,12 +185,14 @@ export default function ConstellationCanvas({ opacity = 1 }: ConstellationCanvas
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
 
-        // Breathing opacity — range 0.15 to 0.35, visible and atmospheric
+        // Asymmetric breathing — inhale faster than exhale (UI Soul 4.3)
         let nodeOpacity: number;
         if (isStatic) {
           nodeOpacity = node.baseOpacity;
         } else {
-          nodeOpacity = 0.15 + 0.20 * ((Math.sin(time * node.speed + node.offset) + 1) * 0.5);
+          const raw = Math.sin(time * node.speed * 1.6 + node.offset);
+          const shaped = raw > 0 ? Math.pow(raw, 0.7) : -Math.pow(-raw, 1.3);
+          nodeOpacity = 0.15 + 0.20 * ((shaped + 1) * 0.5);
         }
 
         // Mouse glow boost — brighten to 0.5 max
@@ -236,8 +242,8 @@ export default function ConstellationCanvas({ opacity = 1 }: ConstellationCanvas
         height: "100%",
         zIndex: 1,
         pointerEvents: "none",
-        opacity,
-        transition: "opacity 700ms ease-out",
+        opacity: dimmed ? Math.min(opacity, 0.07) : opacity,
+        transition: "opacity 1200ms ease-out",
       }}
     />
   );
