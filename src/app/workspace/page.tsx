@@ -7,7 +7,7 @@ import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } fro
 import { buildReaperData } from "@/lib/reaper";
 import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
-import { workspaceArtifactControlFixtures } from "@/lib/workspace-contract-fixtures";
+import { workspaceArtifactControlFixtures, workspaceTrainingGroundsFixtures } from "@/lib/workspace-contract-fixtures";
 import {
   validateAgentRun,
   validateArtifactCollection,
@@ -15,6 +15,7 @@ import {
   validateAuditRun,
   validateContentBatch,
   validateMemoryMaintenanceRun,
+  validateTrainingGroundsSession,
   validateWorkspaceArtifact,
   validateWorkspaceProject,
 } from "@/lib/workspace-contracts";
@@ -25,6 +26,7 @@ import type {
   ArtifactReference,
   AuditRun,
   ContentBatch,
+  TrainingGroundsSession,
   WorkspaceArtifact,
   MemoryMaintenanceRun,
   ValidationSummary,
@@ -108,6 +110,7 @@ type WorkspaceRoomId =
   | "content"
   | "approvals"
   | "agent-runs"
+  | "training"
   | "knowledge"
   | "team"
   | "readiness";
@@ -134,6 +137,7 @@ const ROOMS: Array<{
   { id: "content", label: "Content", description: "Corey-facing weekly batches, scripts, frameworks, and assets." },
   { id: "approvals", label: "Approvals", description: "Pat-facing review queues and read-only approval visibility." },
   { id: "agent-runs", label: "Agent Runs", description: "Agent work history, blocked runs, events, and recovery notes." },
+  { id: "training", label: "Training Grounds", description: "Rhys teaching Atlas how to think through brain dumps, challenges, and reviewable learning packets." },
   { id: "knowledge", label: "Knowledge", description: "Memory maintenance, Rhys strategy docs, and artifact archives." },
   { id: "team", label: "Team", description: "Role previews and trial guidance for the Atlas team." },
   { id: "readiness", label: "Settings / Readiness", description: "Source health, disabled integrations, and launch guardrails." },
@@ -1490,6 +1494,17 @@ function artifactStatusClasses(status: WorkspaceArtifact["status"]): string {
   return "border-amber-200 bg-amber-50 text-amber-800";
 }
 
+function trainingStatusClasses(status: TrainingGroundsSession["status"]): string {
+  if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "needs_review") return "border-blue-200 bg-blue-50 text-blue-800";
+  if (status === "archived") return "border-stone-200 bg-stone-100 text-stone-700";
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function trainingGroundsRecords(): TrainingGroundsSession[] {
+  return workspaceTrainingGroundsFixtures.sessions.filter((session) => validateTrainingGroundsSession(session).ok);
+}
+
 function FileControlRoadmap() {
   const controls = [
     ["Move to project/collection", "Planned"],
@@ -1614,6 +1629,206 @@ function ArtifactControlLibrary({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               );
             })}
           </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TrainingFlowPanel() {
+  const steps = [
+    ["Start a training session", "Rhys chooses a focus: brain dump, business problem, context challenge, correction loop, or strategy conversation."],
+    ["Talk through the mess", "Atlas listens for decisions, operating principles, context gaps, and places where it should challenge more directly."],
+    ["Extract learnings", "The session becomes principles, corrections, decisions, playbooks, and proposed memory updates."],
+    ["Review what should be saved", "Rhys sees exactly what would become reusable context before anything is promoted."],
+    ["Improve Atlas deliberately", "Approved learnings can later become memory or context improvements with clear visibility and permissions."],
+  ];
+
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">Training flow</p>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-600">
+            Training Grounds is where Rhys teaches Atlas how to think. It is a structured learning room, not a live unrestricted chat surface yet.
+          </p>
+        </div>
+        <SandboxBadge />
+      </div>
+      <div className="mt-5 grid gap-3 lg:grid-cols-5">
+        {steps.map(([title, detail], index) => (
+          <article key={title} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-stone-950 text-xs font-semibold text-white">
+              {index + 1}
+            </span>
+            <p className="mt-3 text-sm font-semibold text-stone-950">{title}</p>
+            <p className="mt-2 text-xs leading-5 text-stone-500">{detail}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TrainingSessionArchive({ sessions }: { sessions: TrainingGroundsSession[] }) {
+  if (!sessions.length) {
+    return (
+      <EmptyRunState
+        title="No training sessions yet"
+        detail="Saved brain dumps, challenges, corrections, and strategy conversations will appear here once a safe session primitive exists."
+      />
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">Saved training sessions</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Sandbox examples show the future archive shape: title, date, topic, extracted principles, proposed memory updates, and review state.
+          </p>
+        </div>
+        <span className="inline-flex h-7 items-center rounded-full border border-stone-200 bg-stone-50 px-2.5 text-xs font-medium text-stone-600">
+          Demo archive
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {sessions.map((session) => (
+          <article key={session.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase text-stone-500">
+                  {formatDate(session.sessionDate)} / {session.sessionType.replaceAll("_", " ")}
+                </p>
+                <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-950">{session.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-stone-600">{session.topic}</p>
+              </div>
+              <span className={classNames("rounded-full border px-2.5 py-1 text-xs font-medium", trainingStatusClasses(session.status))}>
+                {session.status.replaceAll("_", " ")}
+              </span>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-md bg-white p-3">
+                <p className="text-xs font-medium text-stone-500">Principles</p>
+                <p className="mt-1 text-lg font-semibold text-stone-950">{session.extractedPrinciples.length}</p>
+              </div>
+              <div className="rounded-md bg-white p-3">
+                <p className="text-xs font-medium text-stone-500">Memory proposals</p>
+                <p className="mt-1 text-lg font-semibold text-stone-950">{session.proposedMemoryUpdates.length}</p>
+              </div>
+              <div className="rounded-md bg-white p-3">
+                <p className="text-xs font-medium text-stone-500">Visibility</p>
+                <p className="mt-1 text-sm font-semibold text-stone-950">{session.visibility.replaceAll("_", " ")}</p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {session.extractedPrinciples.slice(0, 2).map((principle) => (
+                <div key={principle.id} className="rounded-md border border-stone-200 bg-white p-3">
+                  <p className="text-sm font-medium text-stone-950">{principle.title}</p>
+                  <p className="mt-1 text-xs leading-5 text-stone-500">{principle.summary}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TrainingMemoryProposalPanel({ sessions }: { sessions: TrainingGroundsSession[] }) {
+  const proposals = sessions.flatMap((session) =>
+    session.proposedMemoryUpdates.map((proposal) => ({ ...proposal, sessionTitle: session.title })),
+  );
+
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <p className="text-sm font-semibold text-stone-950">Proposed memory improvements</p>
+      <p className="mt-1 text-sm leading-6 text-stone-600">
+        Future training sessions should create reviewable proposals. This room does not change memory or knowledge files.
+      </p>
+      <div className="mt-4 space-y-2">
+        {proposals.slice(0, 5).map((proposal) => (
+          <div key={proposal.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase text-stone-500">{proposal.sessionTitle}</p>
+                <p className="mt-1 text-sm leading-6 text-stone-700">{proposal.summary}</p>
+              </div>
+              <span className={classNames(
+                "rounded-full border px-2.5 py-1 text-xs font-medium",
+                proposal.risk === "high"
+                  ? "border-rose-200 bg-rose-50 text-rose-800"
+                  : proposal.risk === "medium"
+                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800",
+              )}>
+                {proposal.risk} risk
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-stone-500">
+              Scope: {proposal.targetScope} / Review required: {proposal.requiresReview ? "yes" : "no"} / State: {proposal.status.replaceAll("_", " ")}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TrainingPermissionsPanel() {
+  const rows = [
+    ["Rhys", "Can create broad training sessions and decide what becomes reusable context."],
+    ["Pat", "Can review operational training items tied to approvals, queues, and delivery process."],
+    ["Corey", "Can train content preferences in Content or Training Grounds once permissions exist."],
+    ["Dante/Admin", "Can inspect memory safety, context bleed, source visibility, and risky proposals."],
+  ];
+
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <p className="text-sm font-semibold text-stone-950">Role and permission framing</p>
+      <div className="mt-4 space-y-2">
+        {rows.map(([role, detail]) => (
+          <div key={role} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <p className="text-sm font-semibold text-stone-950">{role}</p>
+            <p className="mt-1 text-xs leading-5 text-stone-500">{detail}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TrainingGuardrailPanel({ sessions }: { sessions: TrainingGroundsSession[] }) {
+  const sourceRefs = sessions.flatMap((session) => session.sourceContextUsed).slice(0, 5);
+  const guardrails = [
+    ["Automatic memory overwrite", "Disabled"],
+    ["High-risk memory changes", "Review required"],
+    ["Client/team visibility", "Explicit only"],
+    ["Source context used", "Visible in session packet"],
+    ["Live chat session primitive", "Not wired"],
+  ];
+
+  return (
+    <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+      <p className="text-sm font-semibold text-stone-950">Training guardrails</p>
+      <div className="mt-4 grid gap-2">
+        {guardrails.map(([label, state]) => (
+          <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
+            <p className="text-sm font-medium text-stone-950">{label}</p>
+            <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{state}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 rounded-lg border border-stone-200 bg-white p-3">
+        <p className="text-sm font-semibold text-stone-950">Visible source context</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {sourceRefs.map((ref) => (
+            <span key={`${ref.system}-${ref.ref}`} className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+              {ref.label ?? ref.ref}
+            </span>
+          ))}
         </div>
       </div>
     </section>
@@ -1828,6 +2043,24 @@ function KnowledgeRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   );
 }
 
+function TrainingGroundsRoom() {
+  const sessions = trainingGroundsRecords();
+
+  return (
+    <div className="space-y-5">
+      <TrainingFlowPanel />
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <TrainingSessionArchive sessions={sessions} />
+        <div className="space-y-5">
+          <TrainingGuardrailPanel sessions={sessions} />
+          <TrainingPermissionsPanel />
+        </div>
+      </div>
+      <TrainingMemoryProposalPanel sessions={sessions} />
+    </div>
+  );
+}
+
 function TeamRoom({
   role,
   project,
@@ -1870,6 +2103,7 @@ function RoomContent({
   if (room === "content") return <ContentRoom snapshot={snapshot} />;
   if (room === "approvals") return <ApprovalsRoom snapshot={snapshot} />;
   if (room === "agent-runs") return <AgentRunsRoom snapshot={snapshot} />;
+  if (room === "training") return <TrainingGroundsRoom />;
   if (room === "knowledge") return <KnowledgeRoom snapshot={snapshot} />;
   if (room === "team") return <TeamRoom role={role} project={project} />;
   if (room === "readiness") return <ReadinessRoom snapshot={snapshot} />;
@@ -1922,6 +2156,7 @@ export default async function WorkspacePage({
     content: String(snapshot.runs.counts.contentBatches),
     approvals: String(snapshot.approvals.totalPending),
     "agent-runs": String(snapshot.runs.counts.agentRuns),
+    training: String(trainingGroundsRecords().length),
     knowledge: String(snapshot.runs.counts.memoryMaintenanceRuns + snapshot.artifacts.total + snapshot.artifactControl.counts.artifacts),
     team: selectedRole(role).label,
     readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent}/8`,

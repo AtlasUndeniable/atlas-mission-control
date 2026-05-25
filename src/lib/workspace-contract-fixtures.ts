@@ -5,6 +5,7 @@ import type {
   AuditRun,
   ContentBatch,
   MemoryMaintenanceRun,
+  TrainingGroundsSession,
   WorkspaceArtifact,
   WorkspaceProject,
 } from "./workspace-contracts";
@@ -631,10 +632,159 @@ export const workspaceArtifactFixtures: WorkspaceArtifact[] = [
   },
 ];
 
+const trainingGuardrails = {
+  automaticMemoryWrite: false,
+  highRiskRequiresReview: true,
+  explicitVisibilityRequired: true,
+  sourceContextVisible: true,
+} as const;
+
+export const trainingGroundsSessionFixtures: TrainingGroundsSession[] = [
+  {
+    id: "training_rhys_eod_20260524",
+    schemaVersion: WORKSPACE_SCHEMA_VERSION,
+    title: "End-of-day operator download",
+    sessionDate: "2026-05-24T08:45:00.000Z",
+    topic: "Where Atlas should challenge decisions instead of only assisting",
+    sessionType: "brain_dump",
+    status: "needs_review",
+    ownerRole: "rhys",
+    createdAt: "2026-05-24T08:45:00.000Z",
+    updatedAt: "2026-05-24T09:12:00.000Z",
+    sourceRefs: [{ system: "workspace", ref: "sandbox-training-rhys-eod", label: "Sandbox training session" }],
+    sourceContextUsed: [
+      { system: "memory", ref: "principles/operator-cadence", label: "Operator cadence notes" },
+      { system: "workspace", ref: "project_undeniable_os", label: "Undeniable OS" },
+    ],
+    extractedPrinciples: [
+      {
+        id: "principle_challenge_early",
+        title: "Challenge early when the cost of drift is high",
+        summary: "Atlas should flag unclear owner, next step, or review risk before producing more work.",
+        reusableAs: "principle",
+        confidence: 0.84,
+      },
+      {
+        id: "playbook_end_day_download",
+        title: "End-of-day download pattern",
+        summary: "Convert messy operator notes into decisions, blockers, tomorrow priorities, and memory proposals.",
+        reusableAs: "playbook",
+        confidence: 0.79,
+      },
+    ],
+    decisions: ["Training sessions should produce reviewable learning packets, not automatic memory changes."],
+    corrections: ["Do not treat every Rhys preference as global; separate personal operating style from client rules."],
+    proposedMemoryUpdates: [
+      {
+        id: "memory_update_operator_challenge",
+        targetScope: "project",
+        summary: "For Undeniable OS strategy work, surface unresolved owner, risk, and next action before polishing outputs.",
+        risk: "medium",
+        requiresReview: true,
+        status: "proposed",
+      },
+      {
+        id: "memory_update_global_challenge_style",
+        targetScope: "global",
+        summary: "Atlas should challenge vague strategic direction more directly across all workspaces.",
+        risk: "high",
+        requiresReview: true,
+        status: "proposed",
+      },
+    ],
+    visibility: "owner",
+    reviewNotes: ["Sandbox/demo only. No live memory file should be changed from this record."],
+    guardrails: trainingGuardrails,
+  },
+  {
+    id: "training_rhys_pricing_20260525",
+    schemaVersion: WORKSPACE_SCHEMA_VERSION,
+    title: "Pricing and positioning pressure test",
+    sessionDate: "2026-05-25T01:30:00.000Z",
+    topic: "Business problem-solving conversation about packaging Atlas-enabled services",
+    sessionType: "business_problem",
+    status: "draft",
+    ownerRole: "rhys",
+    createdAt: "2026-05-25T01:30:00.000Z",
+    updatedAt: "2026-05-25T02:02:00.000Z",
+    sourceRefs: [{ system: "workspace", ref: "sandbox-training-pricing", label: "Sandbox strategy conversation" }],
+    sourceContextUsed: [
+      { system: "artifact", ref: "artifact_rhys_strategy_overview", label: "Rhys strategic overview" },
+      { system: "audit", ref: happyPathAuditRunFixture.id, label: "Recent L2 audit package" },
+    ],
+    extractedPrinciples: [
+      {
+        id: "principle_offer_specificity",
+        title: "Prefer narrow proof over broad capability",
+        summary: "When positioning Atlas, lead with the concrete workflow outcome rather than a generic AI capability claim.",
+        reusableAs: "principle",
+        confidence: 0.76,
+      },
+    ],
+    decisions: ["Keep pricing notes as project-specific until Rhys marks them as reusable sales memory."],
+    corrections: [],
+    proposedMemoryUpdates: [
+      {
+        id: "memory_update_offer_specificity",
+        targetScope: "project",
+        summary: "Undeniable OS positioning should connect price to audit throughput, quality gates, and owner review time saved.",
+        risk: "medium",
+        requiresReview: true,
+        status: "proposed",
+      },
+    ],
+    visibility: "owner",
+    reviewNotes: ["Draft training archive preview. No unrestricted chat session exists yet."],
+    guardrails: trainingGuardrails,
+  },
+  {
+    id: "training_corey_content_preferences_20260525",
+    schemaVersion: WORKSPACE_SCHEMA_VERSION,
+    title: "Corey content preference correction",
+    sessionDate: "2026-05-25T03:15:00.000Z",
+    topic: "Tone and framework preferences for weekly content batches",
+    sessionType: "content_preference",
+    status: "needs_review",
+    ownerRole: "corey",
+    createdAt: "2026-05-25T03:15:00.000Z",
+    updatedAt: "2026-05-25T03:34:00.000Z",
+    sourceRefs: [{ system: "workspace", ref: "sandbox-training-corey-content", label: "Sandbox content training" }],
+    sourceContextUsed: [{ system: "content_batch", ref: contentBatchReadyForReviewFixture.id, label: "Corey weekly content batch" }],
+    extractedPrinciples: [
+      {
+        id: "preference_corey_concrete_hooks",
+        title: "Concrete hooks before conceptual hooks",
+        summary: "Corey-facing batches should start with a specific operational pain before abstract positioning language.",
+        reusableAs: "preference",
+        confidence: 0.81,
+      },
+    ],
+    decisions: [],
+    corrections: ["Avoid overusing founder-story language when the batch is meant for operational proof."],
+    proposedMemoryUpdates: [
+      {
+        id: "memory_update_corey_hooks",
+        targetScope: "content",
+        summary: "Corey content batches should bias toward concrete operational hooks unless a campaign brief says otherwise.",
+        risk: "low",
+        requiresReview: true,
+        status: "proposed",
+      },
+    ],
+    visibility: "role_restricted",
+    reviewNotes: ["Corey can train content preferences later only when role permissions exist."],
+    guardrails: trainingGuardrails,
+  },
+];
+
 export const workspaceArtifactControlFixtures = {
   projects: workspaceProjectFixtures,
   collections: artifactCollectionFixtures,
   artifacts: workspaceArtifactFixtures,
+};
+
+export const workspaceTrainingGroundsFixtures = {
+  sessions: trainingGroundsSessionFixtures,
 };
 
 export const workspaceContractFixtures = {

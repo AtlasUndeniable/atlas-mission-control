@@ -11,10 +11,15 @@ import {
   validateAuditRun,
   validateContentBatch,
   validateMemoryMaintenanceRun,
+  validateTrainingGroundsSession,
   validateWorkspaceArtifact,
   validateWorkspaceProject,
 } from "../src/lib/workspace-contracts.ts";
-import { workspaceArtifactControlFixtures, workspaceContractFixtures } from "../src/lib/workspace-contract-fixtures.ts";
+import {
+  workspaceArtifactControlFixtures,
+  workspaceContractFixtures,
+  workspaceTrainingGroundsFixtures,
+} from "../src/lib/workspace-contract-fixtures.ts";
 
 test("workspace contract fixtures validate", () => {
   for (const project of workspaceArtifactControlFixtures.projects) {
@@ -29,6 +34,11 @@ test("workspace contract fixtures validate", () => {
 
   for (const artifact of workspaceArtifactControlFixtures.artifacts) {
     const result = validateWorkspaceArtifact(artifact);
+    assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
+  }
+
+  for (const session of workspaceTrainingGroundsFixtures.sessions) {
+    const result = validateTrainingGroundsSession(session);
     assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
   }
 
@@ -76,6 +86,31 @@ test("workspace artifact model rejects unsafe file-control shapes", () => {
   assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.sensitivity/);
   assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.naming\.canonicalName/);
   assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.naming\.suggestedFolder/);
+});
+
+test("training grounds validation blocks automatic memory changes", () => {
+  const invalid = {
+    ...workspaceTrainingGroundsFixtures.sessions[0],
+    status: "auto_saved",
+    guardrails: {
+      ...workspaceTrainingGroundsFixtures.sessions[0].guardrails,
+      automaticMemoryWrite: true,
+      sourceContextVisible: false,
+    },
+    proposedMemoryUpdates: [
+      {
+        ...workspaceTrainingGroundsFixtures.sessions[0].proposedMemoryUpdates[1],
+        requiresReview: false,
+      },
+    ],
+  };
+
+  const result = validateTrainingGroundsSession(invalid);
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /TrainingGroundsSession\.status/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /automaticMemoryWrite/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /sourceContextVisible/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /proposedMemoryUpdates\.0\.requiresReview/);
 });
 
 test("agent run validation rejects unstable workflow records", () => {

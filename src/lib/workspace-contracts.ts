@@ -94,6 +94,25 @@ export type WorkspaceArtifactSensitivity = (typeof WORKSPACE_ARTIFACT_SENSITIVIT
 export const WORKSPACE_ARTIFACT_VISIBILITY = ["owner", "team", "role_restricted", "admin_only"] as const;
 export type WorkspaceArtifactVisibility = (typeof WORKSPACE_ARTIFACT_VISIBILITY)[number];
 
+export const TRAINING_SESSION_STATUSES = ["draft", "needs_review", "approved", "archived"] as const;
+export type TrainingSessionStatus = (typeof TRAINING_SESSION_STATUSES)[number];
+
+export const TRAINING_SESSION_TYPES = [
+  "brain_dump",
+  "business_problem",
+  "context_challenge",
+  "correction_loop",
+  "strategy_conversation",
+  "content_preference",
+] as const;
+export type TrainingSessionType = (typeof TRAINING_SESSION_TYPES)[number];
+
+export const TRAINING_MEMORY_RISK = ["low", "medium", "high"] as const;
+export type TrainingMemoryRisk = (typeof TRAINING_MEMORY_RISK)[number];
+
+export const TRAINING_MEMORY_SCOPES = ["global", "project", "person", "client", "content"] as const;
+export type TrainingMemoryScope = (typeof TRAINING_MEMORY_SCOPES)[number];
+
 export type WorkspaceProject = {
   id: string;
   schemaVersion: number;
@@ -145,6 +164,46 @@ export type WorkspaceArtifact = {
   naming: {
     canonicalName: string;
     suggestedFolder: string;
+  };
+};
+
+export type TrainingGroundsSession = {
+  id: string;
+  schemaVersion: number;
+  title: string;
+  sessionDate: string;
+  topic: string;
+  sessionType: TrainingSessionType;
+  status: TrainingSessionStatus;
+  ownerRole: "rhys" | "pat" | "corey" | "dante";
+  createdAt: string;
+  updatedAt: string;
+  sourceRefs: SourceReference[];
+  sourceContextUsed: SourceReference[];
+  extractedPrinciples: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    reusableAs: "principle" | "playbook" | "preference" | "decision";
+    confidence?: number;
+  }>;
+  decisions: string[];
+  corrections: string[];
+  proposedMemoryUpdates: Array<{
+    id: string;
+    targetScope: TrainingMemoryScope;
+    summary: string;
+    risk: TrainingMemoryRisk;
+    requiresReview: boolean;
+    status: "proposed" | "rejected" | "approved_for_later";
+  }>;
+  visibility: WorkspaceArtifactVisibility;
+  reviewNotes: string[];
+  guardrails: {
+    automaticMemoryWrite: false;
+    highRiskRequiresReview: true;
+    explicitVisibilityRequired: true;
+    sourceContextVisible: true;
   };
 };
 
@@ -632,6 +691,81 @@ export function validateWorkspaceArtifact(value: unknown): ContractValidationRes
   }
 
   return finish<WorkspaceArtifact>(value, v.issues);
+}
+
+export function validateTrainingGroundsSession(value: unknown): ContractValidationResult<TrainingGroundsSession> {
+  const v: Validator = { path: "TrainingGroundsSession", issues: [] };
+  if (!isRecord(value)) return { ok: false, issues: ["TrainingGroundsSession: must be an object"] };
+
+  requireString(v, value, "id");
+  requireSchemaVersion(v, value);
+  requireString(v, value, "title");
+  requireTimestamp(v, value, "sessionDate");
+  requireString(v, value, "topic");
+  requireEnum(v, value, "sessionType", TRAINING_SESSION_TYPES);
+  requireEnum(v, value, "status", TRAINING_SESSION_STATUSES);
+  requireEnum(v, value, "ownerRole", ["rhys", "pat", "corey", "dante"] as const);
+  requireTimestamp(v, value, "createdAt");
+  requireTimestamp(v, value, "updatedAt");
+  validateSourceRefs(child(v, "sourceRefs"), requireArray(v, value, "sourceRefs"));
+  validateSourceRefs(child(v, "sourceContextUsed"), requireArray(v, value, "sourceContextUsed"));
+
+  requireArray(v, value, "extractedPrinciples").forEach((principle, index) => {
+    const next = child(child(v, "extractedPrinciples"), String(index));
+    if (!isRecord(principle)) {
+      issue(next, "must be an object");
+      return;
+    }
+    requireString(next, principle, "id");
+    requireString(next, principle, "title");
+    requireString(next, principle, "summary");
+    requireEnum(next, principle, "reusableAs", ["principle", "playbook", "preference", "decision"] as const);
+    optionalNumber(next, principle, "confidence");
+  });
+
+  validateStringArray(v, value, "decisions");
+  validateStringArray(v, value, "corrections");
+  requireArray(v, value, "proposedMemoryUpdates").forEach((update, index) => {
+    const next = child(child(v, "proposedMemoryUpdates"), String(index));
+    if (!isRecord(update)) {
+      issue(next, "must be an object");
+      return;
+    }
+    requireString(next, update, "id");
+    requireEnum(next, update, "targetScope", TRAINING_MEMORY_SCOPES);
+    requireString(next, update, "summary");
+    requireEnum(next, update, "risk", TRAINING_MEMORY_RISK);
+    requireBoolean(next, update, "requiresReview");
+    requireEnum(next, update, "status", ["proposed", "rejected", "approved_for_later"] as const);
+    if (update.risk === "high" && update.requiresReview !== true) {
+      issue(child(next, "requiresReview"), "must be true for high-risk memory updates");
+    }
+  });
+
+  requireEnum(v, value, "visibility", WORKSPACE_ARTIFACT_VISIBILITY);
+  validateStringArray(v, value, "reviewNotes");
+  if (!isRecord(value.guardrails)) {
+    issue(child(v, "guardrails"), "must be an object");
+  } else {
+    requireBoolean(child(v, "guardrails"), value.guardrails, "automaticMemoryWrite");
+    requireBoolean(child(v, "guardrails"), value.guardrails, "highRiskRequiresReview");
+    requireBoolean(child(v, "guardrails"), value.guardrails, "explicitVisibilityRequired");
+    requireBoolean(child(v, "guardrails"), value.guardrails, "sourceContextVisible");
+    if (value.guardrails.automaticMemoryWrite !== false) {
+      issue(child(child(v, "guardrails"), "automaticMemoryWrite"), "must remain false");
+    }
+    if (value.guardrails.highRiskRequiresReview !== true) {
+      issue(child(child(v, "guardrails"), "highRiskRequiresReview"), "must remain true");
+    }
+    if (value.guardrails.explicitVisibilityRequired !== true) {
+      issue(child(child(v, "guardrails"), "explicitVisibilityRequired"), "must remain true");
+    }
+    if (value.guardrails.sourceContextVisible !== true) {
+      issue(child(child(v, "guardrails"), "sourceContextVisible"), "must remain true");
+    }
+  }
+
+  return finish<TrainingGroundsSession>(value, v.issues);
 }
 
 export function validateAgentRun(value: unknown): ContractValidationResult<AgentRun> {
