@@ -115,15 +115,14 @@ type WorkspaceRoomId =
   | "team"
   | "readiness";
 
-type WorkspaceRoleId = "rhys" | "pat" | "corey" | "gian" | "dante";
+type WorkspaceRoleId = "rhys" | "pat" | "corey" | "jian" | "dante";
 
 type WorkspaceProjectId =
   | "undeniable-os"
   | "l2-audits"
   | "content-engine"
   | "monday-delivery"
-  | "memory-knowledge"
-  | "ricky-calder";
+  | "memory-knowledge";
 
 type WorkspaceSearchParams = Record<string, string | string[] | undefined>;
 
@@ -139,21 +138,8 @@ const ROOMS: Array<{
   { id: "agent-runs", label: "Agent Runs", description: "Agent work history, blocked runs, events, and recovery notes." },
   { id: "training", label: "Training Grounds", description: "Rhys teaching Atlas how to think through brain dumps, challenges, and reviewable learning packets." },
   { id: "knowledge", label: "Knowledge", description: "Memory maintenance, Rhys strategy docs, and artifact archives." },
-  { id: "team", label: "Team", description: "Role previews and trial guidance for the Atlas team." },
+  { id: "team", label: "Team", description: "Trial guidance and read-only launch checks for the Atlas team." },
   { id: "readiness", label: "Settings / Readiness", description: "Source health, disabled integrations, and launch guardrails." },
-];
-
-const ROLES: Array<{
-  id: WorkspaceRoleId;
-  label: string;
-  title: string;
-  access: string;
-}> = [
-  { id: "rhys", label: "Rhys", title: "Owner view", access: "All rooms, high-level status, audits, content, tasks, and artifacts." },
-  { id: "pat", label: "Pat", title: "Operations reviewer", access: "Approvals, operations tasks, review queues, and blocked items." },
-  { id: "corey", label: "Corey", title: "Content operator", access: "Content batches, scripts, assets, and content QA previews." },
-  { id: "gian", label: "Gian", title: "Workflow tester", access: "Monday/task workflow visibility and contract-readiness states." },
-  { id: "dante", label: "Dante/Admin", title: "System admin", access: "Readiness, source health, disabled integrations, and system risks." },
 ];
 
 const PROJECTS: Array<{
@@ -166,11 +152,10 @@ const PROJECTS: Array<{
   { id: "content-engine", label: "Content Engine", detail: "Weekly content batches, scripts, and assets." },
   { id: "monday-delivery", label: "Monday Delivery", detail: "Task delivery visibility and review state." },
   { id: "memory-knowledge", label: "Memory/Knowledge", detail: "Librarian runs, saved docs, and knowledge health." },
-  { id: "ricky-calder", label: "Ricky Calder", detail: "Person-specific archive model for calls, transcripts, and overview docs." },
 ];
 
 const ROOM_IDS = new Set(ROOMS.map((room) => room.id));
-const ROLE_IDS = new Set(ROLES.map((role) => role.id));
+const ROLE_IDS = new Set<WorkspaceRoleId>(["rhys", "pat", "corey", "jian", "dante"]);
 const PROJECT_IDS = new Set(PROJECTS.map((project) => project.id));
 
 async function readJsonArray<T>(filePath: string): Promise<T[]> {
@@ -250,6 +235,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       },
     }),
     getWorkspaceArtifactControlProjection({
+      fixtureFallbackCount: workspaceArtifactControlFixtures.artifacts.length,
       validators: {
         projects: validateWorkspaceProject,
         collections: validateArtifactCollection,
@@ -336,10 +322,6 @@ function workspaceHref({
 }): string {
   const params = new URLSearchParams({ room, role, project });
   return `/workspace?${params.toString()}`;
-}
-
-function selectedRole(roleId: WorkspaceRoleId) {
-  return ROLES.find((role) => role.id === roleId) ?? ROLES[0];
 }
 
 function selectedProject(projectId: WorkspaceProjectId) {
@@ -548,95 +530,6 @@ function RoomNavItem({
   );
 }
 
-function SelectorLink({
-  label,
-  detail,
-  href,
-  active,
-}: {
-  label: string;
-  detail?: string;
-  href: string;
-  active: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={classNames(
-        "block rounded-lg border p-3 transition",
-        active ? "border-stone-950 bg-white shadow-sm" : "border-stone-200 bg-[#f8f7f4] hover:border-stone-300 hover:bg-white",
-      )}
-    >
-      <span className="block text-sm font-semibold text-stone-950">{label}</span>
-      {detail ? <span className="mt-1 block text-xs leading-5 text-stone-500">{detail}</span> : null}
-    </Link>
-  );
-}
-
-function RoleProjectPreview({
-  room,
-  role,
-  project,
-}: {
-  room: WorkspaceRoomId;
-  role: WorkspaceRoleId;
-  project: WorkspaceProjectId;
-}) {
-  const roleInfo = selectedRole(role);
-  const projectInfo = selectedProject(project);
-
-  return (
-    <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-stone-950">Identity preview</p>
-          <p className="mt-1 text-xs leading-5 text-stone-500">Role auth is planned; this switcher only changes the read-only framing.</p>
-        </div>
-        <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">
-          Demo
-        </span>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {ROLES.map((candidate) => (
-          <SelectorLink
-            key={candidate.id}
-            label={candidate.label}
-            detail={candidate.title}
-            href={workspaceHref({ room, role: candidate.id, project })}
-            active={candidate.id === role}
-          />
-        ))}
-      </div>
-
-      <div className="mt-4 rounded-lg border border-stone-200 bg-white p-3">
-        <p className="text-sm font-semibold text-stone-950">{roleInfo.title}</p>
-        <p className="mt-1 text-xs leading-5 text-stone-500">{roleInfo.access}</p>
-      </div>
-
-      <div className="mt-5">
-        <p className="mb-2 text-xs font-semibold uppercase text-stone-500">Saved workspace preview</p>
-        <div className="space-y-2">
-          {PROJECTS.map((candidate) => (
-            <SelectorLink
-              key={candidate.id}
-              label={candidate.label}
-              detail={candidate.detail}
-              href={workspaceHref({ room, role, project: candidate.id })}
-              active={candidate.id === project}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-stone-200 bg-white p-3">
-        <p className="text-sm font-semibold text-stone-950">{projectInfo.label}</p>
-        <p className="mt-1 text-xs leading-5 text-stone-500">{projectInfo.detail}</p>
-      </div>
-    </section>
-  );
-}
-
 function ArtifactResultCard({ group }: { group: ArtifactGroup }) {
   const primary = group.artifacts.find((artifact) => artifact.format === "PDF")
     ?? group.artifacts.find((artifact) => artifact.format === "DOCX")
@@ -780,26 +673,26 @@ function EmptyRunState({ title, detail }: { title: string; detail: string }) {
 }
 
 function TrialGuidePanel() {
-  const roles = [
+  const checks = [
     {
-      name: "Rhys",
-      focus: "Browse audit readiness, blocked items, agent activity, and the artifact library. L2 audit outputs are intended to appear here, not in Slack, DMs, or client delivery.",
+      name: "Audit readiness",
+      focus: "Browse L2 intake status, blocked items, QA state, and generated packages. Audit outputs are intended to appear in Workspace, not external delivery channels.",
     },
     {
-      name: "Pat",
-      focus: "Use the approval and task queue views for visibility. Decision and edit controls are not live in this Workspace preview unless they already exist on another Atlas page.",
+      name: "Review queues",
+      focus: "Use approval and task surfaces for visibility. Decision and edit controls are not live in this Workspace preview unless they already exist on another Atlas page.",
     },
     {
-      name: "Corey",
-      focus: "Check the Content studio lane to see where future batches will land. There is no live content push from this page yet.",
+      name: "Content batches",
+      focus: "Check the Content room to see where future batches, scripts, assets, and QA notes will land. There is no live content push from this page.",
     },
     {
-      name: "Gian",
-      focus: "Review Monday and task workflow visibility, contract-readiness states, and related review records. This page does not change Monday.",
+      name: "Artifact library",
+      focus: "Inspect project, collection, and artifact metadata. Move, rename, archive, attach, share, and export controls remain planned only.",
     },
     {
-      name: "Dante / Admin",
-      focus: "Check readiness panels, source health, missing emitters, invalid record counts, and disabled integrations before any live wiring is considered.",
+      name: "Source health",
+      focus: "Check missing emitters, invalid record counts, artifact sidecar discovery, and disabled integrations before any live wiring is considered.",
     },
   ];
 
@@ -817,10 +710,10 @@ function TrialGuidePanel() {
         </span>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {roles.map((role) => (
-          <section key={role.name} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-            <p className="text-sm font-semibold text-stone-950">{role.name}</p>
-            <p className="mt-1 text-sm leading-6 text-stone-600">{role.focus}</p>
+        {checks.map((check) => (
+          <section key={check.name} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <p className="text-sm font-semibold text-stone-950">{check.name}</p>
+            <p className="mt-1 text-sm leading-6 text-stone-600">{check.focus}</p>
           </section>
         ))}
       </div>
@@ -1296,15 +1189,12 @@ function SandboxBadge() {
 
 function RoomHeader({
   room,
-  role,
   project,
 }: {
   room: WorkspaceRoomId;
-  role: WorkspaceRoleId;
   project: WorkspaceProjectId;
 }) {
   const roomInfo = selectedRoom(room);
-  const roleInfo = selectedRole(role);
   const projectInfo = selectedProject(project);
 
   return (
@@ -1312,7 +1202,7 @@ function RoomHeader({
       <div className="mx-auto max-w-5xl">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-stone-500">{projectInfo.label} / {roleInfo.label}</p>
+            <p className="text-sm font-medium text-stone-500">{projectInfo.label}</p>
             <h2 className="mt-1 text-2xl font-semibold text-stone-950 sm:text-3xl">{roomInfo.label}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">{roomInfo.description}</p>
           </div>
@@ -1782,7 +1672,7 @@ function TrainingPermissionsPanel() {
     ["Rhys", "Can create broad training sessions and decide what becomes reusable context."],
     ["Pat", "Can review operational training items tied to approvals, queues, and delivery process."],
     ["Corey", "Can train content preferences in Content or Training Grounds once permissions exist."],
-    ["Dante/Admin", "Can inspect memory safety, context bleed, source visibility, and risky proposals."],
+    ["System review", "Can inspect memory safety, context bleed, source visibility, and risky proposals."],
   ];
 
   return (
@@ -1896,48 +1786,32 @@ function SourceHealthPanel({ runs }: { runs: WorkspaceRunsProjection }) {
 }
 
 function ArtifactControlSourceHealthPanel({ artifactControl }: { artifactControl: WorkspaceArtifactControlProjection }) {
+  const discovery = artifactControl.discovery.counts;
+
   return (
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <p className="text-sm font-semibold text-stone-950">Artifact control metadata</p>
       <p className="mt-1 text-sm leading-6 text-stone-600">
-        Reads optional project, collection, and artifact metadata sidecars from local materialized records. Missing sources are safe.
+        Reads optional project, collection, artifact metadata, real sidecars, and delivery ledgers. Missing sources are safe and do not trigger file changes.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <QueueRow label="Projects" value={String(artifactControl.counts.projects)} detail={`${artifactControl.sources.projects.invalidRecordCount} invalid records.`} />
         <QueueRow label="Collections" value={String(artifactControl.counts.collections)} detail={`${artifactControl.sources.collections.invalidRecordCount} invalid records.`} />
         <QueueRow label="Artifacts" value={String(artifactControl.counts.artifacts)} detail={`${artifactControl.sources.artifacts.invalidRecordCount} invalid records.`} />
       </div>
-    </section>
-  );
-}
-
-function TeamAccessPanel({
-  room,
-  role,
-  project,
-}: {
-  room: WorkspaceRoomId;
-  role: WorkspaceRoleId;
-  project: WorkspaceProjectId;
-}) {
-  return (
-    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-stone-950">Role access preview</p>
-          <p className="mt-1 text-sm leading-6 text-stone-600">No real users or auth providers exist yet. These previews show how the Workspace shell will frame access later.</p>
-        </div>
-        <span className="inline-flex h-7 items-center rounded-full border border-stone-200 bg-stone-50 px-2.5 text-xs font-medium text-stone-600">Auth planned</span>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {ROLES.map((candidate) => (
-          <SelectorLink
-            key={candidate.id}
-            label={`${candidate.label} - ${candidate.title}`}
-            detail={candidate.access}
-            href={workspaceHref({ room, role: candidate.id, project })}
-            active={candidate.id === role}
-          />
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {[
+          ["Real sidecars", discovery.realMetadataRecordsFound],
+          ["Files matched", discovery.exportFilesMatched],
+          ["Missing paths", discovery.missingSidecars],
+          ["Orphan exports", discovery.orphanExports],
+          ["Duplicate ids", discovery.duplicateArtifactIds],
+          ["Fixture fallback", discovery.fixtureFallbackCount],
+        ].map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <p className="text-sm font-medium text-stone-950">{label}</p>
+            <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
+          </div>
         ))}
       </div>
     </section>
@@ -1946,12 +1820,8 @@ function TeamAccessPanel({
 
 function HomeRoom({
   snapshot,
-  role,
-  project,
 }: {
   snapshot: WorkspaceSnapshot;
-  role: WorkspaceRoleId;
-  project: WorkspaceProjectId;
 }) {
   return (
     <div className="space-y-5">
@@ -1968,7 +1838,6 @@ function HomeRoom({
           <SandboxBlockedRunPreview />
         </div>
       </section>
-      <TeamAccessPanel room="home" role={role} project={project} />
     </div>
   );
 }
@@ -2062,16 +1931,15 @@ function TrainingGroundsRoom() {
 }
 
 function TeamRoom({
-  role,
-  project,
+  snapshot,
 }: {
-  role: WorkspaceRoleId;
-  project: WorkspaceProjectId;
+  snapshot: WorkspaceSnapshot;
 }) {
   return (
     <div className="space-y-5">
       <TrialGuidePanel />
-      <TeamAccessPanel room="team" role={role} project={project} />
+      <ContractReadinessPanel runs={snapshot.runs} />
+      <ArtifactControlSourceHealthPanel artifactControl={snapshot.artifactControl} />
     </div>
   );
 }
@@ -2088,15 +1956,88 @@ function ReadinessRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   );
 }
 
+function WorkspaceOperationsRail({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  const artifactDiscovery = snapshot.artifactControl.discovery.counts;
+  const recentArtifacts = artifactControlRecords(snapshot).artifacts.slice(0, 3);
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+        <p className="text-sm font-semibold text-stone-950">Workspace health</p>
+        <dl className="mt-4 grid grid-cols-2 gap-3">
+          {[
+            ["Run records", snapshot.runs.counts.totalValidRecords],
+            ["Artifacts", snapshot.artifactControl.counts.artifacts],
+            ["Sidecars", artifactDiscovery.realMetadataRecordsFound],
+            ["Invalid", snapshot.artifactControl.counts.totalInvalidRecords],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md bg-white p-3">
+              <dt className="text-xs font-medium text-stone-500">{label}</dt>
+              <dd className="mt-1 text-xl font-semibold text-stone-950">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 text-xs leading-5 text-stone-500">Read-only projection. Controls that would change files or external systems remain disabled.</p>
+      </section>
+
+      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+        <p className="text-sm font-semibold text-stone-950">Artifact source health</p>
+        <div className="mt-4 space-y-2">
+          {[
+            ["Real metadata records", artifactDiscovery.realMetadataRecordsFound],
+            ["Export files matched", artifactDiscovery.exportFilesMatched],
+            ["Missing file paths", artifactDiscovery.missingSidecars],
+            ["Orphan exports", artifactDiscovery.orphanExports],
+            ["Duplicate ids", artifactDiscovery.duplicateArtifactIds],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
+              <p className="text-sm font-medium text-stone-950">{label}</p>
+              <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+        <p className="text-sm font-semibold text-stone-950">Recent artifact records</p>
+        <div className="mt-4 space-y-2">
+          {recentArtifacts.length ? recentArtifacts.map((artifact) => (
+            <div key={artifact.artifactId} className="rounded-lg border border-stone-200 bg-white p-3">
+              <p className="line-clamp-2 text-sm font-medium text-stone-950">{artifact.title}</p>
+              <p className="mt-1 text-xs text-stone-500">{artifact.status.replaceAll("_", " ")} / {artifact.type}</p>
+            </div>
+          )) : (
+            <p className="text-sm leading-6 text-stone-600">No artifact metadata records found yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section id="reaper" className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+        <p className="text-sm font-semibold text-stone-950">Follow-up triage</p>
+        <dl className="mt-4 grid grid-cols-2 gap-3">
+          {[
+            ["Pending", snapshot.reaper.totalPending],
+            ["Stale", snapshot.reaper.stale],
+            ["Ancient", snapshot.reaper.ancient],
+            ["Drafted", snapshot.reaper.withDraft],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md bg-white p-3">
+              <dt className="text-xs font-medium text-stone-500">{label}</dt>
+              <dd className="mt-1 text-xl font-semibold text-stone-950">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 text-xs leading-5 text-stone-500">Updated {formatDate(snapshot.reaper.updatedAt)}.</p>
+      </section>
+    </div>
+  );
+}
+
 function RoomContent({
   room,
-  role,
-  project,
   snapshot,
 }: {
   room: WorkspaceRoomId;
-  role: WorkspaceRoleId;
-  project: WorkspaceProjectId;
   snapshot: WorkspaceSnapshot;
 }) {
   if (room === "audits") return <AuditsRoom snapshot={snapshot} />;
@@ -2105,9 +2046,9 @@ function RoomContent({
   if (room === "agent-runs") return <AgentRunsRoom snapshot={snapshot} />;
   if (room === "training") return <TrainingGroundsRoom />;
   if (room === "knowledge") return <KnowledgeRoom snapshot={snapshot} />;
-  if (room === "team") return <TeamRoom role={role} project={project} />;
+  if (room === "team") return <TeamRoom snapshot={snapshot} />;
   if (room === "readiness") return <ReadinessRoom snapshot={snapshot} />;
-  return <HomeRoom snapshot={snapshot} role={role} project={project} />;
+  return <HomeRoom snapshot={snapshot} />;
 }
 
 function Composer() {
@@ -2158,7 +2099,7 @@ export default async function WorkspacePage({
     "agent-runs": String(snapshot.runs.counts.agentRuns),
     training: String(trainingGroundsRecords().length),
     knowledge: String(snapshot.runs.counts.memoryMaintenanceRuns + snapshot.artifacts.total + snapshot.artifactControl.counts.artifacts),
-    team: selectedRole(role).label,
+    team: "Guide",
     readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent}/8`,
   } satisfies Record<WorkspaceRoomId, string>;
 
@@ -2208,10 +2149,10 @@ export default async function WorkspacePage({
         </aside>
 
         <section className="min-w-0 border-stone-200 lg:border-x">
-          <RoomHeader room={room} role={role} project={project} />
+          <RoomHeader room={room} project={project} />
 
           <div className="mx-auto max-w-5xl px-4 pb-44 pt-6 sm:px-6">
-            <RoomContent room={room} role={role} project={project} snapshot={snapshot} />
+            <RoomContent room={room} snapshot={snapshot} />
           </div>
 
           <div id="composer">
@@ -2220,30 +2161,7 @@ export default async function WorkspacePage({
         </section>
 
         <aside className="bg-[#eeece7] px-4 py-5 pb-44 sm:px-6 lg:min-h-screen lg:pb-5">
-          <div className="space-y-6">
-            <RoleProjectPreview room={room} role={role} project={project} />
-            <ContractReadinessPanel runs={snapshot.runs} />
-            <AuditReadinessPanel runs={snapshot.runs} />
-            <GuardrailPanel />
-
-            <section id="reaper" className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-              <p className="text-sm font-semibold text-stone-950">Follow-up triage</p>
-              <dl className="mt-4 grid grid-cols-2 gap-3">
-                {[
-                  ["Pending", snapshot.reaper.totalPending],
-                  ["Stale", snapshot.reaper.stale],
-                  ["Ancient", snapshot.reaper.ancient],
-                  ["Drafted", snapshot.reaper.withDraft],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-md bg-white p-3">
-                    <dt className="text-xs font-medium text-stone-500">{label}</dt>
-                    <dd className="mt-1 text-xl font-semibold text-stone-950">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="mt-3 text-xs leading-5 text-stone-500">Updated {formatDate(snapshot.reaper.updatedAt)}.</p>
-            </section>
-          </div>
+          <WorkspaceOperationsRail snapshot={snapshot} />
         </aside>
       </div>
     </main>
