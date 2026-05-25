@@ -46,6 +46,18 @@ const VISIBLE_SLACK_STATUSES = new Set(["pending", "needs_draft", "drafted", "se
 const ACTIVE_JIAN_STATUSES = new Set(["pending", "redirected"]);
 
 type JobStatus = "ready" | "collecting" | "needs_review";
+type JobLoopStageState = "complete" | "current" | "locked";
+
+type WorkStreamItem = {
+  id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  status: string;
+  updatedAt: string | null;
+  source: "real" | "sandbox";
+  href?: string;
+};
 
 interface SlackQueueItem {
   id?: string;
@@ -136,11 +148,11 @@ const ROOMS: Array<{
 }> = [
   { id: "home", label: "Home", description: "Workspace overview and saved project context." },
   { id: "audits", label: "Audits", description: "L2 intake, generation, QA, review state, and artifact packages." },
-  { id: "content", label: "Content", description: "Corey-facing weekly batches, scripts, frameworks, and assets." },
-  { id: "approvals", label: "Approvals", description: "Pat-facing review queues and read-only approval visibility." },
+  { id: "content", label: "Content", description: "Weekly batches, scripts, frameworks, and assets." },
+  { id: "approvals", label: "Approvals", description: "Review queues and read-only approval visibility." },
   { id: "agent-runs", label: "Agent Runs", description: "Agent work history, blocked runs, events, and recovery notes." },
-  { id: "training", label: "Training Grounds", description: "Rhys teaching Atlas how to think through brain dumps, challenges, and reviewable learning packets." },
-  { id: "knowledge", label: "Knowledge", description: "Memory maintenance, Rhys strategy docs, and artifact archives." },
+  { id: "training", label: "Training Grounds", description: "Structured brain dumps, challenges, and reviewable learning packets." },
+  { id: "knowledge", label: "Knowledge", description: "Memory maintenance, strategy docs, and artifact archives." },
   { id: "team", label: "Team", description: "Trial guidance and read-only launch checks for the Atlas team." },
   { id: "readiness", label: "Settings / Readiness", description: "Source health, disabled integrations, and launch guardrails." },
 ];
@@ -153,7 +165,7 @@ const PROJECTS: Array<{
   { id: "undeniable-os", label: "Undeniable OS", detail: "Primary Atlas operating workspace." },
   { id: "l2-audits", label: "L2 Audits", detail: "Executive audit intake, QA, and artifact review." },
   { id: "content-engine", label: "Content Engine", detail: "Weekly content batches, scripts, and assets." },
-  { id: "monday-delivery", label: "Monday Delivery", detail: "Task delivery visibility and review state." },
+  { id: "monday-delivery", label: "Delivery Ops", detail: "Task delivery visibility and review state." },
   { id: "memory-knowledge", label: "Memory/Knowledge", detail: "Librarian runs, saved docs, and knowledge health." },
 ];
 
@@ -367,6 +379,13 @@ function statusLabel(status: JobStatus): string {
   return "Review";
 }
 
+function workStreamStatusClasses(status: string): string {
+  if (/ready|delivered|complete|approved|archived/i.test(status)) return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (/review|blocked|held|warning|failed/i.test(status)) return "border-amber-200 bg-amber-50 text-amber-800";
+  if (/running|working|collecting|draft/i.test(status)) return "border-blue-200 bg-blue-50 text-blue-800";
+  return "border-stone-200 bg-stone-50 text-stone-700";
+}
+
 function runStatusLabel(status: AgentRunStatus): string {
   return status
     .split("_")
@@ -488,7 +507,7 @@ function RailItem({
     </>
   );
   const classes = classNames(
-    "flex min-h-10 min-w-0 items-center gap-3 rounded-md px-3 text-sm transition",
+    "flex min-h-10 min-w-[140px] items-center gap-3 rounded-md px-3 text-sm transition lg:min-w-0",
     active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
     disabled && "cursor-not-allowed text-stone-500 hover:bg-transparent hover:text-stone-500",
   );
@@ -518,7 +537,7 @@ function RoomNavItem({
     <Link
       href={workspaceHref({ room: room.id, role, project })}
       className={classNames(
-        "flex min-h-10 min-w-0 items-center gap-3 rounded-md px-3 text-sm transition",
+        "flex min-h-10 min-w-[140px] items-center gap-3 rounded-md px-3 text-sm transition lg:min-w-0",
         active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
       )}
     >
@@ -663,6 +682,24 @@ function QueueRow({
         <h3 className="text-sm font-semibold text-stone-950">{label}</h3>
         <p className="text-2xl font-semibold text-stone-950">{value}</p>
       </div>
+      <p className="mt-2 text-sm leading-6 text-stone-600">{detail}</p>
+    </div>
+  );
+}
+
+function WorkbenchStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-stone-200 bg-white p-3 shadow-sm">
+      <p className="text-sm font-semibold text-stone-950">{label}</p>
+      <p className="mt-2 break-words text-xl font-semibold leading-tight text-stone-950">{value}</p>
       <p className="mt-2 text-sm leading-6 text-stone-600">{detail}</p>
     </div>
   );
@@ -1036,7 +1073,7 @@ function AuditReadinessPanel({ runs }: { runs: WorkspaceRunsProjection }) {
         <ReadinessSignal
           label="Delivery policy"
           active
-          detail="Workspace review only; no external Slack, DM, or client delivery controls exist here."
+          detail="Workspace review only; external notification and client delivery controls are not part of this surface."
         />
       </div>
     </section>
@@ -1067,7 +1104,7 @@ function ContentBatchesPanel({ batches }: { batches: ContentBatch[] }) {
     return (
       <EmptyRunState
         title="No content batches yet"
-        detail="Corey-facing content packs will appear once the content workflow emits validated batch records."
+        detail="Content packs will appear once the content workflow emits validated batch records."
       />
     );
   }
@@ -1319,29 +1356,236 @@ function DataModeBanner({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   );
 }
 
-function MetricStrip({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+function latestArtifactControlItems(snapshot: WorkspaceSnapshot): WorkspaceArtifact[] {
+  return artifactControlRecords(snapshot).artifacts
+    .filter((artifact) => artifact.status !== "archived")
+    .slice(0, 3);
+}
+
+function buildWorkStreamItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
+  const agentItems = snapshot.runs.records.agentRuns.slice(0, 3).map((run) => ({
+    id: run.id,
+    kind: run.workflow.replaceAll("_", " "),
+    title: run.title,
+    detail: run.currentStep ?? `${run.events.length} timeline events and ${run.artifacts.length} artifact links.`,
+    status: runStatusLabel(run.status),
+    updatedAt: run.updatedAt,
+    source: "real" as const,
+    href: workspaceHref({ room: "agent-runs", role: "rhys", project: "undeniable-os" }),
+  }));
+  const jobItems = snapshot.jobs.recent.slice(0, 4).map((job) => ({
+    id: job.id,
+    kind: job.type,
+    title: job.title,
+    detail: job.currentStep,
+    status: statusLabel(job.status),
+    updatedAt: job.updatedAt,
+    source: "real" as const,
+    href: workspaceHref({ room: "agent-runs", role: "rhys", project: "undeniable-os" }),
+  }));
+  const artifactItems = latestArtifactControlItems(snapshot).map((artifact) => ({
+    id: artifact.artifactId,
+    kind: artifact.type.replaceAll("_", " "),
+    title: artifact.title,
+    detail: artifact.reviewNotes[0] ?? `${artifact.naming.suggestedFolder}/${artifact.naming.canonicalName}`,
+    status: artifact.status.replaceAll("_", " "),
+    updatedAt: artifact.updatedAt,
+    source: "real" as const,
+    href: workspaceHref({ room: "knowledge", role: "rhys", project: "memory-knowledge" }),
+  }));
+  const realItems = [...agentItems, ...jobItems, ...artifactItems]
+    .sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
+
+  if (realItems.length) return realItems.slice(0, 6);
+
+  return [
+    {
+      id: "sandbox-audit-loop",
+      kind: "Audit",
+      title: "L2 audit package",
+      detail: "Intake, generation, QA, and artifact package will appear as one traceable work thread.",
+      status: "Sandbox review",
+      updatedAt: snapshot.generatedAt,
+      source: "sandbox",
+      href: workspaceHref({ room: "audits", role: "rhys", project: "l2-audits" }),
+    },
+    {
+      id: "sandbox-training-loop",
+      kind: "Training",
+      title: "End-of-day training session",
+      detail: "Brain dump becomes principles, decisions, corrections, and reviewable memory proposals.",
+      status: "Locked preview",
+      updatedAt: snapshot.generatedAt,
+      source: "sandbox",
+      href: workspaceHref({ room: "training", role: "rhys", project: "undeniable-os" }),
+    },
+  ];
+}
+
+function sidebarWorkItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
+  const filtered = buildWorkStreamItems(snapshot).filter((item) => !/ricky calder/i.test(item.title));
+  if (filtered.length) return filtered;
+  return [
+    {
+      id: "sidebar-audit-room",
+      kind: "Room",
+      title: "Audit work loop",
+      detail: "Locked audit intake, QA, artifact, and review surface.",
+      status: "Locked preview",
+      updatedAt: snapshot.generatedAt,
+      source: "sandbox",
+      href: workspaceHref({ room: "audits", role: "rhys", project: "l2-audits" }),
+    },
+    {
+      id: "sidebar-training-room",
+      kind: "Room",
+      title: "Training session loop",
+      detail: "Locked brain dump and memory proposal surface.",
+      status: "Locked preview",
+      updatedAt: snapshot.generatedAt,
+      source: "sandbox",
+      href: workspaceHref({ room: "training", role: "rhys", project: "undeniable-os" }),
+    },
+  ];
+}
+
+function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  const hasRealRecords = snapshot.runs.counts.totalValidRecords > 0 || snapshot.artifactControl.counts.artifacts > 0 || snapshot.jobs.total > 0;
+
   return (
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <QueueRow
-        label="Run records"
-        value={String(snapshot.runs.counts.totalValidRecords)}
-        detail={`${snapshot.runs.counts.sourcesPresent} emitters active, ${snapshot.runs.counts.totalInvalidRecords} invalid.`}
-      />
-      <QueueRow
-        label="Approvals"
-        value={String(snapshot.approvals.totalPending)}
-        detail={`${snapshot.approvals.draftedSlack} drafts and ${snapshot.approvals.jianActive} Jian/Monday items visible.`}
-      />
-      <QueueRow
-        label="Artifacts"
-        value={String(snapshot.artifacts.total)}
-        detail={`${snapshot.jobs.ready} work threads have visible result files.`}
-      />
-      <QueueRow
-        label="Follow-ups"
-        value={String(snapshot.reaper.totalPending)}
-        detail={`${snapshot.reaper.stale} stale, ${snapshot.reaper.withSuggestion} with suggestions.`}
-      />
+    <section className="rounded-xl border border-stone-300 bg-white p-4 shadow-sm sm:p-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+              Atlas workbench
+            </span>
+            <span className={classNames(
+              "rounded-full border px-2.5 py-1 text-xs font-medium",
+              hasRealRecords ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800",
+            )}>
+              {hasRealRecords ? "Reading live records" : "Sandbox examples visible"}
+            </span>
+          </div>
+          <h3 className="mt-4 max-w-2xl text-2xl font-semibold tracking-normal text-stone-950 sm:text-3xl">
+            Start work, watch the loop, inspect the result.
+          </h3>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-stone-600">
+            Workspace is becoming the place where Atlas receives work, shows its plan, produces artifacts, and asks for review. Creation and execution are locked until the backend safety loop is ready.
+          </p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <WorkbenchStat label="Work threads" value={String(snapshot.jobs.total)} detail={`${snapshot.jobs.ready} with packaged outputs.`} />
+            <WorkbenchStat label="Artifacts" value={String(snapshot.artifactControl.counts.artifacts)} detail={`${snapshot.artifactControl.discovery.counts.realMetadataRecordsFound} real metadata sidecars.`} />
+            <WorkbenchStat label="Memory health" value={snapshot.memoryMaintenance.status} detail={`${snapshot.memoryMaintenance.summary.contextPacksGenerated} context packs indexed.`} />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-stone-200 bg-[#f8f7f4] p-4">
+          <p className="text-sm font-semibold text-stone-950">Locked starter intents</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">These are product affordances only. They do not submit, schedule, send, or write.</p>
+          <div className="mt-4 grid gap-2">
+            {["Ask Atlas", "Start audit", "Create content batch", "Build call archive", "Start training session"].map((intent) => (
+              <div key={intent} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5">
+                <p className="text-sm font-medium text-stone-950">{intent}</p>
+                <span className="rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">Locked</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WorkStreamPanel({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  const items = buildWorkStreamItems(snapshot);
+
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">Work stream</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">Recent jobs, run records, and artifacts collected into one operational feed.</p>
+        </div>
+        {items.some((item) => item.source === "sandbox") ? <SandboxBadge /> : (
+          <span className="inline-flex h-7 items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-800">Real records</span>
+        )}
+      </div>
+      <div className="mt-4 space-y-3">
+        {items.map((item) => (
+          <article key={item.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase text-stone-500">{item.kind} / {item.source === "real" ? "read-only record" : "sandbox"}</p>
+                <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-950">{item.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-stone-600">{item.detail}</p>
+              </div>
+              <span className={classNames("rounded-full border px-2.5 py-1 text-xs font-medium", workStreamStatusClasses(item.status))}>
+                {item.status}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">
+                Updated {formatDate(item.updatedAt)}
+              </span>
+              {item.href ? (
+                <Link href={item.href} className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600 hover:border-stone-300">
+                  Open room
+                </Link>
+              ) : null}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function stageClasses(state: JobLoopStageState): string {
+  if (state === "complete") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (state === "current") return "border-blue-200 bg-blue-50 text-blue-800";
+  return "border-stone-200 bg-stone-50 text-stone-600";
+}
+
+function jobLoopStages(snapshot: WorkspaceSnapshot): Array<{ label: string; detail: string; state: JobLoopStageState }> {
+  const hasArtifacts = snapshot.artifactControl.counts.artifacts > 0 || snapshot.artifacts.total > 0;
+  const needsReview = snapshot.approvals.totalPending > 0 || latestArtifactControlItems(snapshot).some((artifact) => artifact.status === "ready_for_review");
+  const hasArchived = latestArtifactControlItems(snapshot).some((artifact) => ["approved", "archived"].includes(artifact.status));
+
+  return [
+    { label: "Received", detail: "Request captured as a workspace work item.", state: "complete" },
+    { label: "Planning", detail: "Atlas builds a local plan and required context list.", state: hasArtifacts ? "complete" : "current" },
+    { label: "Running", detail: "Worker execution remains locked in this preview.", state: hasArtifacts ? "complete" : "locked" },
+    { label: "Artifact ready", detail: hasArtifacts ? "Artifact metadata is visible in the library." : "Output cards will appear here when emitted.", state: hasArtifacts ? "complete" : "locked" },
+    { label: "Review needed", detail: needsReview ? "Review records or ready artifacts are visible." : "Human review is planned before external use.", state: needsReview ? "current" : "locked" },
+    { label: "Approved / archived", detail: hasArchived ? "Final state is represented in metadata." : "Finalization controls are not live.", state: hasArchived ? "complete" : "locked" },
+  ];
+}
+
+function LockedJobLoopPreview({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  return (
+    <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">Internal job loop</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">The product loop Atlas is moving toward. Execution is represented, not wired.</p>
+        </div>
+        <span className="inline-flex h-7 items-center rounded-full bg-stone-950 px-2.5 text-xs font-medium text-white">Locked preview</span>
+      </div>
+      <div className="mt-4 grid gap-2">
+        {jobLoopStages(snapshot).map((stage, index) => (
+          <div key={stage.label} className="grid gap-3 rounded-lg border border-stone-200 bg-white p-3 sm:grid-cols-[32px_minmax(0,1fr)_92px] sm:items-start">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-950 text-xs font-semibold text-white">{index + 1}</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-stone-950">{stage.label}</p>
+              <p className="mt-1 text-xs leading-5 text-stone-500">{stage.detail}</p>
+            </div>
+            <span className={classNames("w-fit rounded-full border px-2.5 py-1 text-xs font-medium sm:justify-self-end", stageClasses(stage.state))}>
+              {stage.state}
+            </span>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -1378,7 +1622,7 @@ function SandboxContentPreview() {
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-stone-950">Corey weekly batch model</p>
+          <p className="text-sm font-semibold text-stone-950">Weekly content batch model</p>
           <p className="mt-1 text-sm leading-6 text-stone-600">Future batches will collect hooks, scripts, captions, assets, QA, and review references.</p>
         </div>
         <SandboxBadge />
@@ -1405,7 +1649,7 @@ function SandboxApprovalPreview() {
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-stone-950">Pat approval item model</p>
+          <p className="text-sm font-semibold text-stone-950">Approval item model</p>
           <p className="mt-1 text-sm leading-6 text-stone-600">Approval records can show exact payload previews, destination, source workflow, and review state without exposing decision controls here.</p>
         </div>
         <SandboxBadge />
@@ -1423,7 +1667,7 @@ function SandboxArtifactPreview() {
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-stone-950">Rhys strategic artifact model</p>
+          <p className="text-sm font-semibold text-stone-950">Strategic artifact model</p>
           <p className="mt-1 text-sm leading-6 text-stone-600">Saved strategy docs and audit outputs will sit beside work history, source references, and validation status.</p>
         </div>
         <SandboxBadge />
@@ -1484,7 +1728,7 @@ function FileControlRoadmap() {
         <div>
           <p className="text-sm font-semibold text-stone-950">File control roadmap</p>
           <p className="mt-1 text-sm leading-6 text-stone-600">
-            These are the eventual Rhys/team organization controls. They are labels only here and do not move, rename, archive, attach, share, export, or write files.
+            These are the eventual organization controls. They are labels only here and do not move, rename, archive, attach, share, export, or write files.
           </p>
         </div>
         <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">Disabled</span>
@@ -1528,7 +1772,7 @@ function ArtifactControlLibrary({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           )}
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <QueueRow label="Projects" value={String(control.projects.length)} detail="Saved workspaces and person-specific archives." />
+          <QueueRow label="Projects" value={String(control.projects.length)} detail="Saved workspaces and archive scopes." />
           <QueueRow label="Collections" value={String(control.collections.length)} detail="Audit packages, calls, docs, content, approvals, and memory." />
           <QueueRow label="Artifacts" value={String(control.artifacts.length)} detail="Typed output records with paths and review state." />
         </div>
@@ -1601,10 +1845,10 @@ function ArtifactControlLibrary({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
 function TrainingFlowPanel() {
   const steps = [
-    ["Start a training session", "Rhys chooses a focus: brain dump, business problem, context challenge, correction loop, or strategy conversation."],
+    ["Start a training session", "Choose a focus: brain dump, business problem, context challenge, correction loop, or strategy conversation."],
     ["Talk through the mess", "Atlas listens for decisions, operating principles, context gaps, and places where it should challenge more directly."],
     ["Extract learnings", "The session becomes principles, corrections, decisions, playbooks, and proposed memory updates."],
-    ["Review what should be saved", "Rhys sees exactly what would become reusable context before anything is promoted."],
+    ["Review what should be saved", "The reviewer sees exactly what would become reusable context before anything is promoted."],
     ["Improve Atlas deliberately", "Approved learnings can later become memory or context improvements with clear visibility and permissions."],
   ];
 
@@ -1614,7 +1858,7 @@ function TrainingFlowPanel() {
         <div>
           <p className="text-sm font-semibold text-stone-950">Training flow</p>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-600">
-            Training Grounds is where Rhys teaches Atlas how to think. It is a structured learning room, not a live unrestricted chat surface yet.
+            Training Grounds is where Atlas learns operating preferences through structured review. It is not a live unrestricted chat surface yet.
           </p>
         </div>
         <SandboxBadge />
@@ -1741,21 +1985,21 @@ function TrainingMemoryProposalPanel({ sessions }: { sessions: TrainingGroundsSe
   );
 }
 
-function TrainingPermissionsPanel() {
+function TrainingAccessGuardrailPanel() {
   const rows = [
-    ["Rhys", "Can create broad training sessions and decide what becomes reusable context."],
-    ["Pat", "Can review operational training items tied to approvals, queues, and delivery process."],
-    ["Corey", "Can train content preferences in Content or Training Grounds once permissions exist."],
-    ["System review", "Can inspect memory safety, context bleed, source visibility, and risky proposals."],
+    ["Session creation", "Locked until Atlas has a safe local session primitive."],
+    ["Memory promotion", "Requires explicit review before any learning can become reusable context."],
+    ["Visibility", "Client, team, and project scope must be explicit before anything is saved."],
+    ["Safety review", "Context bleed, source sensitivity, and high-risk proposals stay visible before promotion."],
   ];
 
   return (
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
-      <p className="text-sm font-semibold text-stone-950">Role and permission framing</p>
+      <p className="text-sm font-semibold text-stone-950">Access guardrails</p>
       <div className="mt-4 space-y-2">
-        {rows.map(([role, detail]) => (
-          <div key={role} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-            <p className="text-sm font-semibold text-stone-950">{role}</p>
+        {rows.map(([label, detail]) => (
+          <div key={label} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <p className="text-sm font-semibold text-stone-950">{label}</p>
             <p className="mt-1 text-xs leading-5 text-stone-500">{detail}</p>
           </div>
         ))}
@@ -1899,17 +2143,22 @@ function HomeRoom({
 }) {
   return (
     <div className="space-y-5">
-      <DataModeBanner snapshot={snapshot} />
-      <MetricStrip snapshot={snapshot} />
-      <TrialGuidePanel />
-      <section className="grid gap-4 xl:grid-cols-2">
+      <WorkbenchIntro snapshot={snapshot} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <WorkStreamPanel snapshot={snapshot} />
+        <div className="space-y-5">
+          <LockedJobLoopPreview snapshot={snapshot} />
+          {snapshot.artifacts.latestAudit ? <ArtifactResultCard group={snapshot.artifacts.latestAudit} /> : <SandboxArtifactPreview />}
+        </div>
+      </section>
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
         <div>
-          <p className="mb-2 text-sm font-semibold text-stone-950">Recent work history</p>
+          <p className="mb-2 text-sm font-semibold text-stone-950">Artifact-derived history</p>
           <JobTimeline jobs={snapshot.jobs.recent} />
         </div>
         <div className="space-y-4">
-          {snapshot.artifacts.latestAudit ? <ArtifactResultCard group={snapshot.artifacts.latestAudit} /> : <SandboxArtifactPreview />}
           <SandboxBlockedRunPreview />
+          <DataModeBanner snapshot={snapshot} />
         </div>
       </section>
     </div>
@@ -1947,7 +2196,7 @@ function ApprovalsRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           detail={`${snapshot.approvals.draftedSlack} ready drafts, ${snapshot.approvals.heldSlack} held for context.`}
         />
         <QueueRow
-          label="Jian and Monday"
+          label="Task workflow"
           value={String(snapshot.approvals.jianActive)}
           detail="Client delivery items waiting for exact review."
         />
@@ -1980,7 +2229,7 @@ function KnowledgeRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       <SandboxArtifactPreview />
       <section>
         <p className="mb-2 text-sm font-semibold text-stone-950">Recent artifacts</p>
-        {snapshot.artifacts.recent.length ? <ArtifactList artifacts={snapshot.artifacts.recent} /> : <EmptyRunState title="No artifacts indexed" detail="The artifact room is ready for Rhys docs, audit packages, and memory reports once files are projected." />}
+        {snapshot.artifacts.recent.length ? <ArtifactList artifacts={snapshot.artifacts.recent} /> : <EmptyRunState title="No artifacts indexed" detail="The artifact room is ready for strategy docs, audit packages, and memory reports once files are projected." />}
       </section>
     </div>
   );
@@ -1996,7 +2245,7 @@ function TrainingGroundsRoom() {
         <TrainingSessionArchive sessions={sessions} />
         <div className="space-y-5">
           <TrainingGuardrailPanel sessions={sessions} />
-          <TrainingPermissionsPanel />
+          <TrainingAccessGuardrailPanel />
         </div>
       </div>
       <TrainingMemoryProposalPanel sessions={sessions} />
@@ -2145,6 +2394,8 @@ function RoomContent({
 }
 
 function Composer() {
+  const intents = ["Ask Atlas", "Start audit", "Create content batch", "Build call archive", "Start training session"];
+
   return (
     <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-stone-200 bg-[#f4f3ef]/95 px-4 py-3 backdrop-blur sm:px-6 lg:left-[260px] lg:right-[320px]">
       <div className="mx-auto max-w-3xl rounded-lg border border-stone-300 bg-white p-3 shadow-xl shadow-stone-900/15">
@@ -2152,21 +2403,20 @@ function Composer() {
           aria-label="Atlas composer preview"
           className="min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-stone-600 outline-none placeholder:text-stone-400 disabled:cursor-not-allowed sm:min-h-16"
           disabled
-          placeholder="Ask Atlas to build an audit, content pack, playbook, Monday plan, or follow-up..."
+          placeholder="Ask Atlas to start work, build an audit, create a content batch, package a call archive, or train its context..."
         />
         <div className="flex flex-wrap items-center gap-2 border-t border-stone-100 px-2 pt-2 sm:pt-3">
-          <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
-            Audit
-          </span>
-          <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
-            Content pack
-          </span>
-          <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
-            Monday plan
-          </span>
-          <span className="hidden rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600 sm:inline-flex">
-            Follow-up
-          </span>
+          {intents.map((intent, index) => (
+            <span
+              key={intent}
+              className={classNames(
+                "rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600",
+                index > 2 && "hidden sm:inline-flex",
+              )}
+            >
+              {intent}
+            </span>
+          ))}
           <span className="ml-auto rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">
             Locked
           </span>
@@ -2213,7 +2463,7 @@ export default async function WorkspacePage({
             <ReadOnlyBadge />
           </div>
 
-          <nav className="mt-5 grid gap-2 sm:grid-cols-2 md:grid-cols-4 lg:block lg:space-y-1" aria-label="Workspace rooms">
+          <nav className="mt-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 md:grid-cols-4 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0" aria-label="Workspace rooms">
             {ROOMS.map((candidate) => (
               <RoomNavItem
                 key={candidate.id}
@@ -2235,6 +2485,20 @@ export default async function WorkspacePage({
                   label={candidate.label}
                   href={workspaceHref({ room, role, project: candidate.id })}
                   active={candidate.id === project}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-6 hidden lg:block">
+            <p className="px-3 text-xs font-medium text-stone-500">Recent work</p>
+            <div className="mt-2 space-y-1">
+              {sidebarWorkItems(snapshot).slice(0, 4).map((item) => (
+                <RailItem
+                  key={item.id}
+                  label={item.title}
+                  meta={item.source === "real" ? item.kind : "Demo"}
+                  href={item.href}
                 />
               ))}
             </div>
