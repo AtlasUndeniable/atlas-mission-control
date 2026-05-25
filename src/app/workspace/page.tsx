@@ -548,6 +548,55 @@ function EmptyRunState({ title, detail }: { title: string; detail: string }) {
   );
 }
 
+function TrialGuidePanel() {
+  const roles = [
+    {
+      name: "Rhys",
+      focus: "Browse audit readiness, blocked items, agent activity, and the artifact library. L2 audit outputs are intended to appear here, not in Slack, DMs, or client delivery.",
+    },
+    {
+      name: "Pat",
+      focus: "Use the approval and task queue views for visibility. Decision and edit controls are not live in this Workspace preview unless they already exist on another Atlas page.",
+    },
+    {
+      name: "Corey",
+      focus: "Check the Content studio lane to see where future batches will land. There is no live content push from this page yet.",
+    },
+    {
+      name: "Gian",
+      focus: "Review Monday and task workflow visibility, contract-readiness states, and related review records. This page does not change Monday.",
+    },
+    {
+      name: "Dante / Admin",
+      focus: "Check readiness panels, source health, missing emitters, invalid record counts, and disabled integrations before any live wiring is considered.",
+    },
+  ];
+
+  return (
+    <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">How to test Atlas Workspace</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Today this surface is for browsing only. It shows projections from local workflow records and readiness checks; it does not start jobs, wire Typeform, or perform external delivery.
+          </p>
+        </div>
+        <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-stone-200 bg-stone-50 px-2.5 text-xs font-medium text-stone-600">
+          Read-only trial
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {roles.map((role) => (
+          <section key={role.name} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <p className="text-sm font-semibold text-stone-950">{role.name}</p>
+            <p className="mt-1 text-sm leading-6 text-stone-600">{role.focus}</p>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReadinessSignal({
   label,
   active,
@@ -1076,6 +1125,7 @@ export default async function WorkspacePage() {
               <RailItem label="Approval queue" href="#approvals" meta={String(snapshot.approvals.totalPending)} />
               <RailItem label="Artifacts" href="#artifacts" meta={String(snapshot.artifacts.total)} />
               <RailItem label="Follow-up triage" href="#reaper" meta={String(snapshot.reaper.totalPending)} />
+              <RailItem label="Trial guide" href="#trial-guide" />
             </div>
           </div>
 
@@ -1110,6 +1160,12 @@ export default async function WorkspacePage() {
                 Ready when the composer opens up: start with a client outcome, then keep the brief, work history, review queue, and deliverables together.
               </p>
               {snapshot.artifacts.latestAudit ? <ArtifactResultCard group={snapshot.artifacts.latestAudit} /> : null}
+            </StreamBlock>
+
+            <StreamBlock author="Trial guide" time="Team walkthrough">
+              <div id="trial-guide">
+                <TrialGuidePanel />
+              </div>
             </StreamBlock>
 
             <StreamBlock author="Work history" time="Latest activity">
