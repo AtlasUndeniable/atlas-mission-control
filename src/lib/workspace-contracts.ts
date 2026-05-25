@@ -55,6 +55,99 @@ export type SourceReference = {
   label?: string;
 };
 
+export const WORKSPACE_PROJECT_STATUSES = ["active", "paused", "archived"] as const;
+export type WorkspaceProjectStatus = (typeof WORKSPACE_PROJECT_STATUSES)[number];
+
+export const ARTIFACT_COLLECTION_TYPES = [
+  "audit_packages",
+  "call_archives",
+  "strategic_documents",
+  "content_batches",
+  "approval_packets",
+  "memory_reports",
+] as const;
+export type ArtifactCollectionType = (typeof ARTIFACT_COLLECTION_TYPES)[number];
+
+export const WORKSPACE_ARTIFACT_TYPES = [
+  "doc",
+  "pdf",
+  "transcript",
+  "overview",
+  "content_batch",
+  "report",
+  "data",
+] as const;
+export type WorkspaceArtifactType = (typeof WORKSPACE_ARTIFACT_TYPES)[number];
+
+export const WORKSPACE_ARTIFACT_STATUSES = [
+  "draft",
+  "ready_for_review",
+  "approved",
+  "archived",
+  "blocked",
+] as const;
+export type WorkspaceArtifactStatus = (typeof WORKSPACE_ARTIFACT_STATUSES)[number];
+
+export const WORKSPACE_ARTIFACT_SENSITIVITY = ["public", "internal", "client_confidential", "restricted"] as const;
+export type WorkspaceArtifactSensitivity = (typeof WORKSPACE_ARTIFACT_SENSITIVITY)[number];
+
+export const WORKSPACE_ARTIFACT_VISIBILITY = ["owner", "team", "role_restricted", "admin_only"] as const;
+export type WorkspaceArtifactVisibility = (typeof WORKSPACE_ARTIFACT_VISIBILITY)[number];
+
+export type WorkspaceProject = {
+  id: string;
+  schemaVersion: number;
+  title: string;
+  slug: string;
+  status: WorkspaceProjectStatus;
+  ownerRole: "rhys" | "pat" | "jian" | "corey" | "dante" | "worker";
+  description?: string;
+  collectionIds: string[];
+  sourceRefs: SourceReference[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ArtifactCollection = {
+  id: string;
+  schemaVersion: number;
+  projectId: string;
+  title: string;
+  collectionType: ArtifactCollectionType;
+  defaultPath: string;
+  namingPattern: string;
+  description?: string;
+  artifactIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkspaceArtifact = {
+  artifactId: string;
+  schemaVersion: number;
+  projectId: string;
+  collectionId: string;
+  sourceJobId?: string;
+  title: string;
+  type: WorkspaceArtifactType;
+  status: WorkspaceArtifactStatus;
+  createdAt: string;
+  updatedAt: string;
+  owner: string;
+  requestedBy?: string;
+  sourceRefs: SourceReference[];
+  filePaths: string[];
+  previewPaths: string[];
+  sensitivity: WorkspaceArtifactSensitivity;
+  visibility: WorkspaceArtifactVisibility;
+  reviewNotes: string[];
+  relatedApprovalIds: string[];
+  naming: {
+    canonicalName: string;
+    suggestedFolder: string;
+  };
+};
+
 export type ArtifactReference = {
   artifactId: string;
   kind:
@@ -366,6 +459,20 @@ function validateSourceRefs(v: Validator, value: unknown[]) {
   });
 }
 
+function validateWorkspaceProjectId(v: Validator, obj: Record<string, unknown>) {
+  requireString(v, obj, "id");
+  requireSchemaVersion(v, obj);
+  requireString(v, obj, "title");
+  requireString(v, obj, "slug");
+  requireEnum(v, obj, "status", WORKSPACE_PROJECT_STATUSES);
+  requireEnum(v, obj, "ownerRole", ["rhys", "pat", "jian", "corey", "dante", "worker"] as const);
+  optionalString(v, obj, "description");
+  validateStringArray(v, obj, "collectionIds");
+  validateSourceRefs(child(v, "sourceRefs"), requireArray(v, obj, "sourceRefs"));
+  requireTimestamp(v, obj, "createdAt");
+  requireTimestamp(v, obj, "updatedAt");
+}
+
 function validateArtifactRefs(v: Validator, value: unknown[]) {
   value.forEach((artifact, index) => {
     const next = child(v, String(index));
@@ -464,6 +571,67 @@ function validateBaseRunFields(v: Validator, obj: Record<string, unknown>) {
 function finish<T>(value: unknown, issues: string[]): ContractValidationResult<T> {
   if (issues.length > 0) return { ok: false, issues };
   return { ok: true, data: value as T };
+}
+
+export function validateWorkspaceProject(value: unknown): ContractValidationResult<WorkspaceProject> {
+  const v: Validator = { path: "WorkspaceProject", issues: [] };
+  if (!isRecord(value)) return { ok: false, issues: ["WorkspaceProject: must be an object"] };
+
+  validateWorkspaceProjectId(v, value);
+
+  return finish<WorkspaceProject>(value, v.issues);
+}
+
+export function validateArtifactCollection(value: unknown): ContractValidationResult<ArtifactCollection> {
+  const v: Validator = { path: "ArtifactCollection", issues: [] };
+  if (!isRecord(value)) return { ok: false, issues: ["ArtifactCollection: must be an object"] };
+
+  requireString(v, value, "id");
+  requireSchemaVersion(v, value);
+  requireString(v, value, "projectId");
+  requireString(v, value, "title");
+  requireEnum(v, value, "collectionType", ARTIFACT_COLLECTION_TYPES);
+  requireString(v, value, "defaultPath");
+  requireString(v, value, "namingPattern");
+  optionalString(v, value, "description");
+  validateStringArray(v, value, "artifactIds");
+  requireTimestamp(v, value, "createdAt");
+  requireTimestamp(v, value, "updatedAt");
+
+  return finish<ArtifactCollection>(value, v.issues);
+}
+
+export function validateWorkspaceArtifact(value: unknown): ContractValidationResult<WorkspaceArtifact> {
+  const v: Validator = { path: "WorkspaceArtifact", issues: [] };
+  if (!isRecord(value)) return { ok: false, issues: ["WorkspaceArtifact: must be an object"] };
+
+  requireString(v, value, "artifactId");
+  requireSchemaVersion(v, value);
+  requireString(v, value, "projectId");
+  requireString(v, value, "collectionId");
+  optionalString(v, value, "sourceJobId");
+  requireString(v, value, "title");
+  requireEnum(v, value, "type", WORKSPACE_ARTIFACT_TYPES);
+  requireEnum(v, value, "status", WORKSPACE_ARTIFACT_STATUSES);
+  requireTimestamp(v, value, "createdAt");
+  requireTimestamp(v, value, "updatedAt");
+  requireString(v, value, "owner");
+  optionalString(v, value, "requestedBy");
+  validateSourceRefs(child(v, "sourceRefs"), requireArray(v, value, "sourceRefs"));
+  validateStringArray(v, value, "filePaths");
+  validateStringArray(v, value, "previewPaths");
+  requireEnum(v, value, "sensitivity", WORKSPACE_ARTIFACT_SENSITIVITY);
+  requireEnum(v, value, "visibility", WORKSPACE_ARTIFACT_VISIBILITY);
+  validateStringArray(v, value, "reviewNotes");
+  validateStringArray(v, value, "relatedApprovalIds");
+  if (!isRecord(value.naming)) {
+    issue(child(v, "naming"), "must be an object");
+  } else {
+    requireString(child(v, "naming"), value.naming, "canonicalName");
+    requireString(child(v, "naming"), value.naming, "suggestedFolder");
+  }
+
+  return finish<WorkspaceArtifact>(value, v.issues);
 }
 
 export function validateAgentRun(value: unknown): ContractValidationResult<AgentRun> {

@@ -6,14 +6,32 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   validateAgentRun,
+  validateArtifactCollection,
   validateApproval,
   validateAuditRun,
   validateContentBatch,
   validateMemoryMaintenanceRun,
+  validateWorkspaceArtifact,
+  validateWorkspaceProject,
 } from "../src/lib/workspace-contracts.ts";
-import { workspaceContractFixtures } from "../src/lib/workspace-contract-fixtures.ts";
+import { workspaceArtifactControlFixtures, workspaceContractFixtures } from "../src/lib/workspace-contract-fixtures.ts";
 
 test("workspace contract fixtures validate", () => {
+  for (const project of workspaceArtifactControlFixtures.projects) {
+    const result = validateWorkspaceProject(project);
+    assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
+  }
+
+  for (const collection of workspaceArtifactControlFixtures.collections) {
+    const result = validateArtifactCollection(collection);
+    assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
+  }
+
+  for (const artifact of workspaceArtifactControlFixtures.artifacts) {
+    const result = validateWorkspaceArtifact(artifact);
+    assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
+  }
+
   for (const run of workspaceContractFixtures.agentRuns) {
     const result = validateAgentRun(run);
     assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
@@ -38,6 +56,26 @@ test("workspace contract fixtures validate", () => {
     const result = validateMemoryMaintenanceRun(run);
     assert.equal(result.ok, true, result.ok ? undefined : result.issues.join("\n"));
   }
+});
+
+test("workspace artifact model rejects unsafe file-control shapes", () => {
+  const invalid = {
+    ...workspaceArtifactControlFixtures.artifacts[0],
+    artifactId: "",
+    status: "moved",
+    filePaths: [123],
+    sensitivity: "internet_public",
+    naming: { canonicalName: "" },
+  };
+
+  const result = validateWorkspaceArtifact(invalid);
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.artifactId/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.status/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.filePaths\.0/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.sensitivity/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.naming\.canonicalName/);
+  assert.match(result.ok ? "" : result.issues.join("\n"), /WorkspaceArtifact\.naming\.suggestedFolder/);
 });
 
 test("agent run validation rejects unstable workflow records", () => {

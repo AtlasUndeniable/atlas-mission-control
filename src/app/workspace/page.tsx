@@ -3,14 +3,20 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { groupArtifacts, getWorkspaceArtifacts } from "@/app/api/workspace/_lib/artifact-projection";
-import type { ArtifactGroup, WorkspaceArtifact } from "@/app/api/workspace/_lib/artifact-projection";
+import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } from "@/app/api/workspace/_lib/artifact-projection";
 import { buildReaperData } from "@/lib/reaper";
+import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
+import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
+import { workspaceArtifactControlFixtures } from "@/lib/workspace-contract-fixtures";
 import {
   validateAgentRun,
+  validateArtifactCollection,
   validateApproval,
   validateAuditRun,
   validateContentBatch,
   validateMemoryMaintenanceRun,
+  validateWorkspaceArtifact,
+  validateWorkspaceProject,
 } from "@/lib/workspace-contracts";
 import type {
   AgentRun,
@@ -19,6 +25,7 @@ import type {
   ArtifactReference,
   AuditRun,
   ContentBatch,
+  WorkspaceArtifact,
   MemoryMaintenanceRun,
   ValidationSummary,
 } from "@/lib/workspace-contracts";
@@ -73,9 +80,10 @@ interface WorkspaceSnapshot {
   };
   artifacts: {
     total: number;
-    recent: WorkspaceArtifact[];
+    recent: ScannedWorkspaceArtifact[];
     latestAudit: ArtifactGroup | null;
   };
+  artifactControl: WorkspaceArtifactControlProjection;
   jobs: {
     total: number;
     ready: number;
@@ -111,7 +119,8 @@ type WorkspaceProjectId =
   | "l2-audits"
   | "content-engine"
   | "monday-delivery"
-  | "memory-knowledge";
+  | "memory-knowledge"
+  | "ricky-calder";
 
 type WorkspaceSearchParams = Record<string, string | string[] | undefined>;
 
@@ -153,6 +162,7 @@ const PROJECTS: Array<{
   { id: "content-engine", label: "Content Engine", detail: "Weekly content batches, scripts, and assets." },
   { id: "monday-delivery", label: "Monday Delivery", detail: "Task delivery visibility and review state." },
   { id: "memory-knowledge", label: "Memory/Knowledge", detail: "Librarian runs, saved docs, and knowledge health." },
+  { id: "ricky-calder", label: "Ricky Calder", detail: "Person-specific archive model for calls, transcripts, and overview docs." },
 ];
 
 const ROOM_IDS = new Set(ROOMS.map((room) => room.id));
@@ -222,7 +232,7 @@ function buildJobs(groups: ArtifactGroup[]): WorkspaceJob[] {
 }
 
 async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
-  const [slackQueue, jianApprovals, artifacts, runs] = await Promise.all([
+  const [slackQueue, jianApprovals, artifacts, runs, artifactControl] = await Promise.all([
     readJsonArray<SlackQueueItem>(SLACK_QUEUE_FILE),
     readJsonArray<JianApprovalItem>(JIAN_APPROVALS_FILE),
     getWorkspaceArtifacts(),
@@ -233,6 +243,13 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
         contentBatches: validateContentBatch,
         approvals: validateApproval,
         memoryMaintenanceRuns: validateMemoryMaintenanceRun,
+      },
+    }),
+    getWorkspaceArtifactControlProjection({
+      validators: {
+        projects: validateWorkspaceProject,
+        collections: validateArtifactCollection,
+        artifacts: validateWorkspaceArtifact,
       },
     }),
   ]);
@@ -260,6 +277,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       recent: recentArtifacts,
       latestAudit,
     },
+    artifactControl,
     jobs: {
       total: jobs.length,
       ready: jobs.filter((job) => job.status === "ready").length,
@@ -479,7 +497,7 @@ function RailItem({
     </>
   );
   const classes = classNames(
-    "flex min-h-10 items-center gap-3 rounded-md px-3 text-sm transition",
+    "flex min-h-10 min-w-0 items-center gap-3 rounded-md px-3 text-sm transition",
     active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
     disabled && "cursor-not-allowed text-stone-500 hover:bg-transparent hover:text-stone-500",
   );
@@ -509,7 +527,7 @@ function RoomNavItem({
     <Link
       href={workspaceHref({ room: room.id, role, project })}
       className={classNames(
-        "flex min-h-10 items-center gap-3 rounded-md px-3 text-sm transition",
+        "flex min-h-10 min-w-0 items-center gap-3 rounded-md px-3 text-sm transition",
         active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
       )}
     >
@@ -664,7 +682,7 @@ function ArtifactResultCard({ group }: { group: ArtifactGroup }) {
   );
 }
 
-function ArtifactList({ artifacts }: { artifacts: WorkspaceArtifact[] }) {
+function ArtifactList({ artifacts }: { artifacts: ScannedWorkspaceArtifact[] }) {
   return (
     <div className="grid gap-2">
       {artifacts.map((artifact) => (
@@ -1454,6 +1472,154 @@ function SandboxArtifactPreview() {
   );
 }
 
+function artifactControlRecords(snapshot: WorkspaceSnapshot) {
+  const hasRealRecords = snapshot.artifactControl.counts.totalValidRecords > 0;
+  return {
+    mode: hasRealRecords ? "real" : "fixture",
+    projects: hasRealRecords ? snapshot.artifactControl.records.projects : workspaceArtifactControlFixtures.projects,
+    collections: hasRealRecords ? snapshot.artifactControl.records.collections : workspaceArtifactControlFixtures.collections,
+    artifacts: hasRealRecords ? snapshot.artifactControl.records.artifacts : workspaceArtifactControlFixtures.artifacts,
+  };
+}
+
+function artifactStatusClasses(status: WorkspaceArtifact["status"]): string {
+  if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "ready_for_review") return "border-blue-200 bg-blue-50 text-blue-800";
+  if (status === "blocked") return "border-rose-200 bg-rose-50 text-rose-800";
+  if (status === "archived") return "border-stone-200 bg-stone-100 text-stone-700";
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function FileControlRoadmap() {
+  const controls = [
+    ["Move to project/collection", "Planned"],
+    ["Rename", "Planned"],
+    ["Archive / unarchive", "Planned"],
+    ["Attach to approval", "Planned"],
+    ["Share / export", "Disabled"],
+  ];
+
+  return (
+    <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">File control roadmap</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            These are the eventual Rhys/team organization controls. They are labels only here and do not move, rename, archive, attach, share, export, or write files.
+          </p>
+        </div>
+        <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">Disabled</span>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {controls.map(([label, state]) => (
+          <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
+            <p className="text-sm font-medium text-stone-950">{label}</p>
+            <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{state}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ArtifactControlLibrary({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  const control = artifactControlRecords(snapshot);
+  const byCollection = new Map(control.collections.map((collection) => [collection.id, collection]));
+  const byProject = new Map(control.projects.map((project) => [project.id, project]));
+  const projectRows = control.projects.map((project) => ({
+    project,
+    collections: control.collections.filter((collection) => collection.projectId === project.id),
+    artifacts: control.artifacts.filter((artifact) => artifact.projectId === project.id),
+  }));
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-stone-950">Artifact library control model</p>
+            <p className="mt-1 text-sm leading-6 text-stone-600">
+              Projects contain jobs, jobs produce artifacts, and artifacts live in predictable collections with metadata, review state, and planned organization controls.
+            </p>
+          </div>
+          {control.mode === "real" ? (
+            <span className="inline-flex h-7 items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-800">Real metadata</span>
+          ) : (
+            <SandboxBadge />
+          )}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <QueueRow label="Projects" value={String(control.projects.length)} detail="Saved workspaces and person-specific archives." />
+          <QueueRow label="Collections" value={String(control.collections.length)} detail="Audit packages, calls, docs, content, approvals, and memory." />
+          <QueueRow label="Artifacts" value={String(control.artifacts.length)} detail="Typed output records with paths and review state." />
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-stone-950">Project to collection map</p>
+          <div className="mt-4 space-y-3">
+            {projectRows.map(({ project, collections, artifacts }) => (
+              <div key={project.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-stone-950">{project.title}</p>
+                    <p className="mt-1 text-xs leading-5 text-stone-500">{project.description}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] font-medium text-stone-600">
+                    {artifacts.length} artifacts
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {collections.map((collection) => (
+                    <span key={collection.id} className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">
+                      {collection.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-stone-950">Artifact records</p>
+          <div className="mt-4 space-y-3">
+            {control.artifacts.map((artifact) => {
+              const collection = byCollection.get(artifact.collectionId);
+              const project = byProject.get(artifact.projectId);
+              return (
+                <article key={artifact.artifactId} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase text-stone-500">{project?.title ?? artifact.projectId} / {collection?.title ?? artifact.collectionId}</p>
+                      <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-950">{artifact.title}</h3>
+                    </div>
+                    <span className={classNames("rounded-full border px-2.5 py-1 text-xs font-medium", artifactStatusClasses(artifact.status))}>
+                      {artifact.status.replaceAll("_", " ")}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs text-stone-500 sm:grid-cols-3">
+                    <p>{artifact.type}</p>
+                    <p>{artifact.sensitivity.replaceAll("_", " ")}</p>
+                    <p>{artifact.visibility.replaceAll("_", " ")}</p>
+                  </div>
+                  <p className="mt-3 line-clamp-1 text-xs text-stone-500" title={artifact.naming.suggestedFolder}>
+                    {artifact.naming.suggestedFolder}/{artifact.naming.canonicalName}
+                  </p>
+                  {artifact.reviewNotes.length ? (
+                    <p className="mt-2 text-xs leading-5 text-stone-500">{artifact.reviewNotes[0]}</p>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function SandboxBlockedRunPreview() {
   return (
     <section className="rounded-lg border border-rose-200 bg-rose-50 p-4">
@@ -1509,6 +1675,22 @@ function SourceHealthPanel({ runs }: { runs: WorkspaceRunsProjection }) {
             <p className={classNames("text-sm", source.invalidRecordCount > 0 ? "text-rose-700" : "text-stone-500")}>{source.invalidRecordCount} invalid</p>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ArtifactControlSourceHealthPanel({ artifactControl }: { artifactControl: WorkspaceArtifactControlProjection }) {
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <p className="text-sm font-semibold text-stone-950">Artifact control metadata</p>
+      <p className="mt-1 text-sm leading-6 text-stone-600">
+        Reads optional project, collection, and artifact metadata sidecars from local materialized records. Missing sources are safe.
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <QueueRow label="Projects" value={String(artifactControl.counts.projects)} detail={`${artifactControl.sources.projects.invalidRecordCount} invalid records.`} />
+        <QueueRow label="Collections" value={String(artifactControl.counts.collections)} detail={`${artifactControl.sources.collections.invalidRecordCount} invalid records.`} />
+        <QueueRow label="Artifacts" value={String(artifactControl.counts.artifacts)} detail={`${artifactControl.sources.artifacts.invalidRecordCount} invalid records.`} />
       </div>
     </section>
   );
@@ -1634,6 +1816,8 @@ function AgentRunsRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 function KnowledgeRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   return (
     <div className="space-y-5">
+      <ArtifactControlLibrary snapshot={snapshot} />
+      <FileControlRoadmap />
       <MemoryMaintenancePanel runs={snapshot.runs.records.memoryMaintenanceRuns} />
       <SandboxArtifactPreview />
       <section>
@@ -1665,6 +1849,7 @@ function ReadinessRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       <ContractReadinessPanel runs={snapshot.runs} />
       <AuditReadinessPanel runs={snapshot.runs} />
       <SourceHealthPanel runs={snapshot.runs} />
+      <ArtifactControlSourceHealthPanel artifactControl={snapshot.artifactControl} />
       <GuardrailPanel />
     </div>
   );
@@ -1737,13 +1922,13 @@ export default async function WorkspacePage({
     content: String(snapshot.runs.counts.contentBatches),
     approvals: String(snapshot.approvals.totalPending),
     "agent-runs": String(snapshot.runs.counts.agentRuns),
-    knowledge: String(snapshot.runs.counts.memoryMaintenanceRuns + snapshot.artifacts.total),
+    knowledge: String(snapshot.runs.counts.memoryMaintenanceRuns + snapshot.artifacts.total + snapshot.artifactControl.counts.artifacts),
     team: selectedRole(role).label,
-    readiness: `${snapshot.runs.counts.sourcesPresent}/5`,
+    readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent}/8`,
   } satisfies Record<WorkspaceRoomId, string>;
 
   return (
-    <main className="min-h-screen bg-[#f4f3ef] text-stone-950">
+    <main className="min-h-screen overflow-x-hidden bg-[#f4f3ef] text-stone-950">
       <div className="mx-auto min-h-screen max-w-[1760px] lg:grid lg:grid-cols-[280px_minmax(0,1fr)_340px]">
         <aside className="border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
           <div className="flex items-center justify-between gap-3 lg:block">
@@ -1754,7 +1939,7 @@ export default async function WorkspacePage({
             <ReadOnlyBadge />
           </div>
 
-          <nav className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:block lg:space-y-1" aria-label="Workspace rooms">
+          <nav className="mt-5 grid gap-2 sm:grid-cols-2 md:grid-cols-4 lg:block lg:space-y-1" aria-label="Workspace rooms">
             {ROOMS.map((candidate) => (
               <RoomNavItem
                 key={candidate.id}
