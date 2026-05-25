@@ -7,6 +7,8 @@ import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } fro
 import { buildReaperData } from "@/lib/reaper";
 import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
+import { getWorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
+import type { WorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import { workspaceArtifactControlFixtures, workspaceTrainingGroundsFixtures } from "@/lib/workspace-contract-fixtures";
 import {
   validateAgentRun,
@@ -86,6 +88,7 @@ interface WorkspaceSnapshot {
     latestAudit: ArtifactGroup | null;
   };
   artifactControl: WorkspaceArtifactControlProjection;
+  memoryMaintenance: WorkspaceMemoryMaintenanceProjection;
   jobs: {
     total: number;
     ready: number;
@@ -221,7 +224,7 @@ function buildJobs(groups: ArtifactGroup[]): WorkspaceJob[] {
 }
 
 async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
-  const [slackQueue, jianApprovals, artifacts, runs, artifactControl] = await Promise.all([
+  const [slackQueue, jianApprovals, artifacts, runs, artifactControl, memoryMaintenance] = await Promise.all([
     readJsonArray<SlackQueueItem>(SLACK_QUEUE_FILE),
     readJsonArray<JianApprovalItem>(JIAN_APPROVALS_FILE),
     getWorkspaceArtifacts(),
@@ -242,6 +245,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
         artifacts: validateWorkspaceArtifact,
       },
     }),
+    getWorkspaceMemoryMaintenanceProjection(),
   ]);
   const reaper = buildReaperData();
   const visibleSlack = slackQueue.filter((item) => item.status && VISIBLE_SLACK_STATUSES.has(item.status));
@@ -268,6 +272,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       latestAudit,
     },
     artifactControl,
+    memoryMaintenance,
     jobs: {
       total: jobs.length,
       ready: jobs.filter((job) => job.status === "ready").length,
@@ -1092,44 +1097,113 @@ function ContentBatchesPanel({ batches }: { batches: ContentBatch[] }) {
   );
 }
 
-function MemoryMaintenancePanel({ runs }: { runs: MemoryMaintenanceRun[] }) {
-  if (!runs.length) {
-    return (
-      <EmptyRunState
-        title="No memory maintenance reports yet"
-        detail="Librarian scans will appear with findings, counts, QA, and proposed review references."
-      />
-    );
-  }
+function memoryProjectionStatusClasses(status: WorkspaceMemoryMaintenanceProjection["status"]): string {
+  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "partial") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (status === "error") return "border-rose-200 bg-rose-50 text-rose-800";
+  return "border-stone-200 bg-stone-50 text-stone-700";
+}
+
+function MemoryMaintenancePanel({
+  projection,
+  runs,
+}: {
+  projection: WorkspaceMemoryMaintenanceProjection;
+  runs: MemoryMaintenanceRun[];
+}) {
+  const summary = projection.summary;
+  const latestReports = projection.reports.latestReports.slice(0, 5);
 
   return (
-    <div className="grid gap-3">
-      {runs.slice(0, 3).map((run) => (
-        <article key={run.id} className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase text-stone-500">{run.mode.replaceAll("_", " ")}</p>
-              <h3 className="mt-1 text-sm font-semibold text-stone-950">{run.scope} memory scan</h3>
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-stone-950">Memory maintenance</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Read-only view of librarian reports, context packs, and review queues. Atlas does not edit notes or apply suggestions from this surface.
+          </p>
+        </div>
+        <span className={classNames("inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-xs font-medium", memoryProjectionStatusClasses(projection.status))}>
+          {projection.status.replaceAll("_", " ")}
+        </span>
+      </div>
+
+      {projection.status === "not_ready" ? (
+        <div className="mt-4">
+          <EmptyRunState
+            title="No librarian maintenance run emitted yet"
+            detail="Prompt 65 can finish independently. When reports, context packs, or review queues appear in the librarian output folders, Workspace will show safe counts and report references here."
+          />
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <QueueRow label="Graph health" value={String(summary.notesScanned)} detail={`${summary.brokenLinks} broken links, ${summary.orphanNotes} orphan notes, ${summary.weakNodes} weak nodes.`} />
+        <QueueRow label="High-degree hubs" value={String(summary.highDegreeHubs)} detail="Dense or protected notes are counted only; no source bodies are shown." />
+        <QueueRow label="Artifact hygiene" value={String(summary.orphanExports)} detail={`${summary.exportsMissingMetadata} exports missing metadata in the latest hygiene report.`} />
+        <QueueRow label="Review queue" value={String(summary.reviewQueueItems)} detail={`${summary.riskySuggestions} risky or approval-required suggestions.`} />
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.75fr)]">
+        <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+          <p className="text-sm font-semibold text-stone-950">Context packs</p>
+          {projection.reports.contextPacks.length ? (
+            <div className="mt-3 grid gap-2">
+              {projection.reports.contextPacks.slice(0, 3).map((pack) => (
+                <div key={`${pack.id}-${pack.kind}`} className="rounded-md border border-stone-200 bg-white p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <p className="line-clamp-1 text-sm font-medium text-stone-950">{pack.title}</p>
+                    <span className="rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] font-medium text-stone-600">
+                      {pack.totalMembers} refs
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-stone-500">
+                    {pack.canonicalCount} canonical, {pack.graphConnectedCount} graph, {pack.tagMatchedCount} tag, {pack.keywordInferredCount} keyword.
+                  </p>
+                </div>
+              ))}
             </div>
-            <span className={classNames("rounded-full border px-2.5 py-1 text-xs font-medium", runStatusClasses(run.status))}>
-              {runStatusLabel(run.status)}
-            </span>
-          </div>
-          <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
-            {[
-              ["Scanned", run.counts.scanned],
-              ["Findings", run.findings.length],
-              ["Changes", run.counts.proposedChanges],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-md bg-stone-50 p-2">
-                <dt className="text-[11px] font-medium text-stone-500">{label}</dt>
-                <dd className="mt-1 text-lg font-semibold text-stone-950">{value}</dd>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-stone-600">No context packs emitted yet.</p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+          <p className="text-sm font-semibold text-stone-950">Latest report references</p>
+          {latestReports.length ? (
+            <div className="mt-3 space-y-2">
+              {latestReports.map((report) => (
+                <div key={`${report.kind}-${report.path}`} className="rounded-md border border-stone-200 bg-white p-3">
+                  <p className="line-clamp-1 text-sm font-medium text-stone-950">{report.title}</p>
+                  <p className="mt-1 text-xs text-stone-500">{formatDate(report.generatedAt)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-stone-600">Report references will appear after the librarian writes JSON summaries.</p>
+          )}
+        </div>
+      </div>
+
+      {runs.length ? (
+        <div className="mt-4 rounded-lg border border-stone-200 bg-stone-50 p-3">
+          <p className="text-sm font-semibold text-stone-950">Contract run records</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {runs.slice(0, 2).map((run) => (
+              <div key={run.id} className="rounded-md border border-stone-200 bg-white p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="text-sm font-medium text-stone-950">{run.scope} / {run.mode.replaceAll("_", " ")}</p>
+                  <span className={classNames("rounded-full border px-2 py-0.5 text-[11px] font-medium", runStatusClasses(run.status))}>
+                    {runStatusLabel(run.status)}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-stone-500">{run.findings.length} findings, {run.counts.proposedChanges} proposed changes, {run.counts.appliedChanges} applied.</p>
               </div>
             ))}
-          </dl>
-        </article>
-      ))}
-    </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1901,8 +1975,8 @@ function KnowledgeRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   return (
     <div className="space-y-5">
       <ArtifactControlLibrary snapshot={snapshot} />
+      <MemoryMaintenancePanel projection={snapshot.memoryMaintenance} runs={snapshot.runs.records.memoryMaintenanceRuns} />
       <FileControlRoadmap />
-      <MemoryMaintenancePanel runs={snapshot.runs.records.memoryMaintenanceRuns} />
       <SandboxArtifactPreview />
       <section>
         <p className="mb-2 text-sm font-semibold text-stone-950">Recent artifacts</p>
@@ -1949,6 +2023,7 @@ function ReadinessRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     <div className="space-y-5">
       <ContractReadinessPanel runs={snapshot.runs} />
       <AuditReadinessPanel runs={snapshot.runs} />
+      <MemoryMaintenancePanel projection={snapshot.memoryMaintenance} runs={snapshot.runs.records.memoryMaintenanceRuns} />
       <SourceHealthPanel runs={snapshot.runs} />
       <ArtifactControlSourceHealthPanel artifactControl={snapshot.artifactControl} />
       <GuardrailPanel />
@@ -1958,6 +2033,7 @@ function ReadinessRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
 function WorkspaceOperationsRail({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const artifactDiscovery = snapshot.artifactControl.discovery.counts;
+  const memorySummary = snapshot.memoryMaintenance.summary;
   const recentArtifacts = artifactControlRecords(snapshot).artifacts.slice(0, 3);
 
   return (
@@ -1968,7 +2044,7 @@ function WorkspaceOperationsRail({ snapshot }: { snapshot: WorkspaceSnapshot }) 
           {[
             ["Run records", snapshot.runs.counts.totalValidRecords],
             ["Artifacts", snapshot.artifactControl.counts.artifacts],
-            ["Sidecars", artifactDiscovery.realMetadataRecordsFound],
+            ["Librarian", snapshot.memoryMaintenance.status],
             ["Invalid", snapshot.artifactControl.counts.totalInvalidRecords],
           ].map(([label, value]) => (
             <div key={label} className="rounded-md bg-white p-3">
@@ -1978,6 +2054,23 @@ function WorkspaceOperationsRail({ snapshot }: { snapshot: WorkspaceSnapshot }) 
           ))}
         </dl>
         <p className="mt-3 text-xs leading-5 text-stone-500">Read-only projection. Controls that would change files or external systems remain disabled.</p>
+      </section>
+
+      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
+        <p className="text-sm font-semibold text-stone-950">Memory source health</p>
+        <div className="mt-4 space-y-2">
+          {[
+            ["Notes scanned", memorySummary.notesScanned],
+            ["Broken links", memorySummary.brokenLinks],
+            ["Context packs", memorySummary.contextPacksGenerated],
+            ["Risky suggestions", memorySummary.riskySuggestions],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
+              <p className="text-sm font-medium text-stone-950">{label}</p>
+              <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
@@ -2098,9 +2191,14 @@ export default async function WorkspacePage({
     approvals: String(snapshot.approvals.totalPending),
     "agent-runs": String(snapshot.runs.counts.agentRuns),
     training: String(trainingGroundsRecords().length),
-    knowledge: String(snapshot.runs.counts.memoryMaintenanceRuns + snapshot.artifacts.total + snapshot.artifactControl.counts.artifacts),
+    knowledge: String(
+      snapshot.runs.counts.memoryMaintenanceRuns +
+      snapshot.artifacts.total +
+      snapshot.artifactControl.counts.artifacts +
+      snapshot.memoryMaintenance.summary.contextPacksGenerated,
+    ),
     team: "Guide",
-    readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent}/8`,
+    readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent + Object.values(snapshot.memoryMaintenance.sources).filter((source) => source.present).length}/12`,
   } satisfies Record<WorkspaceRoomId, string>;
 
   return (
