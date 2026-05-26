@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import Link from "next/link";
 import type { Viewport } from "next";
 import { existsSync } from "node:fs";
@@ -182,6 +183,8 @@ const PROJECTS: Array<{
 const ROOM_IDS = new Set(ROOMS.map((room) => room.id));
 const ROLE_IDS = new Set<WorkspaceRoleId>(["rhys", "pat", "corey", "jian", "dante"]);
 const PROJECT_IDS = new Set(PROJECTS.map((project) => project.id));
+const SHELL_ROOM_IDS: WorkspaceRoomId[] = ["home", "audits", "content", "approvals", "agent-runs", "training", "knowledge"];
+const UTILITY_ROOM_IDS: WorkspaceRoomId[] = ["readiness"];
 
 async function readJsonArray<T>(filePath: string): Promise<T[]> {
   try {
@@ -344,12 +347,15 @@ function workspaceHref({
   room,
   role,
   project,
+  job,
 }: {
   room: WorkspaceRoomId;
   role: WorkspaceRoleId;
   project: WorkspaceProjectId;
+  job?: string;
 }): string {
   const params = new URLSearchParams({ room, role, project });
+  if (job) params.set("job", job);
   return `/workspace?${params.toString()}`;
 }
 
@@ -1310,37 +1316,6 @@ function SandboxBadge() {
   );
 }
 
-function RoomHeader({
-  room,
-  project,
-}: {
-  room: WorkspaceRoomId;
-  project: WorkspaceProjectId;
-}) {
-  const roomInfo = selectedRoom(room);
-  const projectInfo = selectedProject(project);
-
-  return (
-    <header className="border-b border-stone-200 bg-[#f4f3ef]/95 px-4 py-5 backdrop-blur sm:px-6">
-      <div className="mx-auto max-w-5xl">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-stone-500">{projectInfo.label}</p>
-            <h2 className="mt-1 text-2xl font-semibold text-stone-950 sm:text-3xl">{roomInfo.label}</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">{roomInfo.description}</p>
-          </div>
-          <Link
-            href="/"
-            className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-stone-300 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:text-stone-950"
-          >
-            Mission Control
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
-}
-
 function DataModeBanner({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const hasRunRecords = snapshot.runs.counts.totalValidRecords > 0;
 
@@ -1383,7 +1358,12 @@ function buildWorkStreamItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
     status: `${job.status.replaceAll("_", " ")} / ${job.execution.state.replaceAll("_", " ")}`,
     updatedAt: job.updatedAt,
     source: "real" as const,
-    href: workspaceHref({ room: job.room as WorkspaceRoomId, role: "rhys", project: job.project as WorkspaceProjectId }),
+    href: workspaceHref({
+      room: ROOM_IDS.has(job.room as WorkspaceRoomId) ? job.room as WorkspaceRoomId : "home",
+      role: "rhys",
+      project: PROJECT_IDS.has(job.project as WorkspaceProjectId) ? job.project as WorkspaceProjectId : "undeniable-os",
+      job: job.id,
+    }),
     localJob: job,
   }));
   const agentItems = snapshot.runs.records.agentRuns.slice(0, 3).map((run) => ({
@@ -1437,33 +1417,6 @@ function buildWorkStreamItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
       kind: "Training",
       title: "End-of-day training session",
       detail: "Brain dump becomes principles, decisions, corrections, and reviewable memory proposals.",
-      status: "Locked preview",
-      updatedAt: snapshot.generatedAt,
-      source: "sandbox",
-      href: workspaceHref({ room: "training", role: "rhys", project: "undeniable-os" }),
-    },
-  ];
-}
-
-function sidebarWorkItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
-  const filtered = buildWorkStreamItems(snapshot).filter((item) => !/ricky calder/i.test(item.title));
-  if (filtered.length) return filtered;
-  return [
-    {
-      id: "sidebar-audit-room",
-      kind: "Room",
-      title: "Audit work loop",
-      detail: "Locked audit intake, QA, artifact, and review surface.",
-      status: "Locked preview",
-      updatedAt: snapshot.generatedAt,
-      source: "sandbox",
-      href: workspaceHref({ room: "audits", role: "rhys", project: "l2-audits" }),
-    },
-    {
-      id: "sidebar-training-room",
-      kind: "Room",
-      title: "Training session loop",
-      detail: "Locked brain dump and memory proposal surface.",
       status: "Locked preview",
       updatedAt: snapshot.generatedAt,
       source: "sandbox",
@@ -2182,261 +2135,510 @@ function ArtifactControlSourceHealthPanel({ artifactControl }: { artifactControl
   );
 }
 
-function HomeRoom({
-  snapshot,
+function CapabilityButton({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      className="inline-flex h-9 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-500 shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
+    >
+      {label}
+    </button>
+  );
+}
+
+function WorkspaceTopBar({
+  room,
+  project,
+  activeSession,
 }: {
-  snapshot: WorkspaceSnapshot;
+  room: WorkspaceRoomId;
+  project: WorkspaceProjectId;
+  activeSession: boolean;
 }) {
+  const roomInfo = selectedRoom(room);
+  const projectInfo = selectedProject(project);
+
   return (
-    <div className="space-y-5">
-      <WorkbenchIntro snapshot={snapshot} />
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <WorkStreamPanel snapshot={snapshot} />
-        <div className="space-y-5">
-          <LockedJobLoopPreview snapshot={snapshot} />
-          {snapshot.artifacts.latestAudit ? <ArtifactResultCard group={snapshot.artifacts.latestAudit} /> : <SandboxArtifactPreview />}
+    <header className="sticky top-0 z-10 border-b border-stone-200 bg-[#f7f6f2]/95 px-4 py-3 backdrop-blur sm:px-6">
+      <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-stone-500">{projectInfo.label}</p>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+            <h2 className="min-w-0 text-xl font-semibold text-stone-950">{roomInfo.label}</h2>
+            <span className={classNames(
+              "rounded-full border px-2.5 py-1 text-xs font-medium",
+              activeSession ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-stone-200 bg-white text-stone-600",
+            )}>
+              {activeSession ? "Active session" : "Workspace overview"}
+            </span>
+          </div>
         </div>
-      </section>
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
-        <div>
-          <p className="mb-2 text-sm font-semibold text-stone-950">Artifact-derived history</p>
-          <JobTimeline jobs={snapshot.jobs.recent} />
-        </div>
-        <div className="space-y-4">
-          <SandboxBlockedRunPreview />
-          <DataModeBanner snapshot={snapshot} />
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AuditsRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  return (
-    <div className="space-y-5">
-      <AuditReadinessPanel runs={snapshot.runs} />
-      <AuditWorkspacePanel runs={snapshot.runs} />
-      {!snapshot.runs.records.auditRuns.length ? <SandboxAuditPreview /> : null}
-      <SandboxBlockedRunPreview />
-    </div>
-  );
-}
-
-function ContentRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  return (
-    <div className="space-y-5">
-      <ContentBatchesPanel batches={snapshot.runs.records.contentBatches} />
-      {!snapshot.runs.records.contentBatches.length ? <SandboxContentPreview /> : null}
-      <RelatedRecordsPanel runs={snapshot.runs} />
-    </div>
-  );
-}
-
-function ApprovalsRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  return (
-    <div className="space-y-5">
-      <section className="grid gap-3 sm:grid-cols-2">
-        <QueueRow
-          label="Comms review"
-          value={String(snapshot.approvals.slackVisible)}
-          detail={`${snapshot.approvals.draftedSlack} ready drafts, ${snapshot.approvals.heldSlack} held for context.`}
-        />
-        <QueueRow
-          label="Task workflow"
-          value={String(snapshot.approvals.jianActive)}
-          detail="Client delivery items waiting for exact review."
-        />
-      </section>
-      <RelatedRecordsPanel runs={snapshot.runs} />
-      {!snapshot.runs.records.approvals.length ? <SandboxApprovalPreview /> : null}
-    </div>
-  );
-}
-
-function AgentRunsRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  return (
-    <div className="space-y-5">
-      <AgentActivityPanel runs={snapshot.runs.records.agentRuns} />
-      <section>
-        <p className="mb-2 text-sm font-semibold text-stone-950">Artifact-derived work history</p>
-        <JobTimeline jobs={snapshot.jobs.recent} />
-      </section>
-      <SandboxBlockedRunPreview />
-    </div>
-  );
-}
-
-function KnowledgeRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  return (
-    <div className="space-y-5">
-      <ArtifactControlLibrary snapshot={snapshot} />
-      <MemoryMaintenancePanel projection={snapshot.memoryMaintenance} runs={snapshot.runs.records.memoryMaintenanceRuns} />
-      <FileControlRoadmap />
-      <SandboxArtifactPreview />
-      <section>
-        <p className="mb-2 text-sm font-semibold text-stone-950">Recent artifacts</p>
-        {snapshot.artifacts.recent.length ? <ArtifactList artifacts={snapshot.artifacts.recent} /> : <EmptyRunState title="No artifacts indexed" detail="The artifact room is ready for strategy docs, audit packages, and memory reports once files are projected." />}
-      </section>
-    </div>
-  );
-}
-
-function TrainingGroundsRoom() {
-  const sessions = trainingGroundsRecords();
-
-  return (
-    <div className="space-y-5">
-      <TrainingFlowPanel />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <TrainingSessionArchive sessions={sessions} />
-        <div className="space-y-5">
-          <TrainingGuardrailPanel sessions={sessions} />
-          <TrainingAccessGuardrailPanel />
+        <div className="flex max-w-full gap-2 overflow-x-auto pb-1 xl:pb-0">
+          {["Agents", "Tools", "Routines", "Library", "Mode"].map((label) => (
+            <CapabilityButton key={label} label={label} />
+          ))}
         </div>
       </div>
-      <TrainingMemoryProposalPanel sessions={sessions} />
-    </div>
+    </header>
   );
 }
 
-function TeamRoom({
-  snapshot,
+function localJobHref({
+  job,
+  role,
 }: {
-  snapshot: WorkspaceSnapshot;
+  job: WorkspaceLocalJob;
+  role: WorkspaceRoleId;
+}) {
+  const room = ROOM_IDS.has(job.room as WorkspaceRoomId) ? job.room as WorkspaceRoomId : "home";
+  const project = PROJECT_IDS.has(job.project as WorkspaceProjectId) ? job.project as WorkspaceProjectId : "undeniable-os";
+  return workspaceHref({ room, role, project, job: job.id });
+}
+
+function LocalJobThreadCard({
+  job,
+  selected,
+  role,
+}: {
+  job: WorkspaceLocalJob;
+  selected: boolean;
+  role: WorkspaceRoleId;
 }) {
   return (
-    <div className="space-y-5">
-      <TrialGuidePanel />
-      <ContractReadinessPanel runs={snapshot.runs} />
-      <ArtifactControlSourceHealthPanel artifactControl={snapshot.artifactControl} />
-    </div>
+    <Link
+      href={localJobHref({ job, role })}
+      className={classNames(
+        "block rounded-2xl border bg-white p-4 shadow-sm transition hover:border-stone-400",
+        selected ? "border-stone-950 ring-2 ring-stone-950/10" : "border-stone-200",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase text-stone-500">Local task / {job.intendedWorkflow.replaceAll("_", " ")}</p>
+          <h3 className="mt-1 line-clamp-2 text-base font-semibold text-stone-950">{job.title}</h3>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-stone-600">{job.prompt}</p>
+        </div>
+        <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+          {job.execution.state.replaceAll("_", " ")}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+          {job.status.replaceAll("_", " ")}
+        </span>
+        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+          Created {formatDate(job.createdAt)}
+        </span>
+        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+          Inspect
+        </span>
+      </div>
+    </Link>
   );
 }
 
-function ReadinessRoom({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+function LocalJobDetailPanel({
+  job,
+  snapshot,
+}: {
+  job: WorkspaceLocalJob;
+  snapshot: WorkspaceSnapshot;
+}) {
+  const timeline = [
+    ["Created", formatDate(job.createdAt)],
+    ["Queued locally", job.status.replaceAll("_", " ")],
+    ["Execution locked", job.execution.reason],
+  ];
+
   return (
-    <div className="space-y-5">
-      <ContractReadinessPanel runs={snapshot.runs} />
-      <AuditReadinessPanel runs={snapshot.runs} />
-      <MemoryMaintenancePanel projection={snapshot.memoryMaintenance} runs={snapshot.runs.records.memoryMaintenanceRuns} />
-      <SourceHealthPanel runs={snapshot.runs} />
-      <ArtifactControlSourceHealthPanel artifactControl={snapshot.artifactControl} />
-      <GuardrailPanel />
-    </div>
+    <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase text-stone-500">Selected local task</p>
+          <h3 className="mt-1 text-lg font-semibold text-stone-950">{job.title}</h3>
+        </div>
+        <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+          {job.execution.state.replaceAll("_", " ")}
+        </span>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
+        <p className="text-xs font-semibold uppercase text-stone-500">Prompt</p>
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-stone-700">{job.prompt}</p>
+      </div>
+
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        {[
+          ["Status", job.status.replaceAll("_", " ")],
+          ["Workflow", job.intendedWorkflow.replaceAll("_", " ")],
+          ["Project", job.project],
+          ["Room", job.room],
+          ["Created", formatDate(job.createdAt)],
+          ["Updated", formatDate(job.updatedAt)],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+            <dt className="text-xs font-medium text-stone-500">{label}</dt>
+            <dd className="mt-1 break-words text-sm font-semibold text-stone-950">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
+        <p className="text-xs font-semibold uppercase text-stone-500">Timeline</p>
+        <div className="mt-3 space-y-2">
+          {timeline.map(([label, detail], index) => (
+            <div key={label} className="grid gap-3 rounded-lg border border-stone-200 bg-white p-3 sm:grid-cols-[24px_minmax(0,1fr)]">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-stone-950 text-[11px] font-semibold text-white">{index + 1}</span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-stone-950">{label}</p>
+                <p className="mt-1 break-words text-xs leading-5 text-stone-500">{detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
+        <p className="text-xs font-semibold uppercase text-stone-500">Local source health</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {[
+            ["Valid", snapshot.localJobs.health.validRecordCount],
+            ["Invalid", snapshot.localJobs.health.invalidRecordCount],
+            ["Records", snapshot.localJobs.health.recordCount],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-stone-200 bg-white p-3">
+              <p className="text-xs text-stone-500">{label}</p>
+              <p className="mt-1 text-lg font-semibold text-stone-950">{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 break-all text-xs leading-5 text-stone-500">{snapshot.localJobs.file}</p>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
+          <button
+            key={action}
+            type="button"
+            disabled
+            className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
+          >
+            {action} locked
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
-function WorkspaceOperationsRail({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  const artifactDiscovery = snapshot.artifactControl.discovery.counts;
-  const memorySummary = snapshot.memoryMaintenance.summary;
-  const recentArtifacts = artifactControlRecords(snapshot).artifacts.slice(0, 3);
-
+function InlineArtifactCard({ artifact }: { artifact: ScannedWorkspaceArtifact }) {
   return (
-    <div className="space-y-6">
-      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-        <p className="text-sm font-semibold text-stone-950">Workspace health</p>
-        <dl className="mt-4 grid grid-cols-2 gap-3">
-          {[
-            ["Run records", snapshot.runs.counts.totalValidRecords],
-            ["Artifacts", snapshot.artifactControl.counts.artifacts],
-            ["Librarian", snapshot.memoryMaintenance.status],
-            ["Invalid", snapshot.artifactControl.counts.totalInvalidRecords],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-md bg-white p-3">
-              <dt className="text-xs font-medium text-stone-500">{label}</dt>
-              <dd className="mt-1 text-xl font-semibold text-stone-950">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        <p className="mt-3 text-xs leading-5 text-stone-500">Read-only projection. Controls that would change files or external systems remain disabled.</p>
-      </section>
-
-      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-        <p className="text-sm font-semibold text-stone-950">Memory source health</p>
-        <div className="mt-4 space-y-2">
-          {[
-            ["Notes scanned", memorySummary.notesScanned],
-            ["Broken links", memorySummary.brokenLinks],
-            ["Context packs", memorySummary.contextPacksGenerated],
-            ["Risky suggestions", memorySummary.riskySuggestions],
-          ].map(([label, value]) => (
-            <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
-              <p className="text-sm font-medium text-stone-950">{label}</p>
-              <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
-            </div>
-          ))}
+    <article className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase text-stone-500">Artifact / {workspaceFor(artifact.inferredWorkflow)}</p>
+          <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-950">{artifact.title}</h3>
         </div>
-      </section>
-
-      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-        <p className="text-sm font-semibold text-stone-950">Artifact source health</p>
-        <div className="mt-4 space-y-2">
-          {[
-            ["Real metadata records", artifactDiscovery.realMetadataRecordsFound],
-            ["Export files matched", artifactDiscovery.exportFilesMatched],
-            ["Missing file paths", artifactDiscovery.missingSidecars],
-            ["Orphan exports", artifactDiscovery.orphanExports],
-            ["Duplicate ids", artifactDiscovery.duplicateArtifactIds],
-          ].map(([label, value]) => (
-            <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3">
-              <p className="text-sm font-medium text-stone-950">{label}</p>
-              <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-        <p className="text-sm font-semibold text-stone-950">Recent artifact records</p>
-        <div className="mt-4 space-y-2">
-          {recentArtifacts.length ? recentArtifacts.map((artifact) => (
-            <div key={artifact.artifactId} className="rounded-lg border border-stone-200 bg-white p-3">
-              <p className="line-clamp-2 text-sm font-medium text-stone-950">{artifact.title}</p>
-              <p className="mt-1 text-xs text-stone-500">{artifact.status.replaceAll("_", " ")} / {artifact.type}</p>
-            </div>
-          )) : (
-            <p className="text-sm leading-6 text-stone-600">No artifact metadata records found yet.</p>
-          )}
-        </div>
-      </section>
-
-      <section id="reaper" className="rounded-lg border border-stone-300 bg-[#f8f7f4] p-4">
-        <p className="text-sm font-semibold text-stone-950">Follow-up triage</p>
-        <dl className="mt-4 grid grid-cols-2 gap-3">
-          {[
-            ["Pending", snapshot.reaper.totalPending],
-            ["Stale", snapshot.reaper.stale],
-            ["Ancient", snapshot.reaper.ancient],
-            ["Drafted", snapshot.reaper.withDraft],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-md bg-white p-3">
-              <dt className="text-xs font-medium text-stone-500">{label}</dt>
-              <dd className="mt-1 text-xl font-semibold text-stone-950">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        <p className="mt-3 text-xs leading-5 text-stone-500">Updated {formatDate(snapshot.reaper.updatedAt)}.</p>
-      </section>
-    </div>
+        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+          {artifact.format}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 text-xs text-stone-500">
+        <span>{formatBytes(artifact.sizeBytes)}</span>
+        <span>{formatDate(artifact.modifiedAt)}</span>
+        <span>{artifact.validationStatus.replaceAll("_", " ")}</span>
+      </div>
+    </article>
   );
 }
 
-function RoomContent({
+function StartTaskCard({
+  role,
+  project,
+}: {
+  role: WorkspaceRoleId;
+  project: WorkspaceProjectId;
+}) {
+  return (
+    <section className="rounded-2xl border border-dashed border-stone-300 bg-white/80 p-5 text-center shadow-sm">
+      <p className="text-sm font-semibold text-stone-950">Start a task to open the composer</p>
+      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-stone-600">
+        Pick a project room or start a new task. Atlas will save a local draft in this workspace; nothing executes yet.
+      </p>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <Link
+          href={workspaceHref({ room: "audits", role, project })}
+          className="inline-flex h-9 items-center rounded-md bg-stone-950 px-3 text-sm font-semibold text-white"
+        >
+          New task
+        </Link>
+        <Link
+          href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })}
+          className="inline-flex h-9 items-center rounded-md border border-stone-300 bg-white px-3 text-sm font-medium text-stone-700"
+        >
+          Open library
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function SessionThread({
   room,
+  role,
+  project,
+  snapshot,
+  selectedJob,
+}: {
+  room: WorkspaceRoomId;
+  role: WorkspaceRoleId;
+  project: WorkspaceProjectId;
+  snapshot: WorkspaceSnapshot;
+  selectedJob: WorkspaceLocalJob | null;
+}) {
+  const activeSession = Boolean(selectedJob) || !["home", "readiness"].includes(room);
+  const roomInfo = selectedRoom(room);
+  const localJobs = snapshot.localJobs.records.filter((job) => room === "home" || job.room === room || job.id === selectedJob?.id);
+  const visibleJobs = (localJobs.length ? localJobs : snapshot.localJobs.records).slice(0, 5);
+  const artifacts = snapshot.artifacts.recent.slice(0, 3);
+
+  return (
+    <div className="mx-auto flex min-h-[calc(100vh-74px)] w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6">
+      <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase text-stone-500">Atlas</p>
+            <h3 className="mt-1 text-lg font-semibold text-stone-950">{activeSession ? `${roomInfo.label} session` : "Workspace home"}</h3>
+            <p className="mt-2 text-sm leading-6 text-stone-600">{roomInfo.description}</p>
+          </div>
+          <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+            Local only
+          </span>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        {visibleJobs.length ? (
+          visibleJobs.map((job) => (
+            <LocalJobThreadCard
+              key={job.id}
+              job={job}
+              role={role}
+              selected={job.id === selectedJob?.id}
+            />
+          ))
+        ) : (
+          <EmptyRunState
+            title="No local tasks in this room yet"
+            detail="Start a task here and it will appear as a local Workspace draft before any execution path exists."
+          />
+        )}
+      </section>
+
+      {selectedJob ? <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} /> : null}
+
+      {artifacts.length ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-stone-950">Recent artifacts</p>
+            <Link href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })} className="text-xs font-medium text-stone-500 hover:text-stone-950">
+              Library
+            </Link>
+          </div>
+          <div className="grid gap-3">
+            {artifacts.map((artifact) => <InlineArtifactCard key={artifact.id} artifact={artifact} />)}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="grid gap-3 md:grid-cols-2">
+        <QueueRow
+          label="Memory"
+          value={snapshot.memoryMaintenance.status}
+          detail={`${snapshot.memoryMaintenance.summary.contextPacksGenerated} context packs, ${snapshot.memoryMaintenance.summary.reviewQueueItems} review items.`}
+        />
+        <QueueRow
+          label="Readiness"
+          value={`${snapshot.localJobs.health.validRecordCount} local`}
+          detail={`${snapshot.localJobs.health.invalidRecordCount} invalid local job records. External execution remains locked.`}
+        />
+      </section>
+
+      <div className="mt-auto">
+        {activeSession ? (
+          <WorkspaceComposer room={room} role={role} project={project} />
+        ) : (
+          <StartTaskCard role={role} project={project} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceRail({
+  room,
+  role,
+  project,
   snapshot,
 }: {
   room: WorkspaceRoomId;
+  role: WorkspaceRoleId;
+  project: WorkspaceProjectId;
   snapshot: WorkspaceSnapshot;
 }) {
-  if (room === "audits") return <AuditsRoom snapshot={snapshot} />;
-  if (room === "content") return <ContentRoom snapshot={snapshot} />;
-  if (room === "approvals") return <ApprovalsRoom snapshot={snapshot} />;
-  if (room === "agent-runs") return <AgentRunsRoom snapshot={snapshot} />;
-  if (room === "training") return <TrainingGroundsRoom />;
-  if (room === "knowledge") return <KnowledgeRoom snapshot={snapshot} />;
-  if (room === "team") return <TeamRoom snapshot={snapshot} />;
-  if (room === "readiness") return <ReadinessRoom snapshot={snapshot} />;
-  return <HomeRoom snapshot={snapshot} />;
+  const recentTasks = snapshot.localJobs.records.slice(0, 4);
+
+  return (
+    <aside className="max-w-full overflow-x-hidden border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
+      <div className="flex items-center justify-between gap-3 lg:block">
+        <div>
+          <p className="text-xs font-semibold text-stone-400">Atlas</p>
+          <h1 className="mt-1 text-lg font-semibold">Workspace</h1>
+        </div>
+        <ReadOnlyBadge />
+      </div>
+
+      <div className="mt-5">
+        <Link
+          href={workspaceHref({ room: "audits", role, project })}
+          className="flex min-h-10 items-center justify-center rounded-md bg-white px-3 text-sm font-semibold text-stone-950 transition hover:bg-stone-100"
+        >
+          New task
+        </Link>
+      </div>
+
+      <nav className="mt-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0" aria-label="Workspace rooms">
+        {SHELL_ROOM_IDS.map((roomId) => {
+          const candidate = selectedRoom(roomId);
+          return (
+            <RoomNavItem
+              key={candidate.id}
+              room={candidate}
+              activeRoom={room}
+              role={role}
+              project={project}
+              meta={roomId === "home" ? String(snapshot.localJobs.health.validRecordCount) : undefined}
+            />
+          );
+        })}
+      </nav>
+
+      <div className="mt-6 hidden lg:block">
+        <p className="px-3 text-xs font-medium text-stone-500">Projects</p>
+        <div className="mt-2 space-y-1">
+          {PROJECTS.map((candidate) => (
+            <RailItem
+              key={candidate.id}
+              label={candidate.label}
+              href={workspaceHref({ room, role, project: candidate.id })}
+              active={candidate.id === project}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-6 hidden lg:block">
+        <p className="px-3 text-xs font-medium text-stone-500">Recent tasks</p>
+        <div className="mt-2 space-y-1">
+          {recentTasks.length ? recentTasks.map((job) => (
+            <RailItem
+              key={job.id}
+              label={job.title}
+              meta={job.intendedWorkflow.replaceAll("_", " ")}
+              href={localJobHref({ job, role })}
+              active={job.room === room}
+            />
+          )) : (
+            <RailItem label="No local tasks yet" disabled />
+          )}
+        </div>
+      </div>
+
+      <div className="mt-6 hidden lg:block">
+        <p className="px-3 text-xs font-medium text-stone-500">Library</p>
+        <div className="mt-2 space-y-1">
+          <RailItem label="Artifact library" href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })} active={room === "knowledge"} />
+          <RailItem label="Training" href={workspaceHref({ room: "training", role, project })} active={room === "training"} />
+          {UTILITY_ROOM_IDS.map((roomId) => (
+            <RailItem
+              key={roomId}
+              label={selectedRoom(roomId).label}
+              href={workspaceHref({ room: roomId, role, project })}
+              active={room === roomId}
+            />
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function ContextInspector({
+  snapshot,
+  selectedJob,
+}: {
+  snapshot: WorkspaceSnapshot;
+  selectedJob: WorkspaceLocalJob | null;
+}) {
+  const artifactDiscovery = snapshot.artifactControl.discovery.counts;
+
+  return (
+    <aside className="space-y-4 bg-[#eeece7] px-4 py-5 sm:px-6 lg:min-h-screen">
+      {selectedJob ? (
+        <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-stone-950">Task context</p>
+          <p className="mt-2 text-sm leading-6 text-stone-600">{selectedJob.execution.reason}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
+              <button
+                key={action}
+                type="button"
+                disabled
+                className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
+              >
+                {action}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
+        <p className="text-sm font-semibold text-stone-950">Workspace pulse</p>
+        <dl className="mt-4 grid grid-cols-2 gap-3">
+          {[
+            ["Local", snapshot.localJobs.health.validRecordCount],
+            ["Artifacts", snapshot.artifactControl.counts.artifacts],
+            ["Memory", snapshot.memoryMaintenance.summary.contextPacksGenerated],
+            ["Invalid", snapshot.localJobs.health.invalidRecordCount + snapshot.artifactControl.counts.totalInvalidRecords],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+              <dt className="text-xs font-medium text-stone-500">{label}</dt>
+              <dd className="mt-1 text-lg font-semibold text-stone-950">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
+        <p className="text-sm font-semibold text-stone-950">Source health</p>
+        <div className="mt-4 space-y-2">
+          {[
+            ["Local job records", snapshot.localJobs.health.recordCount],
+            ["Artifact sidecars", artifactDiscovery.realMetadataRecordsFound],
+            ["Exports matched", artifactDiscovery.exportFilesMatched],
+            ["Memory review items", snapshot.memoryMaintenance.summary.reviewQueueItems],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
+              <p className="text-sm font-medium text-stone-950">{label}</p>
+              <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </aside>
+  );
 }
 
 export default async function WorkspacePage({
@@ -2447,97 +2649,27 @@ export default async function WorkspacePage({
   const snapshot = await getWorkspaceSnapshot();
   const params = searchParams ? await searchParams : {};
   const { room, role, project } = getWorkspaceSelection(params);
-  const roomMeta = {
-    home: String(snapshot.runs.counts.totalValidRecords + snapshot.localJobs.health.validRecordCount),
-    audits: String(snapshot.runs.counts.auditRuns),
-    content: String(snapshot.runs.counts.contentBatches),
-    approvals: String(snapshot.approvals.totalPending),
-    "agent-runs": String(snapshot.runs.counts.agentRuns),
-    training: String(trainingGroundsRecords().length),
-    knowledge: String(
-      snapshot.runs.counts.memoryMaintenanceRuns +
-      snapshot.artifacts.total +
-      snapshot.artifactControl.counts.artifacts +
-      snapshot.memoryMaintenance.summary.contextPacksGenerated,
-    ),
-    team: "Guide",
-    readiness: `${snapshot.runs.counts.sourcesPresent + snapshot.artifactControl.counts.sourcesPresent + Object.values(snapshot.memoryMaintenance.sources).filter((source) => source.present).length}/12`,
-  } satisfies Record<WorkspaceRoomId, string>;
+  const selectedJobId = firstParam(params.job);
+  const selectedJob = snapshot.localJobs.records.find((job) => job.id === selectedJobId) ?? null;
+  const activeSession = Boolean(selectedJob) || !["home", "readiness"].includes(room);
 
   return (
-    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#f4f3ef] text-stone-950">
-      <div className="mx-auto min-h-screen w-full max-w-[1760px] overflow-x-hidden lg:grid lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-        <aside className="max-w-full overflow-x-hidden border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
-          <div className="flex items-center justify-between gap-3 lg:block">
-            <div>
-              <p className="text-xs font-semibold text-stone-400">Atlas</p>
-              <h1 className="mt-1 text-lg font-semibold">Workspace</h1>
-            </div>
-            <ReadOnlyBadge />
-          </div>
-
-          <nav className="mt-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 md:grid-cols-4 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0" aria-label="Workspace rooms">
-            {ROOMS.map((candidate) => (
-              <RoomNavItem
-                key={candidate.id}
-                room={candidate}
-                activeRoom={room}
-                role={role}
-                project={project}
-                meta={roomMeta[candidate.id]}
-              />
-            ))}
-          </nav>
-
-          <div className="mt-6 hidden lg:block">
-            <p className="px-3 text-xs font-medium text-stone-500">Saved workspaces</p>
-            <div className="mt-2 space-y-1">
-              {PROJECTS.map((candidate) => (
-                <RailItem
-                  key={candidate.id}
-                  label={candidate.label}
-                  href={workspaceHref({ room, role, project: candidate.id })}
-                  active={candidate.id === project}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-6 hidden lg:block">
-            <p className="px-3 text-xs font-medium text-stone-500">Recent work</p>
-            <div className="mt-2 space-y-1">
-              {sidebarWorkItems(snapshot).slice(0, 4).map((item) => (
-                <RailItem
-                  key={item.id}
-                  label={item.title}
-                  meta={item.source === "real" ? item.kind : "Demo"}
-                  href={item.href}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-8 hidden rounded-lg border border-white/10 bg-white/5 p-3 lg:block">
-            <p className="text-xs text-stone-400">Last refreshed</p>
-            <p className="mt-1 text-sm font-medium text-stone-200">{formatDate(snapshot.generatedAt)}</p>
-          </div>
-        </aside>
+    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#f7f6f2] text-stone-950">
+      <div className="mx-auto min-h-screen w-full max-w-[1760px] overflow-x-hidden lg:grid lg:grid-cols-[260px_minmax(0,1fr)_320px]">
+        <WorkspaceRail room={room} role={role} project={project} snapshot={snapshot} />
 
         <section className="min-w-0 max-w-full overflow-x-hidden border-stone-200 lg:border-x">
-          <RoomHeader room={room} project={project} />
-
-          <div className="mx-auto max-w-5xl px-4 pb-44 pt-6 sm:px-6">
-            <RoomContent room={room} snapshot={snapshot} />
-          </div>
-
-          <div id="composer">
-            <WorkspaceComposer room={room} role={role} project={project} />
-          </div>
+          <WorkspaceTopBar room={room} project={project} activeSession={activeSession} />
+          <SessionThread
+            room={room}
+            role={role}
+            project={project}
+            snapshot={snapshot}
+            selectedJob={selectedJob}
+          />
         </section>
 
-        <aside className="bg-[#eeece7] px-4 py-5 pb-44 sm:px-6 lg:min-h-screen lg:pb-5">
-          <WorkspaceOperationsRail snapshot={snapshot} />
-        </aside>
+        <ContextInspector snapshot={snapshot} selectedJob={selectedJob} />
       </div>
     </main>
   );

@@ -77,8 +77,8 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-stone-200 bg-[#f4f3ef]/95 px-4 py-3 backdrop-blur sm:px-6 lg:left-[260px] lg:right-[320px]">
-      <form onSubmit={submitLocalJob} className="mx-auto w-full max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-stone-300 bg-white p-3 shadow-xl shadow-stone-900/15 sm:max-w-3xl">
+    <div className="w-full max-w-full">
+      <form onSubmit={submitLocalJob} className="w-full overflow-hidden rounded-2xl border border-stone-300 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
           <div>
             <p className="text-xs font-semibold uppercase text-stone-500">Local intake</p>
