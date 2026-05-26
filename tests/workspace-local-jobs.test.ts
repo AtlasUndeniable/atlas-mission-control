@@ -9,10 +9,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  applyWorkspaceLocalJobControl,
   createWorkspaceLocalJob,
   getWorkspaceLocalJobs,
   inferWorkspaceLocalJobWorkflow,
+  validateWorkspaceLocalJobControlInput,
   validateWorkspaceLocalJobInput,
+  WORKSPACE_LOCAL_JOB_CONTROLS_FILE,
   WORKSPACE_LOCAL_JOBS_FILE,
 } from "../src/lib/workspace-local-jobs.ts";
 
@@ -50,6 +53,13 @@ test("workspace local job input validation rejects blank prompts and invalid wor
   assert.equal(invalidWorkflow.ok, false);
 });
 
+test("workspace local job control validation rejects invalid local moves", () => {
+  assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "update" }).ok, false);
+  assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "launch_worker" }).ok, false);
+  assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "update", room: "slack" }).ok, false);
+  assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "update", project: "supabase-prod" }).ok, false);
+});
+
 test("workspace local job intake appends a local-only queued record", async () => {
   await withTempRoot(async (root) => {
     const job = await createWorkspaceLocalJob(
@@ -81,6 +91,84 @@ test("workspace local job intake appends a local-only queued record", async () =
   });
 });
 
+test("workspace local job controls edit, reassign, archive, and delete through additive JSONL", async () => {
+  await withTempRoot(async (root) => {
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Draft a local audit control packet",
+        project: "l2-audits",
+        room: "audits",
+        requesterRole: "rhys",
+        intendedWorkflow: "audit",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T01:02:03.000Z"),
+        idFactory: () => "control-target",
+      },
+    );
+
+    await applyWorkspaceLocalJobControl(
+      {
+        jobId: job.id,
+        action: "update",
+        title: "Renamed local draft",
+        prompt: "Edited local prompt only",
+        project: "content-engine",
+        room: "content",
+        intendedWorkflow: "content_batch",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T02:00:00.000Z"),
+        idFactory: () => "update-control",
+      },
+    );
+
+    let projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records.length, 1);
+    assert.equal(projection.records[0].title, "Renamed local draft");
+    assert.equal(projection.records[0].prompt, "Edited local prompt only");
+    assert.equal(projection.records[0].project, "content-engine");
+    assert.equal(projection.records[0].room, "content");
+    assert.equal(projection.records[0].intendedWorkflow, "content_batch");
+    assert.equal(projection.records[0].execution.state, "not_executing");
+    assert.equal(projection.health.recordCount, 1);
+    assert.equal(projection.controlHealth.validRecordCount, 1);
+
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "archive" },
+      {
+        root,
+        now: new Date("2026-05-26T03:00:00.000Z"),
+        idFactory: () => "archive-control",
+      },
+    );
+
+    projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records.length, 0);
+    assert.equal(projection.archivedRecords.length, 1);
+    assert.equal(projection.archivedRecords[0].status, "archived");
+    assert.equal(projection.archivedRecords[0].title, "Renamed local draft");
+    assert.equal(projection.health.archivedRecordCount, 1);
+
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "delete" },
+      {
+        root,
+        now: new Date("2026-05-26T04:00:00.000Z"),
+        idFactory: () => "delete-control",
+      },
+    );
+
+    projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records.length, 0);
+    assert.equal(projection.archivedRecords.length, 0);
+    assert.equal(projection.health.deletedRecordCount, 1);
+    assert.equal(projection.health.controlRecordCount, 3);
+  });
+});
+
 test("workspace local job reader skips malformed and invalid records safely", async () => {
   await withTempRoot(async (root) => {
     await createWorkspaceLocalJob(
@@ -107,6 +195,44 @@ test("workspace local job reader skips malformed and invalid records safely", as
     assert.equal(projection.health.validRecordCount, 1);
     assert.equal(projection.health.invalidRecordCount, 2);
     assert.equal(projection.records.length, 1);
+  });
+});
+
+test("workspace local job reader skips malformed and invalid control records safely", async () => {
+  await withTempRoot(async (root) => {
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Create a content batch draft",
+        project: "content-engine",
+        room: "content",
+        requesterRole: "corey",
+        intendedWorkflow: "content_batch",
+      },
+      { root, idFactory: () => "valid-control-source" },
+    );
+
+    await writeFile(
+      join(root, WORKSPACE_LOCAL_JOB_CONTROLS_FILE),
+      [
+        "{not json",
+        JSON.stringify({ schemaVersion: 1, id: "bad", jobId: job.id, action: "update", createdAt: "nope", source: "workspace-control" }),
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "good",
+          jobId: job.id,
+          action: "update",
+          createdAt: "2026-05-26T02:00:00.000Z",
+          source: "workspace-control",
+          patch: { title: "Valid projected rename" },
+        }),
+      ].join("\n"),
+    );
+
+    const projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.controlHealth.recordCount, 3);
+    assert.equal(projection.controlHealth.validRecordCount, 1);
+    assert.equal(projection.controlHealth.invalidRecordCount, 2);
+    assert.equal(projection.records[0].title, "Valid projected rename");
   });
 });
 

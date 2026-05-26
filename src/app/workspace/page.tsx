@@ -6,12 +6,17 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import WorkspaceComposer from "./WorkspaceComposer";
+import WorkspaceLocalJobControls from "./WorkspaceLocalJobControls";
 import { groupArtifacts, getWorkspaceArtifacts } from "@/app/api/workspace/_lib/artifact-projection";
 import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } from "@/app/api/workspace/_lib/artifact-projection";
 import { buildReaperData } from "@/lib/reaper";
 import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
-import { getWorkspaceLocalJobs } from "@/lib/workspace-local-jobs";
+import {
+  getWorkspaceLocalJobs,
+  WORKSPACE_LOCAL_JOB_PROJECTS as LOCAL_JOB_PROJECT_IDS,
+  WORKSPACE_LOCAL_JOB_ROOMS as LOCAL_JOB_ROOM_IDS,
+} from "@/lib/workspace-local-jobs";
 import type { WorkspaceLocalJob, WorkspaceLocalJobsProjection } from "@/lib/workspace-local-jobs";
 import { getWorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import type { WorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
@@ -187,6 +192,12 @@ const ROLE_IDS = new Set<WorkspaceRoleId>(["rhys", "pat", "corey", "jian", "dant
 const PROJECT_IDS = new Set(PROJECTS.map((project) => project.id));
 const SHELL_ROOM_IDS: WorkspaceRoomId[] = ["home", "audits", "content", "approvals", "agent-runs", "training", "knowledge"];
 const UTILITY_ROOM_IDS: WorkspaceRoomId[] = ["readiness"];
+const LOCKED_LOCAL_ACTIONS = [
+  "Worker run unavailable",
+  "File attach unavailable",
+  "Assignment unavailable",
+  "External send unavailable",
+];
 
 async function readJsonArray<T>(filePath: string): Promise<T[]> {
   try {
@@ -226,9 +237,9 @@ function jobStatusFor(formats: Set<string>, workflow: string, confidence: Worksp
 }
 
 function jobStepFor(status: JobStatus, formats: string[]): string {
-  if (status === "ready") return `Deliverable packaged with ${formats.slice(0, 3).join(", ") || "artifact"} output`;
+  if (status === "ready") return `Existing artifact metadata includes ${formats.slice(0, 3).join(", ") || "artifact"} output`;
   if (status === "needs_review") return "Needs review before it is promoted into the workspace history";
-  return "Still gathering related files and context";
+  return "Metadata is incomplete; no worker is collecting files from this surface";
 }
 
 function buildJobs(groups: ArtifactGroup[]): WorkspaceJob[] {
@@ -369,6 +380,14 @@ function selectedRoom(roomId: WorkspaceRoomId) {
   return ROOMS.find((room) => room.id === roomId) ?? ROOMS[0];
 }
 
+function displayProjectLabel(projectId: string): string {
+  return PROJECTS.find((project) => project.id === projectId)?.label ?? projectId;
+}
+
+function displayRoomLabel(roomId: string): string {
+  return ROOMS.find((room) => room.id === roomId)?.label ?? roomId;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -394,8 +413,8 @@ function statusClasses(status: JobStatus): string {
 }
 
 function statusLabel(status: JobStatus): string {
-  if (status === "ready") return "Delivered";
-  if (status === "collecting") return "Working";
+  if (status === "ready") return "Metadata ready";
+  if (status === "collecting") return "Metadata partial";
   return "Review";
 }
 
@@ -1071,9 +1090,9 @@ function AuditReadinessPanel({ runs }: { runs: WorkspaceRunsProjection }) {
       </div>
       <div className="mt-4 grid gap-2">
         <ReadinessSignal
-          label="Typeform wiring"
+          label="Typeform source visibility"
           active={typeformSeen}
-          detail={typeformSeen ? "Typeform-sourced audit records detected." : "Not wired in Workspace yet."}
+          detail={typeformSeen ? "Typeform-sourced audit records are visible." : "No Typeform source records visible in Workspace yet."}
         />
         <ReadinessSignal
           label="Generator stability"
@@ -1086,9 +1105,9 @@ function AuditReadinessPanel({ runs }: { runs: WorkspaceRunsProjection }) {
           detail={qaHarness ? "Audit validation or compliance summaries present." : "Awaiting QA summaries from the emitter."}
         />
         <ReadinessSignal
-          label="Worker and scheduler"
+          label="Worker record visibility"
           active={workerScheduler}
-          detail={workerScheduler ? "Audit AgentRun heartbeat or events detected." : "No audit worker events detected yet."}
+          detail={workerScheduler ? "Audit AgentRun heartbeat or events detected." : "No audit worker records visible yet."}
         />
         <ReadinessSignal
           label="Delivery policy"
@@ -1326,7 +1345,7 @@ function DataModeBanner({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-stone-950">
-            {hasRunRecords ? "Live workspace records detected" : "No live workflow records yet"}
+            {hasRunRecords ? "Validated workspace records detected" : "No workflow records yet"}
           </p>
           <p className="mt-1 text-sm leading-6 text-stone-600">
             {hasRunRecords
@@ -1338,7 +1357,7 @@ function DataModeBanner({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           "inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-xs font-medium",
           hasRunRecords ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-stone-200 bg-stone-50 text-stone-600",
         )}>
-          {hasRunRecords ? "Real data" : "Read-only demo"}
+          {hasRunRecords ? "Read-only records" : "Read-only demo"}
         </span>
       </div>
     </section>
@@ -1450,10 +1469,10 @@ function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             </span>
           </div>
           <h3 className="mt-4 max-w-2xl break-words text-2xl font-semibold tracking-normal text-stone-950 sm:text-3xl">
-            Start work, watch the loop, inspect the result.
+            Draft locally, inspect records, keep execution locked.
           </h3>
           <p className="mt-3 max-w-3xl break-words text-sm leading-6 text-stone-600">
-            Workspace is becoming the place where Atlas receives work, shows its plan, produces artifacts, and asks for review. Creation and execution are locked until the backend safety loop is ready.
+            Workspace is becoming the place where Atlas receives work, shows its plan, surfaces existing artifacts, and asks for review. Execution, delivery, and file operations are locked until the backend safety loop is ready.
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <WorkbenchStat label="Local drafts" value={String(snapshot.localJobs.health.validRecordCount)} detail="Queued here only. No execution." />
@@ -1464,9 +1483,9 @@ function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
         <div className="rounded-lg border border-stone-200 bg-[#f8f7f4] p-4">
           <p className="text-sm font-semibold text-stone-950">Local draft intents</p>
-          <p className="mt-1 text-sm leading-6 text-stone-600">The composer can save a Workspace draft job. Running, assignment, file attachment, and delivery stay locked.</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">The composer saves a Workspace draft record only. Running, assignment, file attachment, and delivery stay locked.</p>
           <div className="mt-4 grid gap-2">
-            {["Ask Atlas", "Start audit", "Create content batch", "Build call archive", "Start training session"].map((intent) => (
+            {["Ask Atlas", "Audit draft", "Content draft", "Call archive draft", "Training draft"].map((intent) => (
               <div key={intent} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5">
                 <p className="text-sm font-medium text-stone-950">{intent}</p>
                 <span className="rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">Draft only</span>
@@ -1523,15 +1542,8 @@ function WorkStreamPanel({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             </div>
             {item.localJob ? (
               <div className="mt-3 flex flex-wrap gap-2 border-t border-stone-200 pt-3">
-                {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
-                  <button
-                    key={action}
-                    type="button"
-                    disabled
-                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
-                  >
-                    {action} locked
-                  </button>
+                {LOCKED_LOCAL_ACTIONS.map((action) => (
+                  <LockedActionButton key={action} label={action} tone="light" />
                 ))}
               </div>
             ) : null}
@@ -1556,8 +1568,8 @@ function jobLoopStages(snapshot: WorkspaceSnapshot): Array<{ label: string; deta
   return [
     { label: "Received", detail: "Request captured as a workspace work item.", state: "complete" },
     { label: "Planning", detail: "Atlas builds a local plan and required context list.", state: hasArtifacts ? "complete" : "current" },
-    { label: "Running", detail: "Worker execution remains locked in this preview.", state: hasArtifacts ? "complete" : "locked" },
-    { label: "Artifact ready", detail: hasArtifacts ? "Artifact metadata is visible in the library." : "Output cards will appear here when emitted.", state: hasArtifacts ? "complete" : "locked" },
+    { label: "Execution locked", detail: "No worker execution is wired to Workspace.", state: "locked" },
+    { label: "Artifact metadata", detail: hasArtifacts ? "Existing artifact metadata is visible in the library." : "Output cards will appear here only when existing emitters write metadata.", state: hasArtifacts ? "complete" : "locked" },
     { label: "Review needed", detail: needsReview ? "Review records or ready artifacts are visible." : "Human review is planned before external use.", state: needsReview ? "current" : "locked" },
     { label: "Approved / archived", detail: hasArchived ? "Final state is represented in metadata." : "Finalization controls are not live.", state: hasArchived ? "complete" : "locked" },
   ];
@@ -1596,15 +1608,15 @@ function SandboxAuditPreview() {
     <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-stone-950">Typeform intake to Workspace audit run</p>
-          <p className="mt-1 text-sm leading-6 text-stone-600">Example path for the L2 room once emitters write validated records.</p>
+          <p className="text-sm font-semibold text-stone-950">Audit intake preview model</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">Example path for the L2 room once existing local emitters write validated records. Typeform wiring is not active here.</p>
         </div>
         <SandboxBadge />
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-4">
         {[
-          ["Intake", "Typeform-like payload lands as a local AuditRun source reference."],
-          ["Run", "Worker produces parse, retrieve, generate, render, and validate stages."],
+          ["Intake", "Local source reference appears as an AuditRun record."],
+          ["Execution", "Worker stages are a schema preview only; Workspace cannot start them."],
           ["QA", "Harness records pass/fail, compliance tier, and safe blocked summaries."],
           ["Package", "PDF, markdown, validation, and preview artifacts link back here."],
         ].map(([title, detail]) => (
@@ -1846,7 +1858,7 @@ function ArtifactControlLibrary({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
 function TrainingFlowPanel() {
   const steps = [
-    ["Start a training session", "Choose a focus: brain dump, business problem, context challenge, correction loop, or strategy conversation."],
+    ["Draft a training session", "Choose a focus: brain dump, business problem, context challenge, correction loop, or strategy conversation."],
     ["Talk through the mess", "Atlas listens for decisions, operating principles, context gaps, and places where it should challenge more directly."],
     ["Extract learnings", "The session becomes principles, corrections, decisions, playbooks, and proposed memory updates."],
     ["Review what should be saved", "The reviewer sees exactly what would become reusable context before anything is promoted."],
@@ -2137,12 +2149,28 @@ function ArtifactControlSourceHealthPanel({ artifactControl }: { artifactControl
   );
 }
 
-function CapabilityButton({ label }: { label: string }) {
+function CapabilityStatusPill({ label }: { label: string }) {
+  return (
+    <span
+      className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-stone-500"
+    >
+      {label} preview
+    </span>
+  );
+}
+
+function LockedActionButton({ label, tone = "dark" }: { label: string; tone?: "dark" | "light" }) {
   return (
     <button
       type="button"
       disabled
-      className="inline-flex h-8 items-center rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-stone-400 disabled:cursor-not-allowed disabled:opacity-80"
+      aria-label={`${label}; locked in Workspace`}
+      className={classNames(
+        "rounded-md border px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed",
+        tone === "light"
+          ? "border-stone-200 bg-white text-stone-500"
+          : "border-white/10 bg-white/[0.03] text-stone-500",
+      )}
     >
       {label}
     </button>
@@ -2172,13 +2200,13 @@ function WorkspaceTopBar({
               "rounded-md border px-2 py-0.5 text-[11px] font-medium",
               activeSession ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-white/10 bg-white/[0.04] text-stone-400",
             )}>
-              {activeSession ? "Active session" : "Workspace overview"}
+              {activeSession ? "Local/read-only lane" : "Workspace overview"}
             </span>
           </div>
         </div>
         <div className="flex max-w-full gap-2 overflow-x-auto pb-1 xl:pb-0">
           {["Agents", "Tools", "Routines", "Library", "Mode"].map((label) => (
-            <CapabilityButton key={label} label={label} />
+            <CapabilityStatusPill key={label} label={label} />
           ))}
         </div>
       </div>
@@ -2232,6 +2260,12 @@ function LocalJobThreadCard({
         <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
           Created {formatDate(job.createdAt)}
         </span>
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
+          {displayProjectLabel(job.project)}
+        </span>
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
+          {displayRoomLabel(job.room)}
+        </span>
         <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-300">
           Inspect
         </span>
@@ -2274,8 +2308,8 @@ function LocalJobDetailPanel({
         {[
           ["Status", job.status.replaceAll("_", " ")],
           ["Workflow", job.intendedWorkflow.replaceAll("_", " ")],
-          ["Project", job.project],
-          ["Room", job.room],
+          ["Project", displayProjectLabel(job.project)],
+          ["Room", displayRoomLabel(job.room)],
           ["Created", formatDate(job.createdAt)],
           ["Updated", formatDate(job.updatedAt)],
         ].map(([label, value]) => (
@@ -2319,15 +2353,8 @@ function LocalJobDetailPanel({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
-          <button
-            key={action}
-            type="button"
-            disabled
-            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-stone-500 disabled:cursor-not-allowed"
-          >
-            {action} locked
-          </button>
+        {LOCKED_LOCAL_ACTIONS.map((action) => (
+          <LockedActionButton key={action} label={action} />
         ))}
       </div>
     </section>
@@ -2399,9 +2426,9 @@ function StartTaskCard({
     },
   };
   const state = copy[room] ?? {
-    title: "Start a task to open the composer",
-    detail: "Pick a project room or start a new task. Atlas will save a local draft in this workspace; nothing executes yet.",
-    primary: "New task",
+    title: "Local draft composer lives in active rooms",
+    detail: "Pick Home, Audits, Content, or Training to save a local JSONL draft. Nothing executes from this Workspace shell.",
+    primary: "Open audit intake",
     href: workspaceHref({ room: "audits", role, project }),
     secondary: "Open library",
     secondaryHref: workspaceHref({ room: "knowledge", role, project: "memory-knowledge" }),
@@ -2442,9 +2469,9 @@ type RoomComposerConfig = {
 function roomComposerConfig(room: WorkspaceRoomId): RoomComposerConfig | null {
   if (room === "home") {
     return {
-      title: "New task",
-      helperText: "local draft only",
-      placeholder: "Ask Atlas to start a local task. It will be saved here, but no model or worker will run.",
+      title: "Local draft",
+      helperText: "local JSONL draft only",
+      placeholder: "Ask Atlas to save a local task note. It will be saved here, but no model or worker will run.",
       defaultWorkflow: "ask_atlas",
       visibleWorkflows: ["ask_atlas", "audit", "content_batch", "call_archive", "training_session"],
     };
@@ -2452,7 +2479,7 @@ function roomComposerConfig(room: WorkspaceRoomId): RoomComposerConfig | null {
   if (room === "audits") {
     return {
       title: "Audit intake",
-      helperText: "package placeholder",
+      helperText: "local JSONL draft only",
       placeholder: "Describe the L2 audit package to stage locally. No Typeform, worker, or delivery path will run.",
       defaultWorkflow: "audit",
       visibleWorkflows: ["audit", "ask_atlas"],
@@ -2461,7 +2488,7 @@ function roomComposerConfig(room: WorkspaceRoomId): RoomComposerConfig | null {
   if (room === "content") {
     return {
       title: "Content batch intake",
-      helperText: "script/assets placeholder",
+      helperText: "local JSONL draft only",
       placeholder: "Describe the content batch, scripts, or assets to stage locally. Nothing publishes or sends.",
       defaultWorkflow: "content_batch",
       visibleWorkflows: ["content_batch", "ask_atlas"],
@@ -2470,7 +2497,7 @@ function roomComposerConfig(room: WorkspaceRoomId): RoomComposerConfig | null {
   if (room === "training") {
     return {
       title: "Training session intake",
-      helperText: "memory proposal placeholder",
+      helperText: "local JSONL draft only",
       placeholder: "Describe the training session or principle to capture locally. No memory write happens.",
       defaultWorkflow: "training_session",
       visibleWorkflows: ["training_session", "ask_atlas"],
@@ -2602,7 +2629,7 @@ function RoomSpecificContent({
         title="Batch, scripts, assets"
         detail="Content work is organized around batch intent, script status, and asset references without publishing or sending."
         steps={[
-          { label: "Batch brief", detail: "Create a local content batch draft from the composer.", state: "current" },
+          { label: "Batch brief", detail: "Save a local content batch draft from the composer.", state: "current" },
           { label: "Scripts", detail: `${batches.length} validated content batch record${batches.length === 1 ? "" : "s"} visible.`, state: batches.length ? "ready" : "locked" },
           { label: "Assets", detail: "Asset cards appear when artifact metadata exists.", state: snapshot.artifacts.recent.some((artifact) => artifact.inferredWorkflow === "brand_asset") ? "ready" : "locked" },
         ]}
@@ -2717,7 +2744,7 @@ function RoomSpecificContent({
       title="Overview and recent local jobs"
       detail="Home collects the current local Workspace state: draft jobs, recent artifacts, and memory/readiness summaries."
       steps={[
-        { label: "Ask Atlas", detail: "Create a local-only draft from the composer.", state: "current" },
+        { label: "Ask Atlas", detail: "Save a local-only draft from the composer.", state: "current" },
         { label: "Inspect", detail: "Select a local job to inspect prompt, status, timeline, and locked actions.", state: snapshot.localJobs.health.validRecordCount ? "ready" : "locked" },
         { label: "Results", detail: "Read artifact and memory projections without moving or sending anything.", state: snapshot.artifactControl.counts.artifacts ? "ready" : "locked" },
       ]}
@@ -2780,13 +2807,27 @@ function SessionThread({
           ) : (
             <EmptyRunState
               title="No local tasks in this room yet"
-              detail="Start a task here and it will appear as a local Workspace draft before any execution path exists."
+              detail="Save a local draft here and it will appear as a Workspace record before any execution path exists."
             />
           )}
         </section>
       ) : null}
 
-      {selectedJob ? <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} /> : null}
+      {selectedJob ? (
+        <>
+          <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} />
+          <WorkspaceLocalJobControls
+            job={selectedJob}
+            role={role}
+            rooms={ROOMS
+              .filter((candidate) => (LOCAL_JOB_ROOM_IDS as readonly string[]).includes(candidate.id))
+              .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
+            projects={PROJECTS
+              .filter((candidate) => (LOCAL_JOB_PROJECT_IDS as readonly string[]).includes(candidate.id))
+              .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
+          />
+        </>
+      ) : null}
 
       {room === "home" && artifacts.length ? (
         <section className="space-y-3 border-t border-white/10 pt-5">
@@ -2847,6 +2888,10 @@ function WorkspaceRail({
   snapshot: WorkspaceSnapshot;
 }) {
   const recentTasks = snapshot.localJobs.records.slice(0, 4);
+  const projectCounts = new Map<string, number>();
+  snapshot.localJobs.records.forEach((job) => {
+    projectCounts.set(job.project, (projectCounts.get(job.project) ?? 0) + 1);
+  });
 
   return (
     <aside className="max-w-full overflow-x-hidden border-b border-white/10 bg-[#161616] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
@@ -2863,7 +2908,7 @@ function WorkspaceRail({
           href={workspaceHref({ room: "audits", role, project })}
           className="flex min-h-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.08] px-3 text-sm font-semibold text-stone-100 transition hover:bg-white/[0.12]"
         >
-          New task
+          Local draft
         </Link>
       </div>
 
@@ -2890,6 +2935,7 @@ function WorkspaceRail({
             <RailItem
               key={candidate.id}
               label={candidate.label}
+              meta={projectCounts.get(candidate.id) ? String(projectCounts.get(candidate.id)) : undefined}
               href={workspaceHref({ room, role, project: candidate.id })}
               active={candidate.id === project}
             />
@@ -2949,15 +2995,8 @@ function ContextInspector({
           <p className="text-sm font-semibold text-stone-100">Task context</p>
           <p className="mt-2 text-sm leading-6 text-stone-400">{selectedJob.execution.reason}</p>
           <div className="mt-4 flex flex-wrap gap-2">
-            {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
-              <button
-                key={action}
-                type="button"
-                disabled
-                className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-stone-500 disabled:cursor-not-allowed"
-              >
-                {action}
-              </button>
+            {LOCKED_LOCAL_ACTIONS.map((action) => (
+              <LockedActionButton key={action} label={action} />
             ))}
           </div>
         </section>
@@ -2968,9 +3007,9 @@ function ContextInspector({
         <dl className="mt-4 grid grid-cols-2 gap-4">
           {[
             ["Local", snapshot.localJobs.health.validRecordCount],
+            ["Archived", snapshot.localJobs.health.archivedRecordCount],
             ["Artifacts", snapshot.artifactControl.counts.artifacts],
-            ["Memory", snapshot.memoryMaintenance.summary.contextPacksGenerated],
-            ["Invalid", snapshot.localJobs.health.invalidRecordCount + snapshot.artifactControl.counts.totalInvalidRecords],
+            ["Controls", snapshot.localJobs.health.controlRecordCount],
           ].map(([label, value]) => (
             <div key={label}>
               <dt className="text-xs font-medium text-stone-500">{label}</dt>

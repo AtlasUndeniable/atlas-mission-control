@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
+  applyWorkspaceLocalJobControl,
   createWorkspaceLocalJob,
   getWorkspaceLocalJobs,
+  validateWorkspaceLocalJobControlInput,
   validateWorkspaceLocalJobInput,
 } from "@/lib/workspace-local-jobs";
 
@@ -54,5 +56,55 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     return safeError(error instanceof Error ? error.message : "Unable to create local job.", 500);
+  }
+}
+
+export async function PATCH(request: Request) {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError("Request body must be JSON.");
+  }
+
+  const checked = validateWorkspaceLocalJobControlInput(body);
+  if (!checked.ok) return safeError(checked.errors.join(" "));
+
+  try {
+    const projection = await getWorkspaceLocalJobs();
+    const jobExists = [...projection.records, ...projection.archivedRecords].some((job) => job.id === checked.value.jobId);
+    if (!jobExists) return safeError("Local job was not found.", 404);
+
+    const control = await applyWorkspaceLocalJobControl(checked.value);
+    return NextResponse.json({
+      ok: true,
+      localOnly: true,
+      nonExecuting: true,
+      control,
+    });
+  } catch (error) {
+    return safeError(error instanceof Error ? error.message : "Unable to update local job.", 500);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const url = new URL(request.url);
+  const jobId = url.searchParams.get("jobId");
+  if (!jobId) return safeError("jobId is required.");
+
+  try {
+    const projection = await getWorkspaceLocalJobs();
+    const jobExists = [...projection.records, ...projection.archivedRecords].some((job) => job.id === jobId);
+    if (!jobExists) return safeError("Local job was not found.", 404);
+
+    const control = await applyWorkspaceLocalJobControl({ jobId, action: "delete" });
+    return NextResponse.json({
+      ok: true,
+      localOnly: true,
+      nonExecuting: true,
+      control,
+    });
+  } catch (error) {
+    return safeError(error instanceof Error ? error.message : "Unable to delete local job.", 500);
   }
 }

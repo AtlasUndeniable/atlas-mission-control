@@ -19,10 +19,10 @@ type WorkspaceComposerProps = {
 
 const INTENTS: Array<{ label: string; workflow: WorkspaceLocalJobWorkflow; prompt: string }> = [
   { label: "Ask Atlas", workflow: "ask_atlas", prompt: "" },
-  { label: "Start audit", workflow: "audit", prompt: "Start a local draft for an L2 audit: " },
-  { label: "Create content batch", workflow: "content_batch", prompt: "Create a local draft for a content batch: " },
-  { label: "Build call archive", workflow: "call_archive", prompt: "Build a local draft for a call archive: " },
-  { label: "Start training session", workflow: "training_session", prompt: "Start a local training session about: " },
+  { label: "Audit draft", workflow: "audit", prompt: "Draft a local L2 audit intake note: " },
+  { label: "Content draft", workflow: "content_batch", prompt: "Draft a local content batch note: " },
+  { label: "Call archive draft", workflow: "call_archive", prompt: "Draft a local call archive note: " },
+  { label: "Training draft", workflow: "training_session", prompt: "Draft a local training session note about: " },
 ];
 
 function classNames(...classes: Array<string | false | undefined>) {
@@ -34,7 +34,7 @@ export default function WorkspaceComposer({
   role,
   project,
   title = "Local intake",
-  helperText = "Draft record only",
+  helperText = "Local JSONL draft only",
   placeholder = "Ask Atlas to start a local draft job. It will appear in the work stream, but no model or worker will run.",
   defaultWorkflow = "ask_atlas",
   visibleWorkflows,
