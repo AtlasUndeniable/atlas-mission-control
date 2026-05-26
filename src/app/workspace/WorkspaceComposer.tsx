@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { WorkspaceLocalJobWorkflow } from "@/lib/workspace-local-jobs";
 
@@ -10,6 +10,11 @@ type WorkspaceComposerProps = {
   room: string;
   role: string;
   project: string;
+  title?: string;
+  helperText?: string;
+  placeholder?: string;
+  defaultWorkflow?: WorkspaceLocalJobWorkflow;
+  visibleWorkflows?: WorkspaceLocalJobWorkflow[];
 };
 
 const INTENTS: Array<{ label: string; workflow: WorkspaceLocalJobWorkflow; prompt: string }> = [
@@ -24,18 +29,41 @@ function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-export default function WorkspaceComposer({ room, role, project }: WorkspaceComposerProps) {
+export default function WorkspaceComposer({
+  room,
+  role,
+  project,
+  title = "Local intake",
+  helperText = "Draft record only",
+  placeholder = "Ask Atlas to start a local draft job. It will appear in the work stream, but no model or worker will run.",
+  defaultWorkflow = "ask_atlas",
+  visibleWorkflows,
+}: WorkspaceComposerProps) {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [workflow, setWorkflow] = useState<WorkspaceLocalJobWorkflow>("ask_atlas");
+  const [workflow, setWorkflow] = useState<WorkspaceLocalJobWorkflow>(defaultWorkflow);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [message, setMessage] = useState("Local draft only. Nothing executes yet.");
   const canSubmit = prompt.trim().length > 0 && state !== "saving";
+  const availableIntents = useMemo(
+    () => visibleWorkflows?.length
+      ? INTENTS.filter((intent) => visibleWorkflows.includes(intent.workflow))
+      : INTENTS,
+    [visibleWorkflows],
+  );
 
   const selectedLabel = useMemo(
-    () => INTENTS.find((intent) => intent.workflow === workflow)?.label ?? "Ask Atlas",
-    [workflow],
+    () => availableIntents.find((intent) => intent.workflow === workflow)?.label
+      ?? INTENTS.find((intent) => intent.workflow === workflow)?.label
+      ?? "Ask Atlas",
+    [availableIntents, workflow],
   );
+
+  useEffect(() => {
+    setWorkflow(defaultWorkflow);
+    setState("idle");
+    setMessage("Local draft only. Nothing executes yet.");
+  }, [defaultWorkflow]);
 
   async function submitLocalJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -81,8 +109,8 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
       <form onSubmit={submitLocalJob} className="w-full overflow-hidden rounded-lg border border-white/10 bg-[#1f1f1f] p-3 shadow-sm shadow-black/20">
         <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
           <div>
-            <p className="text-[11px] font-semibold uppercase text-stone-500">Local intake</p>
-            <p className="mt-1 text-xs text-stone-400">{selectedLabel} / draft record only</p>
+            <p className="text-[11px] font-semibold uppercase text-stone-500">{title}</p>
+            <p className="mt-1 text-xs text-stone-400">{selectedLabel} / {helperText}</p>
           </div>
           <span className="rounded-md border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[11px] font-medium text-blue-200">
             Not executing
@@ -96,10 +124,10 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
             setPrompt(event.target.value);
             if (state !== "saving") setState("idle");
           }}
-          placeholder="Ask Atlas to start a local draft job. It will appear in the work stream, but no model or worker will run."
+          placeholder={placeholder}
         />
         <div className="flex flex-wrap items-center gap-2 border-t border-white/10 px-2 pt-2 sm:pt-3">
-          {INTENTS.map((intent, index) => (
+          {availableIntents.map((intent, index) => (
             <button
               key={intent.label}
               type="button"

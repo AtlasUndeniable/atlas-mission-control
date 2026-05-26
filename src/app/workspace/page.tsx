@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import Link from "next/link";
 import type { Viewport } from "next";
+import type { ReactNode } from "react";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
@@ -147,6 +148,7 @@ type WorkspaceProjectId =
   | "undeniable-os"
   | "l2-audits"
   | "content-engine"
+  | "delivery-ops"
   | "monday-delivery"
   | "memory-knowledge";
 
@@ -176,7 +178,7 @@ const PROJECTS: Array<{
   { id: "undeniable-os", label: "Undeniable OS", detail: "Primary Atlas operating workspace." },
   { id: "l2-audits", label: "L2 Audits", detail: "Executive audit intake, QA, and artifact review." },
   { id: "content-engine", label: "Content Engine", detail: "Weekly content batches, scripts, and assets." },
-  { id: "monday-delivery", label: "Delivery Ops", detail: "Task delivery visibility and review state." },
+  { id: "delivery-ops", label: "Delivery Ops", detail: "Task delivery visibility and review state." },
   { id: "memory-knowledge", label: "Memory/Knowledge", detail: "Librarian runs, saved docs, and knowledge health." },
 ];
 
@@ -579,12 +581,12 @@ function ArtifactResultCard({ group }: { group: ArtifactGroup }) {
   const formats = [...new Set(group.artifacts.map((artifact) => artifact.format))].slice(0, 5);
 
   return (
-    <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 bg-white shadow-sm">
-      <div className="border-b border-stone-100 bg-stone-50/70 px-4 py-3">
+    <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-white/[0.035]">
+      <div className="border-b border-white/10 bg-white/[0.025] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className={classNames("h-2 w-2 rounded-full", workflowAccent(group.workflow))} />
           <p className="text-xs font-semibold uppercase text-stone-500">{workspaceFor(group.workflow)}</p>
-          <span className="ml-auto rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-700">
+          <span className="ml-auto rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
             Latest deliverable
           </span>
         </div>
@@ -592,23 +594,23 @@ function ArtifactResultCard({ group }: { group: ArtifactGroup }) {
       <div className="p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h3 className="line-clamp-2 text-base font-semibold text-stone-950" title={group.title}>{group.title}</h3>
-          <p className="mt-2 text-sm leading-6 text-stone-600">
+          <h3 className="line-clamp-2 text-base font-semibold text-stone-100" title={group.title}>{group.title}</h3>
+          <p className="mt-2 text-sm leading-6 text-stone-400">
             Packaged result with the core files grouped together for review.
           </p>
         </div>
-        <span className="inline-flex shrink-0 items-center rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-700">
+        <span className="inline-flex shrink-0 items-center rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
           {jobTypeFor(group.workflow)}
         </span>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div className="flex min-w-0 flex-wrap gap-2">
           {formats.map((format) => (
-            <span key={format} className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600">
+            <span key={format} className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-xs font-medium text-stone-400">
               {format}
             </span>
           ))}
-          <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600">
+          <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-xs font-medium text-stone-400">
             {group.artifacts.length} files
           </span>
         </div>
@@ -725,8 +727,8 @@ function WorkbenchStat({
 
 function EmptyRunState({ title, detail }: { title: string; detail: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-stone-300 bg-white/70 p-4 text-sm leading-6 text-stone-600">
-      <p className="font-medium text-stone-800">{title}</p>
+    <div className="rounded-lg border border-dashed border-white/15 bg-white/[0.025] p-4 text-sm leading-6 text-stone-500">
+      <p className="font-medium text-stone-200">{title}</p>
       <p className="mt-1">{detail}</p>
     </div>
   );
@@ -2356,31 +2358,370 @@ function InlineArtifactCard({ artifact }: { artifact: ScannedWorkspaceArtifact }
 function StartTaskCard({
   role,
   project,
+  room,
 }: {
   role: WorkspaceRoleId;
   project: WorkspaceProjectId;
+  room: WorkspaceRoomId;
 }) {
+  const copy: Record<string, { title: string; detail: string; primary: string; href: string; secondary: string; secondaryHref: string }> = {
+    approvals: {
+      title: "Review room is read-only",
+      detail: "Approval state is visible here, but review decisions and sends stay outside this Workspace shell.",
+      primary: "Open Home",
+      href: workspaceHref({ room: "home", role, project }),
+      secondary: "Open Library",
+      secondaryHref: workspaceHref({ room: "knowledge", role, project: "memory-knowledge" }),
+    },
+    "agent-runs": {
+      title: "Run timeline is read-only",
+      detail: "Local jobs and projected runs appear here, but no worker can be started from Workspace.",
+      primary: "Open Home",
+      href: workspaceHref({ room: "home", role, project }),
+      secondary: "Open Audits",
+      secondaryHref: workspaceHref({ room: "audits", role, project: "l2-audits" }),
+    },
+    knowledge: {
+      title: "Knowledge is browse-only",
+      detail: "Use this room for artifact cards, context packs, and source health. File controls remain locked.",
+      primary: "Open Home",
+      href: workspaceHref({ room: "home", role, project }),
+      secondary: "Training",
+      secondaryHref: workspaceHref({ room: "training", role, project: "memory-knowledge" }),
+    },
+    readiness: {
+      title: "Readiness is inspect-only",
+      detail: "Source health and integration guardrails are visible here. Nothing restarts, writes, or connects.",
+      primary: "Open Home",
+      href: workspaceHref({ room: "home", role, project }),
+      secondary: "Knowledge",
+      secondaryHref: workspaceHref({ room: "knowledge", role, project: "memory-knowledge" }),
+    },
+  };
+  const state = copy[room] ?? {
+    title: "Start a task to open the composer",
+    detail: "Pick a project room or start a new task. Atlas will save a local draft in this workspace; nothing executes yet.",
+    primary: "New task",
+    href: workspaceHref({ room: "audits", role, project }),
+    secondary: "Open library",
+    secondaryHref: workspaceHref({ room: "knowledge", role, project: "memory-knowledge" }),
+  };
+
   return (
     <section className="rounded-lg border border-dashed border-white/15 bg-white/[0.035] p-5 text-center">
-      <p className="text-sm font-semibold text-stone-100">Start a task to open the composer</p>
+      <p className="text-sm font-semibold text-stone-100">{state.title}</p>
       <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-stone-400">
-        Pick a project room or start a new task. Atlas will save a local draft in this workspace; nothing executes yet.
+        {state.detail}
       </p>
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         <Link
-          href={workspaceHref({ room: "audits", role, project })}
+          href={state.href}
           className="inline-flex h-9 items-center rounded-md bg-stone-100 px-3 text-sm font-semibold text-stone-950"
         >
-          New task
+          {state.primary}
         </Link>
         <Link
-          href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })}
+          href={state.secondaryHref}
           className="inline-flex h-9 items-center rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-stone-300"
         >
-          Open library
+          {state.secondary}
         </Link>
       </div>
     </section>
+  );
+}
+
+type RoomComposerConfig = {
+  title: string;
+  helperText: string;
+  placeholder: string;
+  defaultWorkflow: WorkspaceLocalJob["intendedWorkflow"];
+  visibleWorkflows: WorkspaceLocalJob["intendedWorkflow"][];
+};
+
+function roomComposerConfig(room: WorkspaceRoomId): RoomComposerConfig | null {
+  if (room === "home") {
+    return {
+      title: "New task",
+      helperText: "local draft only",
+      placeholder: "Ask Atlas to start a local task. It will be saved here, but no model or worker will run.",
+      defaultWorkflow: "ask_atlas",
+      visibleWorkflows: ["ask_atlas", "audit", "content_batch", "call_archive", "training_session"],
+    };
+  }
+  if (room === "audits") {
+    return {
+      title: "Audit intake",
+      helperText: "package placeholder",
+      placeholder: "Describe the L2 audit package to stage locally. No Typeform, worker, or delivery path will run.",
+      defaultWorkflow: "audit",
+      visibleWorkflows: ["audit", "ask_atlas"],
+    };
+  }
+  if (room === "content") {
+    return {
+      title: "Content batch intake",
+      helperText: "script/assets placeholder",
+      placeholder: "Describe the content batch, scripts, or assets to stage locally. Nothing publishes or sends.",
+      defaultWorkflow: "content_batch",
+      visibleWorkflows: ["content_batch", "ask_atlas"],
+    };
+  }
+  if (room === "training") {
+    return {
+      title: "Training session intake",
+      helperText: "memory proposal placeholder",
+      placeholder: "Describe the training session or principle to capture locally. No memory write happens.",
+      defaultWorkflow: "training_session",
+      visibleWorkflows: ["training_session", "ask_atlas"],
+    };
+  }
+  return null;
+}
+
+function localJobsForRoom(room: WorkspaceRoomId, jobs: WorkspaceLocalJob[], selectedJob: WorkspaceLocalJob | null) {
+  const workflowByRoom: Partial<Record<WorkspaceRoomId, WorkspaceLocalJob["intendedWorkflow"][]>> = {
+    audits: ["audit"],
+    content: ["content_batch"],
+    training: ["training_session"],
+    "agent-runs": ["ask_atlas", "audit", "content_batch", "call_archive", "training_session", "general"],
+  };
+  const workflows = workflowByRoom[room];
+  const filtered = room === "home"
+    ? jobs
+    : jobs.filter((job) => job.room === room || workflows?.includes(job.intendedWorkflow) || job.id === selectedJob?.id);
+  return (filtered.length ? filtered : []).slice(0, 5);
+}
+
+function LaneStep({
+  label,
+  detail,
+  state = "locked",
+}: {
+  label: string;
+  detail: string;
+  state?: "ready" | "current" | "locked";
+}) {
+  const stateClass = state === "ready"
+    ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+    : state === "current"
+      ? "border-blue-300/20 bg-blue-400/10 text-blue-200"
+      : "border-white/10 bg-white/[0.03] text-stone-500";
+
+  return (
+    <div className="grid gap-3 border-b border-white/10 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_80px]">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-stone-200">{label}</p>
+        <p className="mt-1 text-xs leading-5 text-stone-500">{detail}</p>
+      </div>
+      <span className={classNames("h-fit w-fit rounded-md border px-2 py-0.5 text-[11px] font-medium sm:justify-self-end", stateClass)}>
+        {state}
+      </span>
+    </div>
+  );
+}
+
+function RoomLane({
+  eyebrow,
+  title,
+  detail,
+  steps,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  steps: Array<{ label: string; detail: string; state?: "ready" | "current" | "locked" }>;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="space-y-4 border-b border-white/10 pb-5">
+      <div>
+        <p className="text-[11px] font-semibold uppercase text-stone-500">{eyebrow}</p>
+        <h3 className="mt-1 text-lg font-semibold text-stone-100">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-stone-400">{detail}</p>
+      </div>
+      <div className="rounded-lg border border-white/10 bg-white/[0.025] px-4">
+        {steps.map((step) => <LaneStep key={step.label} {...step} />)}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+}) {
+  return (
+    <div>
+      <p className="text-[11px] font-medium uppercase text-stone-500">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-stone-200">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-stone-500">{detail}</p>
+    </div>
+  );
+}
+
+function RoomSpecificContent({
+  room,
+  role,
+  snapshot,
+}: {
+  room: WorkspaceRoomId;
+  role: WorkspaceRoleId;
+  snapshot: WorkspaceSnapshot;
+}) {
+  if (room === "audits") {
+    const auditRuns = snapshot.runs.records.auditRuns;
+    return (
+      <RoomLane
+        eyebrow="L2 audit lane"
+        title="Intake, review, package"
+        detail="Audit work is staged as local drafts and read-only run/package projections until the safe execution path exists."
+        steps={[
+          { label: "Intake", detail: "Capture an audit request as a local Workspace draft.", state: "current" },
+          { label: "Review", detail: `${auditRuns.length} validated audit run record${auditRuns.length === 1 ? "" : "s"} visible.`, state: auditRuns.length ? "ready" : "locked" },
+          { label: "Package", detail: "Audit artifacts appear here when projected from existing metadata.", state: snapshot.artifacts.latestAudit ? "ready" : "locked" },
+        ]}
+      >
+        {snapshot.artifacts.latestAudit ? <ArtifactResultCard group={snapshot.artifacts.latestAudit} /> : <EmptyRunState title="No audit package selected" detail="Local audit drafts can be staged here; package generation remains locked." />}
+      </RoomLane>
+    );
+  }
+
+  if (room === "content") {
+    const batches = snapshot.runs.records.contentBatches;
+    return (
+      <RoomLane
+        eyebrow="Content lane"
+        title="Batch, scripts, assets"
+        detail="Content work is organized around batch intent, script status, and asset references without publishing or sending."
+        steps={[
+          { label: "Batch brief", detail: "Create a local content batch draft from the composer.", state: "current" },
+          { label: "Scripts", detail: `${batches.length} validated content batch record${batches.length === 1 ? "" : "s"} visible.`, state: batches.length ? "ready" : "locked" },
+          { label: "Assets", detail: "Asset cards appear when artifact metadata exists.", state: snapshot.artifacts.recent.some((artifact) => artifact.inferredWorkflow === "brand_asset") ? "ready" : "locked" },
+        ]}
+      >
+        <div className="grid gap-3">
+          {snapshot.artifacts.recent.filter((artifact) => ["brand_asset", "strategist", "unknown"].includes(artifact.inferredWorkflow)).slice(0, 3).map((artifact) => (
+            <InlineArtifactCard key={artifact.id} artifact={artifact} />
+          ))}
+        </div>
+      </RoomLane>
+    );
+  }
+
+  if (room === "approvals") {
+    return (
+      <RoomLane
+        eyebrow="Review lane"
+        title="Approval state and exact-review queues"
+        detail="This room reads existing approval/review state. It does not approve, reject, send, or mutate tasks."
+        steps={[
+          { label: "Comms review", detail: `${snapshot.approvals.slackVisible} visible comms review item${snapshot.approvals.slackVisible === 1 ? "" : "s"}.`, state: snapshot.approvals.slackVisible ? "current" : "locked" },
+          { label: "Task workflow", detail: `${snapshot.approvals.jianActive} active task workflow review item${snapshot.approvals.jianActive === 1 ? "" : "s"}.`, state: snapshot.approvals.jianActive ? "current" : "locked" },
+          { label: "Decision controls", detail: "Approval actions stay outside this Workspace shell.", state: "locked" },
+        ]}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <MiniStat label="Visible reviews" value={snapshot.approvals.totalPending} detail="Read-only projection only." />
+          <MiniStat label="Drafted" value={snapshot.approvals.draftedSlack} detail="No send action is exposed here." />
+        </div>
+      </RoomLane>
+    );
+  }
+
+  if (room === "agent-runs") {
+    const jobs = snapshot.localJobs.records.slice(0, 5);
+    return (
+      <RoomLane
+        eyebrow="Run timeline lane"
+        title="Local drafts and projected run history"
+        detail="This room shows run-like state without starting workers. Local jobs remain queued and not executing."
+        steps={[
+          { label: "Local intake", detail: `${snapshot.localJobs.health.validRecordCount} local draft record${snapshot.localJobs.health.validRecordCount === 1 ? "" : "s"}.`, state: snapshot.localJobs.health.validRecordCount ? "ready" : "locked" },
+          { label: "Run records", detail: `${snapshot.runs.counts.totalValidRecords} validated run contract record${snapshot.runs.counts.totalValidRecords === 1 ? "" : "s"}.`, state: snapshot.runs.counts.totalValidRecords ? "ready" : "locked" },
+          { label: "Workers", detail: "No worker execution is available from Workspace.", state: "locked" },
+        ]}
+      >
+        <div className="space-y-2">
+          {jobs.length ? jobs.map((job) => <LocalJobThreadCard key={job.id} job={job} role={role} selected={false} />) : <EmptyRunState title="No local jobs yet" detail="Draft jobs created in active rooms will appear here as non-executing run candidates." />}
+        </div>
+      </RoomLane>
+    );
+  }
+
+  if (room === "training") {
+    const sessions = trainingGroundsRecords();
+    return (
+      <RoomLane
+        eyebrow="Training lane"
+        title="Session, principles, memory proposals"
+        detail="Training captures can be drafted locally. Memory writes and promotion remain locked."
+        steps={[
+          { label: "Session draft", detail: "Capture a training focus with local intake.", state: "current" },
+          { label: "Principles", detail: `${sessions.length} fixture training session${sessions.length === 1 ? "" : "s"} available for shape preview.`, state: sessions.length ? "ready" : "locked" },
+          { label: "Memory proposal", detail: "No memory write happens from this room.", state: "locked" },
+        ]}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <MiniStat label="Context packs" value={snapshot.memoryMaintenance.summary.contextPacksGenerated} detail="Read-only Librarian output." />
+          <MiniStat label="Review queue" value={snapshot.memoryMaintenance.summary.reviewQueueItems} detail="Proposals are not applied here." />
+        </div>
+      </RoomLane>
+    );
+  }
+
+  if (room === "knowledge") {
+    return (
+      <RoomLane
+        eyebrow="Knowledge lane"
+        title="Artifacts, context packs, source health"
+        detail="Knowledge is browse-and-inspect only: artifact cards, context counts, and source health without moving or writing files."
+        steps={[
+          { label: "Artifact library", detail: `${snapshot.artifactControl.counts.artifacts} artifact metadata record${snapshot.artifactControl.counts.artifacts === 1 ? "" : "s"}.`, state: snapshot.artifactControl.counts.artifacts ? "ready" : "locked" },
+          { label: "Context packs", detail: `${snapshot.memoryMaintenance.summary.contextPacksGenerated} context pack${snapshot.memoryMaintenance.summary.contextPacksGenerated === 1 ? "" : "s"} indexed.`, state: snapshot.memoryMaintenance.summary.contextPacksGenerated ? "ready" : "locked" },
+          { label: "File controls", detail: "Move, rename, archive, attach, share, and export are not active.", state: "locked" },
+        ]}
+      >
+        <div className="grid gap-3">
+          {snapshot.artifacts.recent.slice(0, 4).map((artifact) => <InlineArtifactCard key={artifact.id} artifact={artifact} />)}
+        </div>
+      </RoomLane>
+    );
+  }
+
+  if (room === "readiness") {
+    return (
+      <RoomLane
+        eyebrow="Readiness lane"
+        title="Source health and integration guardrails"
+        detail="This room shows whether local sources are present and which integration paths remain locked."
+        steps={[
+          { label: "Local jobs", detail: `${snapshot.localJobs.health.validRecordCount} valid, ${snapshot.localJobs.health.invalidRecordCount} invalid.`, state: snapshot.localJobs.health.invalidRecordCount ? "current" : "ready" },
+          { label: "Artifact metadata", detail: `${snapshot.artifactControl.counts.totalValidRecords} valid records, ${snapshot.artifactControl.counts.totalInvalidRecords} invalid.`, state: snapshot.artifactControl.counts.totalInvalidRecords ? "current" : "ready" },
+          { label: "External systems", detail: "Slack, Monday, Typeform, workers, and Supabase remain disconnected from this shell.", state: "locked" },
+        ]}
+      />
+    );
+  }
+
+  return (
+    <RoomLane
+      eyebrow="Workspace home"
+      title="Overview and recent local jobs"
+      detail="Home collects the current local Workspace state: draft jobs, recent artifacts, and memory/readiness summaries."
+      steps={[
+        { label: "Ask Atlas", detail: "Create a local-only draft from the composer.", state: "current" },
+        { label: "Inspect", detail: "Select a local job to inspect prompt, status, timeline, and locked actions.", state: snapshot.localJobs.health.validRecordCount ? "ready" : "locked" },
+        { label: "Results", detail: "Read artifact and memory projections without moving or sending anything.", state: snapshot.artifactControl.counts.artifacts ? "ready" : "locked" },
+      ]}
+    />
   );
 }
 
@@ -2397,11 +2738,12 @@ function SessionThread({
   snapshot: WorkspaceSnapshot;
   selectedJob: WorkspaceLocalJob | null;
 }) {
-  const activeSession = Boolean(selectedJob) || !["home", "readiness"].includes(room);
+  const composerConfig = roomComposerConfig(room);
+  const activeSession = Boolean(selectedJob) || Boolean(composerConfig) || !["home", "readiness"].includes(room);
   const roomInfo = selectedRoom(room);
-  const localJobs = snapshot.localJobs.records.filter((job) => room === "home" || job.room === room || job.id === selectedJob?.id);
-  const visibleJobs = (localJobs.length ? localJobs : snapshot.localJobs.records).slice(0, 5);
+  const visibleJobs = localJobsForRoom(room, snapshot.localJobs.records, selectedJob);
   const artifacts = snapshot.artifacts.recent.slice(0, 3);
+  const showLocalTaskStrip = ["home", "audits", "content", "training"].includes(room);
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-65px)] w-full max-w-3xl flex-col gap-5 px-4 py-6 sm:px-6">
@@ -2418,27 +2760,35 @@ function SessionThread({
         </div>
       </section>
 
-      <section className="space-y-3 border-b border-white/10 pb-5">
-        {visibleJobs.length ? (
-          visibleJobs.map((job) => (
-            <LocalJobThreadCard
-              key={job.id}
-              job={job}
-              role={role}
-              selected={job.id === selectedJob?.id}
+      <RoomSpecificContent room={room} role={role} snapshot={snapshot} />
+
+      {showLocalTaskStrip ? (
+        <section className="space-y-3 border-b border-white/10 pb-5">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-stone-200">{room === "home" ? "Recent local tasks" : "Local drafts in this lane"}</p>
+            <span className="text-xs text-stone-500">{visibleJobs.length} shown</span>
+          </div>
+          {visibleJobs.length ? (
+            visibleJobs.map((job) => (
+              <LocalJobThreadCard
+                key={job.id}
+                job={job}
+                role={role}
+                selected={job.id === selectedJob?.id}
+              />
+            ))
+          ) : (
+            <EmptyRunState
+              title="No local tasks in this room yet"
+              detail="Start a task here and it will appear as a local Workspace draft before any execution path exists."
             />
-          ))
-        ) : (
-          <EmptyRunState
-            title="No local tasks in this room yet"
-            detail="Start a task here and it will appear as a local Workspace draft before any execution path exists."
-          />
-        )}
-      </section>
+          )}
+        </section>
+      ) : null}
 
       {selectedJob ? <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} /> : null}
 
-      {artifacts.length ? (
+      {room === "home" && artifacts.length ? (
         <section className="space-y-3 border-t border-white/10 pt-5">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-semibold text-stone-200">Recent artifacts</p>
@@ -2466,10 +2816,19 @@ function SessionThread({
       </section>
 
       <div className="mt-auto">
-        {activeSession ? (
-          <WorkspaceComposer room={room} role={role} project={project} />
+        {composerConfig ? (
+          <WorkspaceComposer
+            room={room}
+            role={role}
+            project={project}
+            title={composerConfig.title}
+            helperText={composerConfig.helperText}
+            placeholder={composerConfig.placeholder}
+            defaultWorkflow={composerConfig.defaultWorkflow}
+            visibleWorkflows={composerConfig.visibleWorkflows}
+          />
         ) : (
-          <StartTaskCard role={role} project={project} />
+          <StartTaskCard role={role} project={project} room={room} />
         )}
       </div>
     </div>
