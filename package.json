@@ -6,7 +6,9 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
-    "lint": "eslint"
+    "lint": "eslint",
+    "workspace:worker:claim": "node scripts/workspace-worker-claim.mjs",
+    "workspace:worker:import": "node scripts/workspace-worker-import.mjs"
   },
   "dependencies": {
     "next": "16.2.0",

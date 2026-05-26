@@ -1,11 +1,13 @@
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 export const WORKSPACE_LOCAL_JOBS_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-local-jobs";
 export const WORKSPACE_LOCAL_JOBS_FILE = "local-jobs.jsonl";
 export const WORKSPACE_LOCAL_JOB_CONTROLS_FILE = "local-job-controls.jsonl";
+export const WORKSPACE_WORKER_REQUESTS_DIR = "workspace-worker-requests";
+export const WORKSPACE_WORKER_RESULTS_DIR = "workspace-worker-results";
 
 export const WORKSPACE_LOCAL_JOB_STATUSES = [
   "draft",
@@ -14,6 +16,10 @@ export const WORKSPACE_LOCAL_JOB_STATUSES = [
   "ready_for_worker",
   "result_imported",
   "completed_local",
+  "worker_claimed",
+  "worker_staged",
+  "worker_result_written",
+  "worker_failed",
   "archived",
 ] as const;
 export const WORKSPACE_LOCAL_JOB_WORKFLOWS = [
@@ -54,7 +60,11 @@ export type WorkspaceLocalJobControlAction =
   | "worker_package_created"
   | "result_imported"
   | "result_rejected"
-  | "result_archived";
+  | "result_archived"
+  | "worker_claimed"
+  | "worker_staged"
+  | "worker_result_written"
+  | "worker_failed";
 
 export type WorkspaceLocalJob = {
   schemaVersion: 1;
@@ -145,6 +155,46 @@ export type WorkspaceLocalWorkerResult = {
   body: string;
 };
 
+export type WorkspaceLocalWorkerRequestFiles = {
+  adapter: string;
+  requestJsonPath: string;
+  requestMarkdownPath: string;
+  resultJsonPath: string;
+  resultMarkdownPath: string;
+};
+
+export type WorkspaceLocalWorkerAdapterRequest = {
+  schemaVersion: 1;
+  requestId: string;
+  adapter: string;
+  createdAt: string;
+  job: {
+    id: string;
+    title: string;
+    prompt: string;
+    room: string;
+    project: string;
+    intendedWorkflow: WorkspaceLocalJobWorkflow;
+    currentStatus: WorkspaceLocalJobStatus;
+  };
+  currentEvents: Array<{
+    action: WorkspaceLocalJobControlAction;
+    createdAt: string;
+    note?: string;
+  }>;
+  paths: WorkspaceLocalWorkerRequestFiles;
+  contextPointers: {
+    workspaceUrl: string;
+    localJobSource: string;
+    localControlSource: string;
+    artifactProjectionApi: string;
+    memoryMaintenanceApi: string;
+    readinessRoomUrl: string;
+  };
+  constraints: string[];
+  resultInstructions: string[];
+};
+
 export type WorkspaceLocalJobControlEvent = {
   schemaVersion: 1;
   id: string;
@@ -156,6 +206,10 @@ export type WorkspaceLocalJobControlEvent = {
   workerPackage?: WorkspaceLocalWorkerPackage;
   result?: WorkspaceLocalWorkerResult;
   resultId?: string;
+  adapter?: string;
+  requestFiles?: WorkspaceLocalWorkerRequestFiles;
+  resultPath?: string;
+  errorMessage?: string;
   note?: string;
 };
 
@@ -174,6 +228,10 @@ export type WorkspaceLocalJobControlInput = {
   resultBody?: string;
   resultTitle?: string;
   resultId?: string;
+  adapter?: string;
+  requestFiles?: WorkspaceLocalWorkerRequestFiles;
+  resultPath?: string;
+  errorMessage?: string;
   note?: string;
 } & WorkspaceLocalJobControlPatch;
 
@@ -190,6 +248,8 @@ export type WorkspaceLocalJobsProjection = {
   events: WorkspaceLocalJobControlEvent[];
   eventsByJob: Record<string, WorkspaceLocalJobControlEvent[]>;
   workerPackagesByJob: Record<string, WorkspaceLocalWorkerPackage>;
+  workerRequestsByJob: Record<string, WorkspaceLocalWorkerRequestFiles>;
+  workerResultPathsByJob: Record<string, string[]>;
   resultsByJob: Record<string, WorkspaceLocalWorkerResult[]>;
   health: {
     present: boolean;
@@ -243,12 +303,17 @@ const CONTROL_ACTION_SET = new Set<string>([
   "result_imported",
   "result_rejected",
   "result_archived",
+  "worker_claimed",
+  "worker_staged",
+  "worker_result_written",
+  "worker_failed",
 ]);
 
 export const WORKSPACE_WORKER_HANDOFF_CONSTRAINTS = [
   "No external send is allowed: do not send Slack, DM, email, or external messages.",
   "Do not mutate Supabase, Monday, Typeform, OpenClaw config, or external systems.",
   "Do not delete, move, rename, or attach files.",
+  "Do not mutate OpenClaw config.",
   "Do not start workers, models, daemons, background jobs, or side effects unless a later approval explicitly permits it.",
   "Treat this package as a manual local handoff contract only.",
 ] as const;
@@ -259,6 +324,14 @@ function storagePath(root = WORKSPACE_LOCAL_JOBS_ROOT): string {
 
 function controlStoragePath(root = WORKSPACE_LOCAL_JOBS_ROOT): string {
   return join(root, WORKSPACE_LOCAL_JOB_CONTROLS_FILE);
+}
+
+function workerRequestsPath(root = WORKSPACE_LOCAL_JOBS_ROOT): string {
+  return join(root, WORKSPACE_WORKER_REQUESTS_DIR);
+}
+
+function workerResultsPath(root = WORKSPACE_LOCAL_JOBS_ROOT): string {
+  return join(root, WORKSPACE_WORKER_RESULTS_DIR);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -286,6 +359,10 @@ function cleanResultBody(value: unknown): string {
 function cleanResultTitle(value: unknown, body: string): string {
   if (typeof value === "string" && value.trim()) return value.trim().slice(0, MAX_TITLE_LENGTH);
   return titleFromPrompt(body).slice(0, MAX_TITLE_LENGTH);
+}
+
+function cleanAdapter(value: unknown): string {
+  return cleanField(value, "codex").replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase() || "codex";
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -340,6 +417,144 @@ export function buildWorkspaceLocalWorkerPackage({
 
 export function formatWorkspaceLocalWorkerPackage(workerPackage: WorkspaceLocalWorkerPackage): string {
   return JSON.stringify(workerPackage, null, 2);
+}
+
+function workerRequestFiles({
+  root,
+  jobId,
+  adapter,
+}: {
+  root: string;
+  jobId: string;
+  adapter: string;
+}): WorkspaceLocalWorkerRequestFiles {
+  const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeAdapter = cleanAdapter(adapter);
+  return {
+    adapter: safeAdapter,
+    requestJsonPath: join(workerRequestsPath(root), `${safeJobId}.json`),
+    requestMarkdownPath: join(workerRequestsPath(root), `${safeJobId}.md`),
+    resultJsonPath: join(workerResultsPath(root), `${safeJobId}.json`),
+    resultMarkdownPath: join(workerResultsPath(root), `${safeJobId}.md`),
+  };
+}
+
+function validateWorkerRequestFiles(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalWorkerRequestFiles> {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { ok: false, errors: ["Worker request files must be an object."] };
+  const adapter = cleanAdapter(value.adapter);
+  const requestJsonPath = typeof value.requestJsonPath === "string" ? value.requestJsonPath.trim() : "";
+  const requestMarkdownPath = typeof value.requestMarkdownPath === "string" ? value.requestMarkdownPath.trim() : "";
+  const resultJsonPath = typeof value.resultJsonPath === "string" ? value.resultJsonPath.trim() : "";
+  const resultMarkdownPath = typeof value.resultMarkdownPath === "string" ? value.resultMarkdownPath.trim() : "";
+  if (!requestJsonPath) errors.push("requestJsonPath is required.");
+  if (!requestMarkdownPath) errors.push("requestMarkdownPath is required.");
+  if (!resultJsonPath) errors.push("resultJsonPath is required.");
+  if (!resultMarkdownPath) errors.push("resultMarkdownPath is required.");
+  return errors.length
+    ? { ok: false, errors }
+    : { ok: true, value: { adapter, requestJsonPath, requestMarkdownPath, resultJsonPath, resultMarkdownPath } };
+}
+
+export function buildWorkspaceLocalWorkerAdapterRequest({
+  job,
+  projection,
+  adapter = "codex",
+  files,
+  now = new Date(),
+  idFactory = randomUUID,
+}: {
+  job: WorkspaceLocalJob;
+  projection: WorkspaceLocalJobsProjection;
+  adapter?: string;
+  files: WorkspaceLocalWorkerRequestFiles;
+  now?: Date;
+  idFactory?: () => string;
+}): WorkspaceLocalWorkerAdapterRequest {
+  const safeAdapter = cleanAdapter(adapter);
+  const workspaceUrl = `/workspace?room=${encodeURIComponent(job.room)}&project=${encodeURIComponent(job.project)}&role=${encodeURIComponent(job.requesterRole)}&job=${encodeURIComponent(job.id)}`;
+  return {
+    schemaVersion: 1,
+    requestId: `local_worker_request_${idFactory().replace(/[^a-zA-Z0-9_-]/g, "")}`,
+    adapter: safeAdapter,
+    createdAt: now.toISOString(),
+    job: {
+      id: job.id,
+      title: job.title,
+      prompt: job.prompt,
+      room: job.room,
+      project: job.project,
+      intendedWorkflow: job.intendedWorkflow,
+      currentStatus: job.status,
+    },
+    currentEvents: (projection.eventsByJob[job.id] ?? []).map((event) => ({
+      action: event.action,
+      createdAt: event.createdAt,
+      ...(event.note ? { note: event.note } : {}),
+    })),
+    paths: files,
+    contextPointers: {
+      workspaceUrl,
+      localJobSource: projection.file,
+      localControlSource: projection.controlFile,
+      artifactProjectionApi: "/api/workspace/artifacts",
+      memoryMaintenanceApi: "/api/workspace/memory-maintenance",
+      readinessRoomUrl: "/workspace?room=readiness",
+    },
+    constraints: [
+      ...WORKSPACE_WORKER_HANDOFF_CONSTRAINTS,
+      `Write the final result to ${files.resultMarkdownPath} or ${files.resultJsonPath} only.`,
+    ],
+    resultInstructions: [
+      "Write a concise result body for Workspace import.",
+      "Use Markdown for the .md result path, or JSON with title/body fields for the .json result path.",
+      "Do not deliver, publish, send, delete files, or mutate external systems.",
+    ],
+  };
+}
+
+export function formatWorkspaceLocalWorkerAdapterRequest(request: WorkspaceLocalWorkerAdapterRequest): string {
+  return [
+    `# Workspace local worker request: ${request.job.title}`,
+    "",
+    `- Request: ${request.requestId}`,
+    `- Adapter: ${request.adapter}`,
+    `- Job: ${request.job.id}`,
+    `- Status: ${request.job.currentStatus}`,
+    `- Room: ${request.job.room}`,
+    `- Project: ${request.job.project}`,
+    `- Workflow: ${request.job.intendedWorkflow}`,
+    "",
+    "## Prompt",
+    "",
+    request.job.prompt,
+    "",
+    "## Current Events",
+    "",
+    request.currentEvents.length
+      ? request.currentEvents.map((event) => `- ${event.createdAt}: ${event.action}${event.note ? ` - ${event.note}` : ""}`).join("\n")
+      : "- No prior worker adapter events.",
+    "",
+    "## Context Pointers",
+    "",
+    `- Workspace: ${request.contextPointers.workspaceUrl}`,
+    `- Local jobs JSONL: ${request.contextPointers.localJobSource}`,
+    `- Local controls JSONL: ${request.contextPointers.localControlSource}`,
+    `- Artifacts API: ${request.contextPointers.artifactProjectionApi}`,
+    `- Memory API: ${request.contextPointers.memoryMaintenanceApi}`,
+    `- Readiness room: ${request.contextPointers.readinessRoomUrl}`,
+    "",
+    "## Constraints",
+    "",
+    ...request.constraints.map((constraint) => `- ${constraint}`),
+    "",
+    "## Result",
+    "",
+    `Write the result to one of these paths only:`,
+    `- ${request.paths.resultMarkdownPath}`,
+    `- ${request.paths.resultJsonPath}`,
+    "",
+  ].join("\n");
 }
 
 export function validateWorkspaceLocalJobInput(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalJobInput> {
@@ -456,6 +671,32 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
     errors.push("Only result_rejected or result_archived controls can include resultId.");
   }
 
+  const adapter = value.adapter !== undefined ? cleanAdapter(value.adapter) : undefined;
+  let requestFiles: WorkspaceLocalWorkerRequestFiles | undefined;
+  if (value.requestFiles !== undefined) {
+    const checkedFiles = validateWorkerRequestFiles(value.requestFiles);
+    if (!checkedFiles.ok) errors.push(...checkedFiles.errors);
+    else requestFiles = checkedFiles.value;
+  }
+  if (["worker_claimed", "worker_staged"].includes(typedAction) && !requestFiles) {
+    errors.push("Worker claim/stage events require request files.");
+  }
+  if (!["worker_claimed", "worker_staged"].includes(typedAction) && value.requestFiles !== undefined) {
+    errors.push("Only worker claim/stage events can include request files.");
+  }
+
+  const resultPath = typeof value.resultPath === "string" ? value.resultPath.trim() : "";
+  if (typedAction === "worker_result_written" && !resultPath) errors.push("resultPath is required.");
+  if (typedAction !== "worker_result_written" && value.resultPath !== undefined) {
+    errors.push("Only worker_result_written controls can include resultPath.");
+  }
+
+  const errorMessage = typeof value.errorMessage === "string" ? value.errorMessage.trim().slice(0, 2000) : "";
+  if (typedAction === "worker_failed" && !errorMessage) errors.push("errorMessage is required.");
+  if (typedAction !== "worker_failed" && value.errorMessage !== undefined) {
+    errors.push("Only worker_failed controls can include errorMessage.");
+  }
+
   const note = cleanPrompt(value.note).slice(0, 1000);
 
   return errors.length
@@ -468,6 +709,10 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
           ...(workerPackage ? { workerPackage } : {}),
           ...(resultBody ? { resultBody, resultTitle } : {}),
           ...(resultId ? { resultId } : {}),
+          ...(adapter ? { adapter } : {}),
+          ...(requestFiles ? { requestFiles } : {}),
+          ...(resultPath ? { resultPath } : {}),
+          ...(errorMessage ? { errorMessage } : {}),
           ...(note ? { note } : {}),
           ...patch,
         },
@@ -597,6 +842,29 @@ export function validateWorkspaceLocalJobControlEvent(value: unknown): Workspace
     errors.push("Only result_rejected or result_archived events can include resultId.");
   }
 
+  if (value.adapter !== undefined && (typeof value.adapter !== "string" || !value.adapter.trim())) {
+    errors.push("adapter must be a non-empty string.");
+  }
+
+  if (value.action === "worker_claimed" || value.action === "worker_staged") {
+    const checkedFiles = validateWorkerRequestFiles(value.requestFiles);
+    if (!checkedFiles.ok) errors.push(...checkedFiles.errors);
+  } else if (value.requestFiles !== undefined) {
+    errors.push("Only worker_claimed or worker_staged events can include requestFiles.");
+  }
+
+  if (value.action === "worker_result_written") {
+    if (typeof value.resultPath !== "string" || !value.resultPath.trim()) errors.push("resultPath is required.");
+  } else if (value.resultPath !== undefined) {
+    errors.push("Only worker_result_written events can include resultPath.");
+  }
+
+  if (value.action === "worker_failed") {
+    if (typeof value.errorMessage !== "string" || !value.errorMessage.trim()) errors.push("errorMessage is required.");
+  } else if (value.errorMessage !== undefined) {
+    errors.push("Only worker_failed events can include errorMessage.");
+  }
+
   return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalJobControlEvent };
 }
 
@@ -648,7 +916,20 @@ export async function applyWorkspaceLocalJobControl(
 
   const root = options.root ?? WORKSPACE_LOCAL_JOBS_ROOT;
   const now = (options.now ?? new Date()).toISOString();
-  const { jobId, action, workerPackage, resultBody, resultTitle, resultId, note, ...patch } = checked.value;
+  const {
+    jobId,
+    action,
+    workerPackage,
+    resultBody,
+    resultTitle,
+    resultId,
+    adapter,
+    requestFiles,
+    resultPath,
+    errorMessage,
+    note,
+    ...patch
+  } = checked.value;
   const result: WorkspaceLocalWorkerResult | undefined = resultBody
     ? {
         schemaVersion: 1,
@@ -672,6 +953,10 @@ export async function applyWorkspaceLocalJobControl(
     ...(workerPackage ? { workerPackage } : {}),
     ...(result ? { result } : {}),
     ...(resultId ? { resultId } : {}),
+    ...(adapter ? { adapter } : {}),
+    ...(requestFiles ? { requestFiles } : {}),
+    ...(resultPath ? { resultPath } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
     ...(note ? { note } : {}),
   };
 
@@ -681,6 +966,154 @@ export async function applyWorkspaceLocalJobControl(
   await mkdir(root, { recursive: true });
   await appendFile(controlStoragePath(root), `${JSON.stringify(event)}\n`, "utf8");
   return event;
+}
+
+export type WorkspaceLocalWorkerClaimResult = {
+  job: WorkspaceLocalJob;
+  request: WorkspaceLocalWorkerAdapterRequest;
+  files: WorkspaceLocalWorkerRequestFiles;
+  events: WorkspaceLocalJobControlEvent[];
+};
+
+export type WorkspaceLocalWorkerImportResult = {
+  job: WorkspaceLocalJob;
+  resultPath: string;
+  events: WorkspaceLocalJobControlEvent[];
+};
+
+export async function claimWorkspaceLocalWorkerJob({
+  jobId,
+  adapter = "codex",
+  root = WORKSPACE_LOCAL_JOBS_ROOT,
+  now = new Date(),
+  idFactory = randomUUID,
+}: {
+  jobId?: string;
+  adapter?: string;
+  root?: string;
+  now?: Date;
+  idFactory?: () => string;
+} = {}): Promise<WorkspaceLocalWorkerClaimResult> {
+  const projection = await getWorkspaceLocalJobs({ root });
+  const job = jobId
+    ? projection.records.find((record) => record.id === jobId)
+    : projection.records.find((record) => record.status === "ready_for_worker");
+  if (!job) throw new Error(jobId ? `Local job ${jobId} was not found.` : "No ready local worker job was found.");
+  if (job.status !== "ready_for_worker") {
+    throw new Error(`Local job ${job.id} is ${job.status}; mark it ready_for_worker before claiming.`);
+  }
+
+  const safeAdapter = cleanAdapter(adapter);
+  const files = workerRequestFiles({ root, jobId: job.id, adapter: safeAdapter });
+  const request = buildWorkspaceLocalWorkerAdapterRequest({
+    job,
+    projection,
+    adapter: safeAdapter,
+    files,
+    now,
+    idFactory,
+  });
+
+  await mkdir(workerRequestsPath(root), { recursive: true });
+  await mkdir(workerResultsPath(root), { recursive: true });
+  await writeFile(files.requestJsonPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
+  await writeFile(files.requestMarkdownPath, formatWorkspaceLocalWorkerAdapterRequest(request), "utf8");
+
+  const claimed = await applyWorkspaceLocalJobControl(
+    {
+      jobId: job.id,
+      action: "worker_claimed",
+      adapter: safeAdapter,
+      requestFiles: files,
+      note: `Claimed by ${safeAdapter} local adapter. No worker was invoked.`,
+    },
+    { root, now, idFactory },
+  );
+  const staged = await applyWorkspaceLocalJobControl(
+    {
+      jobId: job.id,
+      action: "worker_staged",
+      adapter: safeAdapter,
+      requestFiles: files,
+      note: `Request package written for ${safeAdapter}. Result must be written to the staged result path only.`,
+    },
+    { root, now, idFactory },
+  );
+
+  return {
+    job,
+    request,
+    files,
+    events: [claimed, staged],
+  };
+}
+
+function parseWorkerResultContent(resultPath: string, content: string): { title: string; body: string } {
+  if (resultPath.endsWith(".json")) {
+    const parsed = JSON.parse(content) as unknown;
+    if (!isRecord(parsed)) throw new Error("JSON result must be an object.");
+    const body = cleanResultBody(parsed.body ?? parsed.result ?? parsed.content);
+    if (!body) throw new Error("JSON result requires a non-empty body, result, or content field.");
+    return {
+      title: cleanResultTitle(parsed.title, body),
+      body,
+    };
+  }
+
+  const body = cleanResultBody(content);
+  if (!body) throw new Error("Result file is empty.");
+  const heading = body.split("\n").find((line) => line.trim().startsWith("#"));
+  return {
+    title: cleanResultTitle(heading?.replace(/^#+\s*/, ""), body) || cleanResultTitle(basename(resultPath), body),
+    body,
+  };
+}
+
+export async function importWorkspaceLocalWorkerResult({
+  jobId,
+  resultPath,
+  root = WORKSPACE_LOCAL_JOBS_ROOT,
+  now = new Date(),
+  idFactory = randomUUID,
+}: {
+  jobId: string;
+  resultPath: string;
+  root?: string;
+  now?: Date;
+  idFactory?: () => string;
+}): Promise<WorkspaceLocalWorkerImportResult> {
+  const projection = await getWorkspaceLocalJobs({ root });
+  const job = projection.records.find((record) => record.id === jobId);
+  if (!job) throw new Error(`Local job ${jobId} was not found.`);
+
+  const resolvedResultPath = resolve(resultPath);
+  const content = await readFile(resolvedResultPath, "utf8");
+  const parsed = parseWorkerResultContent(resolvedResultPath, content);
+  const written = await applyWorkspaceLocalJobControl(
+    {
+      jobId,
+      action: "worker_result_written",
+      resultPath: resolvedResultPath,
+      note: "Worker adapter result file detected locally. Not delivered or sent.",
+    },
+    { root, now, idFactory },
+  );
+  const imported = await applyWorkspaceLocalJobControl(
+    {
+      jobId,
+      action: "result_imported",
+      resultTitle: parsed.title,
+      resultBody: parsed.body,
+      note: `Imported from ${resolvedResultPath}.`,
+    },
+    { root, now, idFactory },
+  );
+
+  return {
+    job,
+    resultPath: resolvedResultPath,
+    events: [written, imported],
+  };
 }
 
 export async function getWorkspaceLocalJobs(
@@ -698,6 +1131,8 @@ export async function getWorkspaceLocalJobs(
     events: [],
     eventsByJob: {},
     workerPackagesByJob: {},
+    workerRequestsByJob: {},
+    workerResultPathsByJob: {},
     resultsByJob: {},
     health: {
       present: false,
@@ -849,6 +1284,26 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
+      if (event.action === "worker_claimed" && event.requestFiles) {
+        projection.workerRequestsByJob[event.jobId] = event.requestFiles;
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "worker_claimed",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
+      if (event.action === "worker_staged" && event.requestFiles) {
+        projection.workerRequestsByJob[event.jobId] = event.requestFiles;
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "worker_staged",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
       if (event.action === "worker_package_created" && event.workerPackage) {
         projection.workerPackagesByJob[event.jobId] = event.workerPackage;
         jobsById.set(event.jobId, {
@@ -859,11 +1314,33 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
+      if (event.action === "worker_result_written" && event.resultPath) {
+        projection.workerResultPathsByJob[event.jobId] = [
+          ...(projection.workerResultPathsByJob[event.jobId] ?? []),
+          event.resultPath,
+        ];
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "worker_result_written",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
       if (event.action === "result_imported" && event.result) {
         resultsById.set(event.result.id, event.result);
         jobsById.set(event.jobId, {
           ...job,
           status: "completed_local",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
+      if (event.action === "worker_failed") {
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "worker_failed",
           updatedAt: event.createdAt,
         });
         return;

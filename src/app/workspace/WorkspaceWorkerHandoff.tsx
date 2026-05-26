@@ -55,6 +55,23 @@ export default function WorkspaceWorkerHandoff({
     () => events.some((event) => event.action === "worker_package_created"),
     [events],
   );
+  const latestRequestFiles = useMemo(
+    () => [...events].reverse().find((event) => event.requestFiles)?.requestFiles ?? null,
+    [events],
+  );
+  const latestResultPath = useMemo(
+    () => [...events].reverse().find((event) => event.resultPath)?.resultPath ?? null,
+    [events],
+  );
+  const localAdapterState = useMemo(() => {
+    if (job.status === "completed_local") return "completed local";
+    if (job.status === "worker_failed") return "failed locally";
+    if (job.status === "worker_result_written") return "result written";
+    if (job.status === "worker_staged") return "staged locally";
+    if (job.status === "worker_claimed") return "claimed locally";
+    if (job.status === "ready_for_worker") return "ready for worker";
+    return job.status.replaceAll("_", " ");
+  }, [job.status]);
 
   async function postControl(body: Record<string, unknown>) {
     const response = await fetch("/api/workspace/local-jobs", {
@@ -131,13 +148,26 @@ export default function WorkspaceWorkerHandoff({
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase text-emerald-300">Manual worker handoff</p>
           <p className="mt-1 text-sm leading-6 text-stone-300">
-            Create a local package and paste back a result. Codex, Claude, Hermes, workers, sends, and external writes are not connected here.
+            Create a local package, or use the Codex adapter CLI to stage files on disk. Codex, Claude, Hermes, sends, and external writes are not invoked here.
           </p>
         </div>
         <span className="rounded-md border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
-          Non-executing
+          {localAdapterState}
         </span>
       </div>
+
+      {latestRequestFiles ? (
+        <div className="mt-4 rounded-md border border-white/10 bg-black/15 p-3">
+          <p className="text-[11px] font-semibold uppercase text-stone-500">Local Codex adapter files</p>
+          <div className="mt-2 grid gap-1 text-xs leading-5 text-stone-400">
+            <p className="break-all">Request JSON: {latestRequestFiles.requestJsonPath}</p>
+            <p className="break-all">Request MD: {latestRequestFiles.requestMarkdownPath}</p>
+            <p className="break-all">Result JSON: {latestRequestFiles.resultJsonPath}</p>
+            <p className="break-all">Result MD: {latestRequestFiles.resultMarkdownPath}</p>
+            {latestResultPath ? <p className="break-all text-emerald-300">Imported result path: {latestResultPath}</p> : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-1.5 sm:gap-2">
         <button
@@ -244,8 +274,20 @@ export default function WorkspaceWorkerHandoff({
                 {event.workerPackage ? (
                   <p className="mt-1 break-all text-xs text-stone-500">{event.workerPackage.packageId}</p>
                 ) : null}
+                {event.requestFiles ? (
+                  <div className="mt-2 grid gap-1 text-xs leading-5 text-stone-500">
+                    <p className="break-all">Request: {event.requestFiles.requestMarkdownPath}</p>
+                    <p className="break-all">Result target: {event.requestFiles.resultMarkdownPath}</p>
+                  </div>
+                ) : null}
+                {event.resultPath ? (
+                  <p className="mt-1 break-all text-xs text-emerald-300">{event.resultPath}</p>
+                ) : null}
                 {event.result ? (
                   <p className="mt-1 text-xs text-emerald-300">{event.result.title}</p>
+                ) : null}
+                {event.errorMessage ? (
+                  <p className="mt-1 break-words text-xs text-rose-300">{event.errorMessage}</p>
                 ) : null}
               </div>
             )) : (

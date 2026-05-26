@@ -11,9 +11,11 @@ import { tmpdir } from "node:os";
 import {
   applyWorkspaceLocalJobControl,
   buildWorkspaceLocalWorkerPackage,
+  claimWorkspaceLocalWorkerJob,
   createWorkspaceLocalJob,
   formatWorkspaceLocalWorkerPackage,
   getWorkspaceLocalJobs,
+  importWorkspaceLocalWorkerResult,
   inferWorkspaceLocalJobWorkflow,
   validateWorkspaceLocalJobControlInput,
   validateWorkspaceLocalJobInput,
@@ -252,6 +254,73 @@ test("workspace worker handoff events project ready status, packages, and manual
     assert.equal(projection.resultsByJob[job.id][0].title, "Manual local answer");
     assert.equal(projection.resultsByJob[job.id][0].status, "result_imported");
     assert.equal(projection.health.controlRecordCount, 3);
+  });
+});
+
+test("workspace codex worker adapter claims, exports, and imports through local files", async () => {
+  await withTempRoot(async (root) => {
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Stage this local job for Codex adapter verification",
+        project: "undeniable-os",
+        room: "home",
+        requesterRole: "rhys",
+        intendedWorkflow: "ask_atlas",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T01:02:03.000Z"),
+        idFactory: () => "codex-adapter-target",
+      },
+    );
+
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "ready_for_worker" },
+      {
+        root,
+        now: new Date("2026-05-26T02:00:00.000Z"),
+        idFactory: () => "ready-adapter-control",
+      },
+    );
+
+    const claim = await claimWorkspaceLocalWorkerJob({
+      jobId: job.id,
+      adapter: "codex",
+      root,
+      now: new Date("2026-05-26T02:01:00.000Z"),
+      idFactory: () => "claim-adapter",
+    });
+
+    assert.equal(claim.files.adapter, "codex");
+    assert.match(await readFile(claim.files.requestMarkdownPath, "utf8"), /Write the final result/i);
+    assert.match(await readFile(claim.files.requestJsonPath, "utf8"), /workspace-worker-results/);
+
+    let projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records[0].status, "worker_staged");
+    assert.equal(projection.workerRequestsByJob[job.id].requestJsonPath, claim.files.requestJsonPath);
+    assert.deepEqual(
+      projection.eventsByJob[job.id].map((event) => event.action),
+      ["ready_for_worker", "worker_claimed", "worker_staged"],
+    );
+
+    await writeFile(claim.files.resultMarkdownPath, "# Codex adapter result\n\nLocal adapter result body only.", "utf8");
+    const imported = await importWorkspaceLocalWorkerResult({
+      jobId: job.id,
+      resultPath: claim.files.resultMarkdownPath,
+      root,
+      now: new Date("2026-05-26T02:02:00.000Z"),
+      idFactory: () => "import-adapter",
+    });
+
+    assert.deepEqual(imported.events.map((event) => event.action), ["worker_result_written", "result_imported"]);
+    projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records[0].status, "completed_local");
+    assert.equal(projection.workerResultPathsByJob[job.id][0], claim.files.resultMarkdownPath);
+    assert.equal(projection.resultsByJob[job.id][0].title, "Codex adapter result");
+    assert.match(projection.resultsByJob[job.id][0].body, /Local adapter result body only/);
+
+    const baseLines = (await readFile(join(root, WORKSPACE_LOCAL_JOBS_FILE), "utf8")).trim().split("\n");
+    assert.equal(baseLines.length, 1);
   });
 });
 
