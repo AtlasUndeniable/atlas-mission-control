@@ -1,12 +1,16 @@
 import Link from "next/link";
+import type { Viewport } from "next";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
+import WorkspaceComposer from "./WorkspaceComposer";
 import { groupArtifacts, getWorkspaceArtifacts } from "@/app/api/workspace/_lib/artifact-projection";
 import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } from "@/app/api/workspace/_lib/artifact-projection";
 import { buildReaperData } from "@/lib/reaper";
 import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
+import { getWorkspaceLocalJobs } from "@/lib/workspace-local-jobs";
+import type { WorkspaceLocalJob, WorkspaceLocalJobsProjection } from "@/lib/workspace-local-jobs";
 import { getWorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import type { WorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import { workspaceArtifactControlFixtures, workspaceTrainingGroundsFixtures } from "@/lib/workspace-contract-fixtures";
@@ -38,6 +42,10 @@ import type { WorkspaceRunsProjection } from "@/lib/workspace-runs-projection";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
 
 const SLACK_QUEUE_FILE = "/Users/atlasai/.openclaw/data/slack-queue.json";
 const JIAN_APPROVALS_FILE = "/Users/atlasai/.openclaw/data/pending-approvals.json";
@@ -57,6 +65,7 @@ type WorkStreamItem = {
   updatedAt: string | null;
   source: "real" | "sandbox";
   href?: string;
+  localJob?: WorkspaceLocalJob;
 };
 
 interface SlackQueueItem {
@@ -109,6 +118,7 @@ interface WorkspaceSnapshot {
     recent: WorkspaceJob[];
   };
   runs: WorkspaceRunsProjection;
+  localJobs: WorkspaceLocalJobsProjection;
   reaper: {
     totalPending: number;
     stale: number;
@@ -236,7 +246,7 @@ function buildJobs(groups: ArtifactGroup[]): WorkspaceJob[] {
 }
 
 async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
-  const [slackQueue, jianApprovals, artifacts, runs, artifactControl, memoryMaintenance] = await Promise.all([
+  const [slackQueue, jianApprovals, artifacts, runs, artifactControl, memoryMaintenance, localJobs] = await Promise.all([
     readJsonArray<SlackQueueItem>(SLACK_QUEUE_FILE),
     readJsonArray<JianApprovalItem>(JIAN_APPROVALS_FILE),
     getWorkspaceArtifacts(),
@@ -258,6 +268,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       },
     }),
     getWorkspaceMemoryMaintenanceProjection(),
+    getWorkspaceLocalJobs(),
   ]);
   const reaper = buildReaperData();
   const visibleSlack = slackQueue.filter((item) => item.status && VISIBLE_SLACK_STATUSES.has(item.status));
@@ -293,6 +304,7 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       recent: jobs.slice(0, 6),
     },
     runs,
+    localJobs,
     reaper: {
       totalPending: reaper.summary.totalPending,
       stale: reaper.summary.stale,
@@ -1363,6 +1375,17 @@ function latestArtifactControlItems(snapshot: WorkspaceSnapshot): WorkspaceArtif
 }
 
 function buildWorkStreamItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
+  const localItems = snapshot.localJobs.records.slice(0, 5).map((job) => ({
+    id: job.id,
+    kind: job.intendedWorkflow.replaceAll("_", " "),
+    title: job.title,
+    detail: job.prompt,
+    status: `${job.status.replaceAll("_", " ")} / ${job.execution.state.replaceAll("_", " ")}`,
+    updatedAt: job.updatedAt,
+    source: "real" as const,
+    href: workspaceHref({ room: job.room as WorkspaceRoomId, role: "rhys", project: job.project as WorkspaceProjectId }),
+    localJob: job,
+  }));
   const agentItems = snapshot.runs.records.agentRuns.slice(0, 3).map((run) => ({
     id: run.id,
     kind: run.workflow.replaceAll("_", " "),
@@ -1393,7 +1416,7 @@ function buildWorkStreamItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
     source: "real" as const,
     href: workspaceHref({ room: "knowledge", role: "rhys", project: "memory-knowledge" }),
   }));
-  const realItems = [...agentItems, ...jobItems, ...artifactItems]
+  const realItems = [...localItems, ...agentItems, ...jobItems, ...artifactItems]
     .sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
 
   if (realItems.length) return realItems.slice(0, 6);
@@ -1450,10 +1473,14 @@ function sidebarWorkItems(snapshot: WorkspaceSnapshot): WorkStreamItem[] {
 }
 
 function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  const hasRealRecords = snapshot.runs.counts.totalValidRecords > 0 || snapshot.artifactControl.counts.artifacts > 0 || snapshot.jobs.total > 0;
+  const hasRealRecords =
+    snapshot.localJobs.health.validRecordCount > 0 ||
+    snapshot.runs.counts.totalValidRecords > 0 ||
+    snapshot.artifactControl.counts.artifacts > 0 ||
+    snapshot.jobs.total > 0;
 
   return (
-    <section className="rounded-xl border border-stone-300 bg-white p-4 shadow-sm sm:p-5">
+    <section className="w-full max-w-full overflow-hidden rounded-xl border border-stone-300 bg-white p-4 shadow-sm sm:p-5">
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1467,27 +1494,27 @@ function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               {hasRealRecords ? "Reading live records" : "Sandbox examples visible"}
             </span>
           </div>
-          <h3 className="mt-4 max-w-2xl text-2xl font-semibold tracking-normal text-stone-950 sm:text-3xl">
+          <h3 className="mt-4 max-w-2xl break-words text-2xl font-semibold tracking-normal text-stone-950 sm:text-3xl">
             Start work, watch the loop, inspect the result.
           </h3>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-stone-600">
+          <p className="mt-3 max-w-3xl break-words text-sm leading-6 text-stone-600">
             Workspace is becoming the place where Atlas receives work, shows its plan, produces artifacts, and asks for review. Creation and execution are locked until the backend safety loop is ready.
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <WorkbenchStat label="Work threads" value={String(snapshot.jobs.total)} detail={`${snapshot.jobs.ready} with packaged outputs.`} />
+            <WorkbenchStat label="Local drafts" value={String(snapshot.localJobs.health.validRecordCount)} detail="Queued here only. No execution." />
             <WorkbenchStat label="Artifacts" value={String(snapshot.artifactControl.counts.artifacts)} detail={`${snapshot.artifactControl.discovery.counts.realMetadataRecordsFound} real metadata sidecars.`} />
             <WorkbenchStat label="Memory health" value={snapshot.memoryMaintenance.status} detail={`${snapshot.memoryMaintenance.summary.contextPacksGenerated} context packs indexed.`} />
           </div>
         </div>
 
         <div className="rounded-lg border border-stone-200 bg-[#f8f7f4] p-4">
-          <p className="text-sm font-semibold text-stone-950">Locked starter intents</p>
-          <p className="mt-1 text-sm leading-6 text-stone-600">These are product affordances only. They do not submit, schedule, send, or write.</p>
+          <p className="text-sm font-semibold text-stone-950">Local draft intents</p>
+          <p className="mt-1 text-sm leading-6 text-stone-600">The composer can save a Workspace draft job. Running, assignment, file attachment, and delivery stay locked.</p>
           <div className="mt-4 grid gap-2">
             {["Ask Atlas", "Start audit", "Create content batch", "Build call archive", "Start training session"].map((intent) => (
               <div key={intent} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5">
                 <p className="text-sm font-medium text-stone-950">{intent}</p>
-                <span className="rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">Locked</span>
+                <span className="rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">Draft only</span>
               </div>
             ))}
           </div>
@@ -1528,12 +1555,31 @@ function WorkStreamPanel({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">
                 Updated {formatDate(item.updatedAt)}
               </span>
+              {item.localJob ? (
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+                  Workspace local intake
+                </span>
+              ) : null}
               {item.href ? (
                 <Link href={item.href} className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600 hover:border-stone-300">
                   Open room
                 </Link>
               ) : null}
             </div>
+            {item.localJob ? (
+              <div className="mt-3 flex flex-wrap gap-2 border-t border-stone-200 pt-3">
+                {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
+                  <button
+                    key={action}
+                    type="button"
+                    disabled
+                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
+                  >
+                    {action} locked
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </article>
         ))}
       </div>
@@ -2393,39 +2439,6 @@ function RoomContent({
   return <HomeRoom snapshot={snapshot} />;
 }
 
-function Composer() {
-  const intents = ["Ask Atlas", "Start audit", "Create content batch", "Build call archive", "Start training session"];
-
-  return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-stone-200 bg-[#f4f3ef]/95 px-4 py-3 backdrop-blur sm:px-6 lg:left-[260px] lg:right-[320px]">
-      <div className="mx-auto max-w-3xl rounded-lg border border-stone-300 bg-white p-3 shadow-xl shadow-stone-900/15">
-        <textarea
-          aria-label="Atlas composer preview"
-          className="min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-stone-600 outline-none placeholder:text-stone-400 disabled:cursor-not-allowed sm:min-h-16"
-          disabled
-          placeholder="Ask Atlas to start work, build an audit, create a content batch, package a call archive, or train its context..."
-        />
-        <div className="flex flex-wrap items-center gap-2 border-t border-stone-100 px-2 pt-2 sm:pt-3">
-          {intents.map((intent, index) => (
-            <span
-              key={intent}
-              className={classNames(
-                "rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600",
-                index > 2 && "hidden sm:inline-flex",
-              )}
-            >
-              {intent}
-            </span>
-          ))}
-          <span className="ml-auto rounded-full bg-stone-950 px-2.5 py-1 text-xs font-medium text-white">
-            Locked
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default async function WorkspacePage({
   searchParams,
 }: {
@@ -2435,7 +2448,7 @@ export default async function WorkspacePage({
   const params = searchParams ? await searchParams : {};
   const { room, role, project } = getWorkspaceSelection(params);
   const roomMeta = {
-    home: String(snapshot.runs.counts.totalValidRecords),
+    home: String(snapshot.runs.counts.totalValidRecords + snapshot.localJobs.health.validRecordCount),
     audits: String(snapshot.runs.counts.auditRuns),
     content: String(snapshot.runs.counts.contentBatches),
     approvals: String(snapshot.approvals.totalPending),
@@ -2452,9 +2465,9 @@ export default async function WorkspacePage({
   } satisfies Record<WorkspaceRoomId, string>;
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f4f3ef] text-stone-950">
-      <div className="mx-auto min-h-screen max-w-[1760px] lg:grid lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-        <aside className="border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
+    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#f4f3ef] text-stone-950">
+      <div className="mx-auto min-h-screen w-full max-w-[1760px] overflow-x-hidden lg:grid lg:grid-cols-[280px_minmax(0,1fr)_340px]">
+        <aside className="max-w-full overflow-x-hidden border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
           <div className="flex items-center justify-between gap-3 lg:block">
             <div>
               <p className="text-xs font-semibold text-stone-400">Atlas</p>
@@ -2510,7 +2523,7 @@ export default async function WorkspacePage({
           </div>
         </aside>
 
-        <section className="min-w-0 border-stone-200 lg:border-x">
+        <section className="min-w-0 max-w-full overflow-x-hidden border-stone-200 lg:border-x">
           <RoomHeader room={room} project={project} />
 
           <div className="mx-auto max-w-5xl px-4 pb-44 pt-6 sm:px-6">
@@ -2518,7 +2531,7 @@ export default async function WorkspacePage({
           </div>
 
           <div id="composer">
-            <Composer />
+            <WorkspaceComposer room={room} role={role} project={project} />
           </div>
         </section>
 
