@@ -7,17 +7,20 @@ import { readFile } from "node:fs/promises";
 
 import WorkspaceComposer from "./WorkspaceComposer";
 import WorkspaceLocalJobControls from "./WorkspaceLocalJobControls";
+import WorkspaceWorkerHandoff from "./WorkspaceWorkerHandoff";
 import { groupArtifacts, getWorkspaceArtifacts } from "@/app/api/workspace/_lib/artifact-projection";
 import type { ArtifactGroup, WorkspaceArtifact as ScannedWorkspaceArtifact } from "@/app/api/workspace/_lib/artifact-projection";
 import { buildReaperData } from "@/lib/reaper";
 import { getWorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import type { WorkspaceArtifactControlProjection } from "@/lib/workspace-artifact-control-projection";
 import {
+  buildWorkspaceLocalWorkerPackage,
+  formatWorkspaceLocalWorkerPackage,
   getWorkspaceLocalJobs,
   WORKSPACE_LOCAL_JOB_PROJECTS as LOCAL_JOB_PROJECT_IDS,
   WORKSPACE_LOCAL_JOB_ROOMS as LOCAL_JOB_ROOM_IDS,
 } from "@/lib/workspace-local-jobs";
-import type { WorkspaceLocalJob, WorkspaceLocalJobsProjection } from "@/lib/workspace-local-jobs";
+import type { WorkspaceLocalJob, WorkspaceLocalJobsProjection, WorkspaceLocalWorkerPackageContextSummary } from "@/lib/workspace-local-jobs";
 import { getWorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import type { WorkspaceMemoryMaintenanceProjection } from "@/lib/workspace-memory-maintenance-projection";
 import { workspaceArtifactControlFixtures, workspaceTrainingGroundsFixtures } from "@/lib/workspace-contract-fixtures";
@@ -328,6 +331,41 @@ async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       withDraft: reaper.summary.withDraft,
       withSuggestion: reaper.summary.withSuggestion,
       updatedAt: reaper.updatedAt,
+    },
+  };
+}
+
+function buildWorkerPackageContextSummary(snapshot: WorkspaceSnapshot): WorkspaceLocalWorkerPackageContextSummary {
+  return {
+    generatedAt: snapshot.generatedAt,
+    localJobs: {
+      active: snapshot.localJobs.records.length,
+      archived: snapshot.localJobs.archivedRecords.length,
+      controls: snapshot.localJobs.health.controlRecordCount,
+    },
+    artifacts: {
+      total: snapshot.artifacts.total,
+      recentTitles: snapshot.artifacts.recent.slice(0, 5).map((artifact) => artifact.title),
+      latestAuditTitle: snapshot.artifacts.latestAudit?.title ?? null,
+    },
+    memory: {
+      status: snapshot.memoryMaintenance.status,
+      contextPacks: snapshot.memoryMaintenance.summary.contextPacksGenerated,
+      reviewItems: snapshot.memoryMaintenance.summary.reviewQueueItems,
+    },
+    runs: {
+      validRecords: snapshot.runs.counts.totalValidRecords,
+      sourcesPresent: snapshot.runs.counts.sourcesPresent,
+    },
+    approvals: {
+      pending: snapshot.approvals.totalPending,
+      slackVisible: snapshot.approvals.slackVisible,
+      taskReviews: snapshot.approvals.jianActive,
+    },
+    readiness: {
+      localJobSource: snapshot.localJobs.file,
+      artifactRecords: snapshot.artifactControl.counts.artifacts,
+      externalSystems: "not_connected",
     },
   };
 }
@@ -2361,6 +2399,62 @@ function LocalJobDetailPanel({
   );
 }
 
+function SelectedLocalJobSurface({
+  job,
+  role,
+  snapshot,
+}: {
+  job: WorkspaceLocalJob;
+  role: WorkspaceRoleId;
+  snapshot: WorkspaceSnapshot;
+}) {
+  const workerPackage = buildWorkspaceLocalWorkerPackage({
+    job,
+    contextSummary: buildWorkerPackageContextSummary(snapshot),
+    now: new Date(snapshot.generatedAt),
+    idFactory: () => `${job.id}_${job.updatedAt}`,
+  });
+  const packageText = formatWorkspaceLocalWorkerPackage(workerPackage);
+  const events = snapshot.localJobs.eventsByJob[job.id] ?? [];
+  const results = snapshot.localJobs.resultsByJob[job.id] ?? [];
+
+  return (
+    <section className="space-y-3 border-b border-white/10 pb-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase text-emerald-300">Selected task</p>
+          <h3 className="mt-1 break-words text-lg font-semibold text-stone-100">{job.title}</h3>
+        </div>
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
+          Local controls only
+        </span>
+      </div>
+
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.85fr)]">
+        <WorkspaceLocalJobControls
+          job={job}
+          role={role}
+          rooms={ROOMS
+            .filter((candidate) => (LOCAL_JOB_ROOM_IDS as readonly string[]).includes(candidate.id))
+            .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
+          projects={PROJECTS
+            .filter((candidate) => (LOCAL_JOB_PROJECT_IDS as readonly string[]).includes(candidate.id))
+            .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
+        />
+        <LocalJobDetailPanel job={job} snapshot={snapshot} />
+      </div>
+
+      <WorkspaceWorkerHandoff
+        job={job}
+        workerPackage={workerPackage}
+        packageText={packageText}
+        events={events}
+        results={results}
+      />
+    </section>
+  );
+}
+
 function InlineArtifactCard({ artifact }: { artifact: ScannedWorkspaceArtifact }) {
   return (
     <article className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
@@ -2768,7 +2862,8 @@ function SessionThread({
   const composerConfig = roomComposerConfig(room);
   const activeSession = Boolean(selectedJob) || Boolean(composerConfig) || !["home", "readiness"].includes(room);
   const roomInfo = selectedRoom(room);
-  const visibleJobs = localJobsForRoom(room, snapshot.localJobs.records, selectedJob);
+  const visibleJobs = localJobsForRoom(room, snapshot.localJobs.records, selectedJob)
+    .filter((job) => job.id !== selectedJob?.id);
   const artifacts = snapshot.artifacts.recent.slice(0, 3);
   const showLocalTaskStrip = ["home", "audits", "content", "training"].includes(room);
 
@@ -2787,12 +2882,18 @@ function SessionThread({
         </div>
       </section>
 
+      {selectedJob ? (
+        <SelectedLocalJobSurface job={selectedJob} role={role} snapshot={snapshot} />
+      ) : null}
+
       <RoomSpecificContent room={room} role={role} snapshot={snapshot} />
 
       {showLocalTaskStrip ? (
         <section className="space-y-3 border-b border-white/10 pb-5">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-stone-200">{room === "home" ? "Recent local tasks" : "Local drafts in this lane"}</p>
+            <p className="text-sm font-semibold text-stone-200">
+              {selectedJob ? "Other local tasks" : room === "home" ? "Recent local tasks" : "Local drafts in this lane"}
+            </p>
             <span className="text-xs text-stone-500">{visibleJobs.length} shown</span>
           </div>
           {visibleJobs.length ? (
@@ -2806,27 +2907,11 @@ function SessionThread({
             ))
           ) : (
             <EmptyRunState
-              title="No local tasks in this room yet"
-              detail="Save a local draft here and it will appear as a Workspace record before any execution path exists."
+              title={selectedJob ? "No other local tasks shown" : "No local tasks in this room yet"}
+              detail={selectedJob ? "The selected task is pinned above with its local controls." : "Save a local draft here and it will appear as a Workspace record before any execution path exists."}
             />
           )}
         </section>
-      ) : null}
-
-      {selectedJob ? (
-        <>
-          <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} />
-          <WorkspaceLocalJobControls
-            job={selectedJob}
-            role={role}
-            rooms={ROOMS
-              .filter((candidate) => (LOCAL_JOB_ROOM_IDS as readonly string[]).includes(candidate.id))
-              .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
-            projects={PROJECTS
-              .filter((candidate) => (LOCAL_JOB_PROJECT_IDS as readonly string[]).includes(candidate.id))
-              .map((candidate) => ({ id: candidate.id, label: candidate.label }))}
-          />
-        </>
       ) : null}
 
       {room === "home" && artifacts.length ? (

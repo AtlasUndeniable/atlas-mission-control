@@ -4,13 +4,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
   applyWorkspaceLocalJobControl,
+  buildWorkspaceLocalWorkerPackage,
   createWorkspaceLocalJob,
+  formatWorkspaceLocalWorkerPackage,
   getWorkspaceLocalJobs,
   inferWorkspaceLocalJobWorkflow,
   validateWorkspaceLocalJobControlInput,
@@ -58,6 +60,7 @@ test("workspace local job control validation rejects invalid local moves", () =>
   assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "launch_worker" }).ok, false);
   assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "update", room: "slack" }).ok, false);
   assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "update", project: "supabase-prod" }).ok, false);
+  assert.equal(validateWorkspaceLocalJobControlInput({ jobId: "job_1", action: "result_imported" }).ok, false);
 });
 
 test("workspace local job intake appends a local-only queued record", async () => {
@@ -165,6 +168,89 @@ test("workspace local job controls edit, reassign, archive, and delete through a
     assert.equal(projection.records.length, 0);
     assert.equal(projection.archivedRecords.length, 0);
     assert.equal(projection.health.deletedRecordCount, 1);
+    assert.equal(projection.health.controlRecordCount, 3);
+  });
+});
+
+test("workspace worker handoff events project ready status, packages, and manual results", async () => {
+  await withTempRoot(async (root) => {
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Draft a local worker handoff package",
+        project: "undeniable-os",
+        room: "home",
+        requesterRole: "rhys",
+        intendedWorkflow: "ask_atlas",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T01:02:03.000Z"),
+        idFactory: () => "worker-target",
+      },
+    );
+    const contextSummary = {
+      generatedAt: "2026-05-26T01:30:00.000Z",
+      localJobs: { active: 1, archived: 0, controls: 0 },
+      artifacts: { total: 2, recentTitles: ["Read-only audit artifact"], latestAuditTitle: "Read-only audit artifact" },
+      memory: { status: "ready", contextPacks: 3, reviewItems: 1 },
+      runs: { validRecords: 4, sourcesPresent: 2 },
+      approvals: { pending: 1, slackVisible: 1, taskReviews: 0 },
+      readiness: {
+        localJobSource: join(root, WORKSPACE_LOCAL_JOBS_FILE),
+        artifactRecords: 2,
+        externalSystems: "not_connected" as const,
+      },
+    };
+    const workerPackage = buildWorkspaceLocalWorkerPackage({
+      job,
+      contextSummary,
+      now: new Date("2026-05-26T02:00:00.000Z"),
+      idFactory: () => "package-id",
+    });
+
+    assert.match(formatWorkspaceLocalWorkerPackage(workerPackage), /no external send/i);
+
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "ready_for_worker" },
+      {
+        root,
+        now: new Date("2026-05-26T02:01:00.000Z"),
+        idFactory: () => "ready-control",
+      },
+    );
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "worker_package_created", workerPackage },
+      {
+        root,
+        now: new Date("2026-05-26T02:02:00.000Z"),
+        idFactory: () => "package-control",
+      },
+    );
+    await applyWorkspaceLocalJobControl(
+      {
+        jobId: job.id,
+        action: "result_imported",
+        resultTitle: "Manual local answer",
+        resultBody: "This is a pasted worker-style result, stored locally only.",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T02:03:00.000Z"),
+        idFactory: () => "result-control",
+      },
+    );
+
+    const baseLines = (await readFile(join(root, WORKSPACE_LOCAL_JOBS_FILE), "utf8")).trim().split("\n");
+    assert.equal(baseLines.length, 1);
+
+    const projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records.length, 1);
+    assert.equal(projection.records[0].status, "completed_local");
+    assert.equal(projection.eventsByJob[job.id].map((event) => event.action).join(","), "ready_for_worker,worker_package_created,result_imported");
+    assert.equal(projection.workerPackagesByJob[job.id].packageId, "local_worker_package_package-id");
+    assert.equal(projection.resultsByJob[job.id].length, 1);
+    assert.equal(projection.resultsByJob[job.id][0].title, "Manual local answer");
+    assert.equal(projection.resultsByJob[job.id][0].status, "result_imported");
     assert.equal(projection.health.controlRecordCount, 3);
   });
 });

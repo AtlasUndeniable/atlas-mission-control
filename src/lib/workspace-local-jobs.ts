@@ -7,7 +7,15 @@ export const WORKSPACE_LOCAL_JOBS_ROOT = "/Users/atlasai/.openclaw/workspace/sta
 export const WORKSPACE_LOCAL_JOBS_FILE = "local-jobs.jsonl";
 export const WORKSPACE_LOCAL_JOB_CONTROLS_FILE = "local-job-controls.jsonl";
 
-export const WORKSPACE_LOCAL_JOB_STATUSES = ["draft", "queued_local", "not_executing", "archived"] as const;
+export const WORKSPACE_LOCAL_JOB_STATUSES = [
+  "draft",
+  "queued_local",
+  "not_executing",
+  "ready_for_worker",
+  "result_imported",
+  "completed_local",
+  "archived",
+] as const;
 export const WORKSPACE_LOCAL_JOB_WORKFLOWS = [
   "ask_atlas",
   "audit",
@@ -38,7 +46,15 @@ export type WorkspaceLocalJobStatus = typeof WORKSPACE_LOCAL_JOB_STATUSES[number
 export type WorkspaceLocalJobWorkflow = typeof WORKSPACE_LOCAL_JOB_WORKFLOWS[number];
 export type WorkspaceLocalJobRoom = typeof WORKSPACE_LOCAL_JOB_ROOMS[number];
 export type WorkspaceLocalJobProject = typeof WORKSPACE_LOCAL_JOB_PROJECTS[number];
-export type WorkspaceLocalJobControlAction = "update" | "archive" | "delete";
+export type WorkspaceLocalJobControlAction =
+  | "update"
+  | "archive"
+  | "delete"
+  | "ready_for_worker"
+  | "worker_package_created"
+  | "result_imported"
+  | "result_rejected"
+  | "result_archived";
 
 export type WorkspaceLocalJob = {
   schemaVersion: 1;
@@ -67,6 +83,68 @@ export type WorkspaceLocalJobControlPatch = {
   intendedWorkflow?: WorkspaceLocalJobWorkflow;
 };
 
+export type WorkspaceLocalWorkerPackageContextSummary = {
+  generatedAt: string;
+  localJobs: {
+    active: number;
+    archived: number;
+    controls: number;
+  };
+  artifacts: {
+    total: number;
+    recentTitles: string[];
+    latestAuditTitle: string | null;
+  };
+  memory: {
+    status: string;
+    contextPacks: number;
+    reviewItems: number;
+  };
+  runs: {
+    validRecords: number;
+    sourcesPresent: number;
+  };
+  approvals: {
+    pending: number;
+    slackVisible: number;
+    taskReviews: number;
+  };
+  readiness: {
+    localJobSource: string;
+    artifactRecords: number;
+    externalSystems: "not_connected";
+  };
+};
+
+export type WorkspaceLocalWorkerPackage = {
+  schemaVersion: 1;
+  packageId: string;
+  createdAt: string;
+  handoffMode: "manual_local_only";
+  job: {
+    id: string;
+    title: string;
+    prompt: string;
+    room: string;
+    project: string;
+    intendedWorkflow: WorkspaceLocalJobWorkflow;
+    currentStatus: WorkspaceLocalJobStatus;
+  };
+  contextSummary: WorkspaceLocalWorkerPackageContextSummary;
+  constraints: string[];
+};
+
+export type WorkspaceLocalWorkerResult = {
+  schemaVersion: 1;
+  id: string;
+  jobId: string;
+  importedAt: string;
+  source: "manual-local-import";
+  status: "result_imported" | "result_rejected" | "result_archived";
+  title: string;
+  body: string;
+};
+
 export type WorkspaceLocalJobControlEvent = {
   schemaVersion: 1;
   id: string;
@@ -75,6 +153,10 @@ export type WorkspaceLocalJobControlEvent = {
   createdAt: string;
   source: "workspace-control";
   patch?: WorkspaceLocalJobControlPatch;
+  workerPackage?: WorkspaceLocalWorkerPackage;
+  result?: WorkspaceLocalWorkerResult;
+  resultId?: string;
+  note?: string;
 };
 
 export type WorkspaceLocalJobInput = {
@@ -88,6 +170,11 @@ export type WorkspaceLocalJobInput = {
 export type WorkspaceLocalJobControlInput = {
   jobId: string;
   action: WorkspaceLocalJobControlAction;
+  workerPackage?: WorkspaceLocalWorkerPackage;
+  resultBody?: string;
+  resultTitle?: string;
+  resultId?: string;
+  note?: string;
 } & WorkspaceLocalJobControlPatch;
 
 export type WorkspaceLocalJobValidationResult<T> =
@@ -100,6 +187,10 @@ export type WorkspaceLocalJobsProjection = {
   controlFile: string;
   records: WorkspaceLocalJob[];
   archivedRecords: WorkspaceLocalJob[];
+  events: WorkspaceLocalJobControlEvent[];
+  eventsByJob: Record<string, WorkspaceLocalJobControlEvent[]>;
+  workerPackagesByJob: Record<string, WorkspaceLocalWorkerPackage>;
+  resultsByJob: Record<string, WorkspaceLocalWorkerResult[]>;
   health: {
     present: boolean;
     recordCount: number;
@@ -138,11 +229,29 @@ type WorkspaceLocalJobStorageOptions = {
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_FIELD_LENGTH = 120;
 const MAX_TITLE_LENGTH = 120;
+const MAX_RESULT_LENGTH = 24000;
 const STATUS_SET = new Set<string>(WORKSPACE_LOCAL_JOB_STATUSES);
 const WORKFLOW_SET = new Set<string>(WORKSPACE_LOCAL_JOB_WORKFLOWS);
 const ROOM_SET = new Set<string>(WORKSPACE_LOCAL_JOB_ROOMS);
 const PROJECT_SET = new Set<string>(WORKSPACE_LOCAL_JOB_PROJECTS);
-const CONTROL_ACTION_SET = new Set<string>(["update", "archive", "delete"]);
+const CONTROL_ACTION_SET = new Set<string>([
+  "update",
+  "archive",
+  "delete",
+  "ready_for_worker",
+  "worker_package_created",
+  "result_imported",
+  "result_rejected",
+  "result_archived",
+]);
+
+export const WORKSPACE_WORKER_HANDOFF_CONSTRAINTS = [
+  "No external send is allowed: do not send Slack, DM, email, or external messages.",
+  "Do not mutate Supabase, Monday, Typeform, OpenClaw config, or external systems.",
+  "Do not delete, move, rename, or attach files.",
+  "Do not start workers, models, daemons, background jobs, or side effects unless a later approval explicitly permits it.",
+  "Treat this package as a manual local handoff contract only.",
+] as const;
 
 function storagePath(root = WORKSPACE_LOCAL_JOBS_ROOT): string {
   return join(root, WORKSPACE_LOCAL_JOBS_FILE);
@@ -170,6 +279,15 @@ function cleanTitle(value: unknown): string {
   return typeof value === "string" ? value.trim().slice(0, MAX_TITLE_LENGTH) : "";
 }
 
+function cleanResultBody(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, MAX_RESULT_LENGTH) : "";
+}
+
+function cleanResultTitle(value: unknown, body: string): string {
+  if (typeof value === "string" && value.trim()) return value.trim().slice(0, MAX_TITLE_LENGTH);
+  return titleFromPrompt(body).slice(0, MAX_TITLE_LENGTH);
+}
+
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
@@ -188,6 +306,40 @@ export function inferWorkspaceLocalJobWorkflow(prompt: string): WorkspaceLocalJo
   if (/train|training|brain dump|principle|memory|context/.test(normalized)) return "training_session";
   if (/ask atlas|question|solve|think through/.test(normalized)) return "ask_atlas";
   return "general";
+}
+
+export function buildWorkspaceLocalWorkerPackage({
+  job,
+  contextSummary,
+  now = new Date(),
+  idFactory = randomUUID,
+}: {
+  job: WorkspaceLocalJob;
+  contextSummary: WorkspaceLocalWorkerPackageContextSummary;
+  now?: Date;
+  idFactory?: () => string;
+}): WorkspaceLocalWorkerPackage {
+  return {
+    schemaVersion: 1,
+    packageId: `local_worker_package_${idFactory().replace(/[^a-zA-Z0-9_-]/g, "")}`,
+    createdAt: now.toISOString(),
+    handoffMode: "manual_local_only",
+    job: {
+      id: job.id,
+      title: job.title,
+      prompt: job.prompt,
+      room: job.room,
+      project: job.project,
+      intendedWorkflow: job.intendedWorkflow,
+      currentStatus: job.status,
+    },
+    contextSummary,
+    constraints: [...WORKSPACE_WORKER_HANDOFF_CONSTRAINTS],
+  };
+}
+
+export function formatWorkspaceLocalWorkerPackage(workerPackage: WorkspaceLocalWorkerPackage): string {
+  return JSON.stringify(workerPackage, null, 2);
 }
 
 export function validateWorkspaceLocalJobInput(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalJobInput> {
@@ -269,6 +421,42 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
   if (typedAction === "update" && Object.keys(patch).length === 0) {
     errors.push("At least one local update field is required.");
   }
+  if (typedAction !== "update" && Object.keys(patch).length > 0) {
+    errors.push("Only update controls can include local edit fields.");
+  }
+
+  let workerPackage: WorkspaceLocalWorkerPackage | undefined;
+  if (typedAction === "worker_package_created") {
+    const checkedPackage = validateWorkspaceLocalWorkerPackage(value.workerPackage);
+    if (!checkedPackage.ok) errors.push(...checkedPackage.errors);
+    else if (checkedPackage.value.job.id !== jobId) errors.push("Worker package job id must match jobId.");
+    else workerPackage = checkedPackage.value;
+  } else if (value.workerPackage !== undefined) {
+    errors.push("Only worker_package_created controls can include a worker package.");
+  }
+
+  let resultBody: string | undefined;
+  let resultTitle: string | undefined;
+  if (typedAction === "result_imported") {
+    resultBody = cleanResultBody(value.resultBody);
+    if (!resultBody) errors.push("Result body is required.");
+    if (typeof value.resultBody === "string" && value.resultBody.length > MAX_RESULT_LENGTH) {
+      errors.push(`Result body must be ${MAX_RESULT_LENGTH} characters or fewer.`);
+    }
+    resultTitle = cleanResultTitle(value.resultTitle, resultBody);
+  } else if (value.resultBody !== undefined || value.resultTitle !== undefined) {
+    errors.push("Only result_imported controls can include a manual result.");
+  }
+
+  const resultId = cleanField(value.resultId, "");
+  if (["result_rejected", "result_archived"].includes(typedAction) && !resultId) {
+    errors.push("resultId is required.");
+  }
+  if (!["result_rejected", "result_archived"].includes(typedAction) && value.resultId !== undefined) {
+    errors.push("Only result_rejected or result_archived controls can include resultId.");
+  }
+
+  const note = cleanPrompt(value.note).slice(0, 1000);
 
   return errors.length
     ? { ok: false, errors }
@@ -277,6 +465,10 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
         value: {
           jobId,
           action: typedAction,
+          ...(workerPackage ? { workerPackage } : {}),
+          ...(resultBody ? { resultBody, resultTitle } : {}),
+          ...(resultId ? { resultId } : {}),
+          ...(note ? { note } : {}),
           ...patch,
         },
       };
@@ -310,6 +502,57 @@ export function validateWorkspaceLocalJob(value: unknown): WorkspaceLocalJobVali
   return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalJob };
 }
 
+export function validateWorkspaceLocalWorkerPackage(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalWorkerPackage> {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { ok: false, errors: ["Worker package must be an object."] };
+
+  if (value.schemaVersion !== 1) errors.push("Worker package schemaVersion must be 1.");
+  if (typeof value.packageId !== "string" || !value.packageId.trim()) errors.push("Worker package packageId is required.");
+  if (!isIsoDate(value.createdAt)) errors.push("Worker package createdAt must be an ISO timestamp.");
+  if (value.handoffMode !== "manual_local_only") errors.push("Worker package handoffMode must be manual_local_only.");
+
+  if (!isRecord(value.job)) {
+    errors.push("Worker package job is required.");
+  } else {
+    if (typeof value.job.id !== "string" || !value.job.id.trim()) errors.push("Worker package job.id is required.");
+    if (typeof value.job.title !== "string" || !value.job.title.trim()) errors.push("Worker package job.title is required.");
+    if (typeof value.job.prompt !== "string" || !value.job.prompt.trim()) errors.push("Worker package job.prompt is required.");
+    if (typeof value.job.room !== "string" || !value.job.room.trim()) errors.push("Worker package job.room is required.");
+    if (typeof value.job.project !== "string" || !value.job.project.trim()) errors.push("Worker package job.project is required.");
+    if (typeof value.job.intendedWorkflow !== "string" || !WORKFLOW_SET.has(value.job.intendedWorkflow)) {
+      errors.push("Worker package job.intendedWorkflow is not supported.");
+    }
+    if (typeof value.job.currentStatus !== "string" || !STATUS_SET.has(value.job.currentStatus)) {
+      errors.push("Worker package job.currentStatus is not supported.");
+    }
+  }
+
+  if (!isRecord(value.contextSummary)) errors.push("Worker package contextSummary is required.");
+  if (!Array.isArray(value.constraints) || value.constraints.length === 0 || value.constraints.some((item) => typeof item !== "string" || !item.trim())) {
+    errors.push("Worker package constraints are required.");
+  }
+
+  return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalWorkerPackage };
+}
+
+export function validateWorkspaceLocalWorkerResult(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalWorkerResult> {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { ok: false, errors: ["Worker result must be an object."] };
+
+  if (value.schemaVersion !== 1) errors.push("Worker result schemaVersion must be 1.");
+  if (typeof value.id !== "string" || !value.id.trim()) errors.push("Worker result id is required.");
+  if (typeof value.jobId !== "string" || !value.jobId.trim()) errors.push("Worker result jobId is required.");
+  if (!isIsoDate(value.importedAt)) errors.push("Worker result importedAt must be an ISO timestamp.");
+  if (value.source !== "manual-local-import") errors.push("Worker result source must be manual-local-import.");
+  if (!["result_imported", "result_rejected", "result_archived"].includes(typeof value.status === "string" ? value.status : "")) {
+    errors.push("Worker result status is not supported.");
+  }
+  if (typeof value.title !== "string" || !value.title.trim()) errors.push("Worker result title is required.");
+  if (typeof value.body !== "string" || !value.body.trim()) errors.push("Worker result body is required.");
+
+  return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalWorkerResult };
+}
+
 export function validateWorkspaceLocalJobControlEvent(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLocalJobControlEvent> {
   const errors: string[] = [];
   if (!isRecord(value)) return { ok: false, errors: ["Control record must be an object."] };
@@ -334,6 +577,24 @@ export function validateWorkspaceLocalJobControlEvent(value: unknown): Workspace
     }
   } else if (value.action === "update") {
     errors.push("Update controls require a patch.");
+  }
+
+  if (value.action === "worker_package_created") {
+    const checked = validateWorkspaceLocalWorkerPackage(value.workerPackage);
+    if (!checked.ok) errors.push(...checked.errors);
+    if (checked.ok && checked.value.job.id !== value.jobId) errors.push("Worker package job id must match event jobId.");
+  }
+
+  if (value.action === "result_imported") {
+    const checked = validateWorkspaceLocalWorkerResult(value.result);
+    if (!checked.ok) errors.push(...checked.errors);
+    if (checked.ok && checked.value.jobId !== value.jobId) errors.push("Worker result jobId must match event jobId.");
+  }
+
+  if (value.action === "result_rejected" || value.action === "result_archived") {
+    if (typeof value.resultId !== "string" || !value.resultId.trim()) errors.push("resultId is required.");
+  } else if (value.resultId !== undefined) {
+    errors.push("Only result_rejected or result_archived events can include resultId.");
   }
 
   return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalJobControlEvent };
@@ -387,7 +648,19 @@ export async function applyWorkspaceLocalJobControl(
 
   const root = options.root ?? WORKSPACE_LOCAL_JOBS_ROOT;
   const now = (options.now ?? new Date()).toISOString();
-  const { jobId, action, ...patch } = checked.value;
+  const { jobId, action, workerPackage, resultBody, resultTitle, resultId, note, ...patch } = checked.value;
+  const result: WorkspaceLocalWorkerResult | undefined = resultBody
+    ? {
+        schemaVersion: 1,
+        id: `local_worker_result_${(options.idFactory ?? randomUUID)().replace(/[^a-zA-Z0-9_-]/g, "")}`,
+        jobId,
+        importedAt: now,
+        source: "manual-local-import",
+        status: "result_imported",
+        title: resultTitle ?? cleanResultTitle(undefined, resultBody),
+        body: resultBody,
+      }
+    : undefined;
   const event: WorkspaceLocalJobControlEvent = {
     schemaVersion: 1,
     id: `local_job_control_${(options.idFactory ?? randomUUID)().replace(/[^a-zA-Z0-9_-]/g, "")}`,
@@ -396,6 +669,10 @@ export async function applyWorkspaceLocalJobControl(
     createdAt: now,
     source: "workspace-control",
     ...(action === "update" ? { patch } : {}),
+    ...(workerPackage ? { workerPackage } : {}),
+    ...(result ? { result } : {}),
+    ...(resultId ? { resultId } : {}),
+    ...(note ? { note } : {}),
   };
 
   const validated = validateWorkspaceLocalJobControlEvent(event);
@@ -418,6 +695,10 @@ export async function getWorkspaceLocalJobs(
     controlFile,
     records: [],
     archivedRecords: [],
+    events: [],
+    eventsByJob: {},
+    workerPackagesByJob: {},
+    resultsByJob: {},
     health: {
       present: false,
       recordCount: 0,
@@ -528,10 +809,16 @@ export async function getWorkspaceLocalJobs(
     }
   }
 
+  const sortedControls = controls.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  projection.events = sortedControls;
+  sortedControls.forEach((event) => {
+    projection.eventsByJob[event.jobId] = [...(projection.eventsByJob[event.jobId] ?? []), event];
+  });
+
   const jobsById = new Map(projection.records.map((job) => [job.id, { ...job }]));
   const deletedIds = new Set<string>();
-  controls
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+  const resultsById = new Map<string, WorkspaceLocalWorkerResult>();
+  sortedControls
     .forEach((event) => {
       const job = jobsById.get(event.jobId);
       if (!job) return;
@@ -553,6 +840,50 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
+      if (event.action === "ready_for_worker") {
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "ready_for_worker",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
+      if (event.action === "worker_package_created" && event.workerPackage) {
+        projection.workerPackagesByJob[event.jobId] = event.workerPackage;
+        jobsById.set(event.jobId, {
+          ...job,
+          status: job.status === "queued_local" || job.status === "not_executing" ? "ready_for_worker" : job.status,
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
+      if (event.action === "result_imported" && event.result) {
+        resultsById.set(event.result.id, event.result);
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "completed_local",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
+      if ((event.action === "result_rejected" || event.action === "result_archived") && event.resultId) {
+        const result = resultsById.get(event.resultId);
+        if (result) {
+          resultsById.set(event.resultId, {
+            ...result,
+            status: event.action === "result_rejected" ? "result_rejected" : "result_archived",
+          });
+        }
+        jobsById.set(event.jobId, {
+          ...job,
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
       if (event.action === "update" && event.patch) {
         jobsById.set(event.jobId, {
           ...job,
@@ -561,6 +892,10 @@ export async function getWorkspaceLocalJobs(
         });
       }
     });
+
+  resultsById.forEach((result) => {
+    projection.resultsByJob[result.jobId] = [...(projection.resultsByJob[result.jobId] ?? []), result];
+  });
 
   const projectedRecords = [...jobsById.values()]
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
