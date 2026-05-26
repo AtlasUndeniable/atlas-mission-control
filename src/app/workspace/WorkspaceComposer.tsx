@@ -78,19 +78,19 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
 
   return (
     <div className="w-full max-w-full">
-      <form onSubmit={submitLocalJob} className="w-full overflow-hidden rounded-2xl border border-stone-300 bg-white p-3 shadow-sm">
+      <form onSubmit={submitLocalJob} className="w-full overflow-hidden rounded-lg border border-white/10 bg-[#1f1f1f] p-3 shadow-sm shadow-black/20">
         <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
           <div>
-            <p className="text-xs font-semibold uppercase text-stone-500">Local intake</p>
-            <p className="mt-1 text-xs text-stone-500">{selectedLabel} / draft record only</p>
+            <p className="text-[11px] font-semibold uppercase text-stone-500">Local intake</p>
+            <p className="mt-1 text-xs text-stone-400">{selectedLabel} / draft record only</p>
           </div>
-          <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+          <span className="rounded-md border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[11px] font-medium text-blue-200">
             Not executing
           </span>
         </div>
         <textarea
           aria-label="Atlas local job composer"
-          className="min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-stone-800 outline-none placeholder:text-stone-400 sm:min-h-16"
+          className="min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-stone-100 outline-none placeholder:text-stone-600 sm:min-h-16"
           value={prompt}
           onChange={(event) => {
             setPrompt(event.target.value);
@@ -98,17 +98,17 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
           }}
           placeholder="Ask Atlas to start a local draft job. It will appear in the work stream, but no model or worker will run."
         />
-        <div className="flex flex-wrap items-center gap-2 border-t border-stone-100 px-2 pt-2 sm:pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-white/10 px-2 pt-2 sm:pt-3">
           {INTENTS.map((intent, index) => (
             <button
               key={intent.label}
               type="button"
               onClick={() => chooseIntent(intent)}
               className={classNames(
-                "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                "rounded-md border px-2 py-1 text-xs font-medium transition",
                 workflow === intent.workflow
-                  ? "border-stone-950 bg-stone-950 text-white"
-                  : "border-stone-200 bg-stone-50 text-stone-600 hover:border-stone-300",
+                  ? "border-stone-100 bg-stone-100 text-stone-950"
+                  : "border-white/10 bg-white/[0.03] text-stone-400 hover:border-white/20 hover:text-stone-200",
                 index > 2 && "hidden sm:inline-flex",
               )}
             >
@@ -117,14 +117,14 @@ export default function WorkspaceComposer({ room, role, project }: WorkspaceComp
           ))}
           <p className={classNames(
             "min-w-0 basis-full text-xs sm:flex-1 sm:basis-auto",
-            state === "error" ? "text-rose-700" : state === "saved" ? "text-emerald-700" : "text-stone-500",
+            state === "error" ? "text-rose-300" : state === "saved" ? "text-emerald-300" : "text-stone-500",
           )}>
             {message}
           </p>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-full bg-stone-950 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-600"
+            className="rounded-md bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-950 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-stone-500"
           >
             {state === "saving" ? "Saving..." : "Queue draft"}
           </button>

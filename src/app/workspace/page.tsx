@@ -497,7 +497,7 @@ function workflowAccent(workflow: string): string {
 
 function ReadOnlyBadge() {
   return (
-    <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-white/20 bg-white px-3 text-xs font-medium text-stone-700 shadow-sm">
+    <span className="inline-flex h-6 shrink-0 items-center rounded-md border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-stone-300">
       Preview mode
     </span>
   );
@@ -525,9 +525,9 @@ function RailItem({
     </>
   );
   const classes = classNames(
-    "flex min-h-10 min-w-[140px] items-center gap-3 rounded-md px-3 text-sm transition lg:min-w-0",
-    active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
-    disabled && "cursor-not-allowed text-stone-500 hover:bg-transparent hover:text-stone-500",
+    "flex min-h-8 min-w-[132px] items-center gap-2 rounded-md px-2.5 text-sm transition lg:min-w-0",
+    active ? "bg-white/10 text-white" : "text-stone-400 hover:bg-white/[0.06] hover:text-stone-100",
+    disabled && "cursor-not-allowed text-stone-600 hover:bg-transparent hover:text-stone-600",
   );
 
   if (href && !disabled) {
@@ -555,15 +555,15 @@ function RoomNavItem({
     <Link
       href={workspaceHref({ room: room.id, role, project })}
       className={classNames(
-        "flex min-h-10 min-w-[140px] items-center gap-3 rounded-md px-3 text-sm transition lg:min-w-0",
-        active ? "bg-white text-stone-950" : "text-stone-300 hover:bg-white/8 hover:text-white",
+        "flex min-h-8 min-w-[132px] items-center gap-2 rounded-md px-2.5 text-sm transition lg:min-w-0",
+        active ? "bg-white/10 text-white" : "text-stone-400 hover:bg-white/[0.06] hover:text-stone-100",
       )}
     >
       <span className="min-w-0 truncate">{room.label}</span>
       {meta ? (
         <span className={classNames(
           "ml-auto shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-          active ? "bg-stone-100 text-stone-700" : "bg-white/10 text-stone-300",
+          active ? "bg-white/10 text-stone-200" : "bg-white/[0.06] text-stone-500",
         )}>
           {meta}
         </span>
@@ -1433,7 +1433,7 @@ function WorkbenchIntro({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     snapshot.jobs.total > 0;
 
   return (
-    <section className="w-full max-w-full overflow-hidden rounded-xl border border-stone-300 bg-white p-4 shadow-sm sm:p-5">
+    <section className="w-full max-w-full overflow-hidden rounded-lg border border-stone-300 bg-white p-4 shadow-sm sm:p-5">
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -2140,7 +2140,7 @@ function CapabilityButton({ label }: { label: string }) {
     <button
       type="button"
       disabled
-      className="inline-flex h-9 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-500 shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
+      className="inline-flex h-8 items-center rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-stone-400 disabled:cursor-not-allowed disabled:opacity-80"
     >
       {label}
     </button>
@@ -2160,15 +2160,15 @@ function WorkspaceTopBar({
   const projectInfo = selectedProject(project);
 
   return (
-    <header className="sticky top-0 z-10 border-b border-stone-200 bg-[#f7f6f2]/95 px-4 py-3 backdrop-blur sm:px-6">
+    <header className="sticky top-0 z-10 border-b border-white/10 bg-[#151515]/92 px-4 py-3 backdrop-blur sm:px-6">
       <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
           <p className="text-xs font-medium text-stone-500">{projectInfo.label}</p>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-            <h2 className="min-w-0 text-xl font-semibold text-stone-950">{roomInfo.label}</h2>
+            <h2 className="min-w-0 text-xl font-semibold text-stone-100">{roomInfo.label}</h2>
             <span className={classNames(
-              "rounded-full border px-2.5 py-1 text-xs font-medium",
-              activeSession ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-stone-200 bg-white text-stone-600",
+              "rounded-md border px-2 py-0.5 text-[11px] font-medium",
+              activeSession ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-white/10 bg-white/[0.04] text-stone-400",
             )}>
               {activeSession ? "Active session" : "Workspace overview"}
             </span>
@@ -2209,28 +2209,28 @@ function LocalJobThreadCard({
     <Link
       href={localJobHref({ job, role })}
       className={classNames(
-        "block rounded-2xl border bg-white p-4 shadow-sm transition hover:border-stone-400",
-        selected ? "border-stone-950 ring-2 ring-stone-950/10" : "border-stone-200",
+        "block rounded-lg border px-4 py-3 transition",
+        selected ? "border-emerald-400/30 bg-white/[0.075] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]" : "border-white/10 bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.055]",
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase text-stone-500">Local task / {job.intendedWorkflow.replaceAll("_", " ")}</p>
-          <h3 className="mt-1 line-clamp-2 text-base font-semibold text-stone-950">{job.title}</h3>
-          <p className="mt-2 line-clamp-3 text-sm leading-6 text-stone-600">{job.prompt}</p>
+          <p className="text-[11px] font-semibold uppercase text-stone-500">Local task / {job.intendedWorkflow.replaceAll("_", " ")}</p>
+          <h3 className="mt-1 line-clamp-2 text-base font-semibold text-stone-100">{job.title}</h3>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-stone-400">{job.prompt}</p>
         </div>
-        <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+        <span className="rounded-md border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[11px] font-medium text-blue-200">
           {job.execution.state.replaceAll("_", " ")}
         </span>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
           {job.status.replaceAll("_", " ")}
         </span>
-        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
           Created {formatDate(job.createdAt)}
         </span>
-        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-300">
           Inspect
         </span>
       </div>
@@ -2252,23 +2252,23 @@ function LocalJobDetailPanel({
   ];
 
   return (
-    <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
+    <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase text-stone-500">Selected local task</p>
-          <h3 className="mt-1 text-lg font-semibold text-stone-950">{job.title}</h3>
+          <p className="text-[11px] font-semibold uppercase text-stone-500">Selected local task</p>
+          <h3 className="mt-1 text-lg font-semibold text-stone-100">{job.title}</h3>
         </div>
-        <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+        <span className="rounded-md border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[11px] font-medium text-blue-200">
           {job.execution.state.replaceAll("_", " ")}
         </span>
       </div>
 
-      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
-        <p className="text-xs font-semibold uppercase text-stone-500">Prompt</p>
-        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-stone-700">{job.prompt}</p>
+      <div className="mt-4 border-l border-white/10 pl-3">
+        <p className="text-[11px] font-semibold uppercase text-stone-500">Prompt</p>
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-stone-300">{job.prompt}</p>
       </div>
 
-      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+      <dl className="mt-4 grid gap-x-5 gap-y-3 border-t border-white/10 pt-4 sm:grid-cols-3">
         {[
           ["Status", job.status.replaceAll("_", " ")],
           ["Workflow", job.intendedWorkflow.replaceAll("_", " ")],
@@ -2277,21 +2277,21 @@ function LocalJobDetailPanel({
           ["Created", formatDate(job.createdAt)],
           ["Updated", formatDate(job.updatedAt)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-            <dt className="text-xs font-medium text-stone-500">{label}</dt>
-            <dd className="mt-1 break-words text-sm font-semibold text-stone-950">{value}</dd>
+          <div key={label}>
+            <dt className="text-[11px] font-medium uppercase text-stone-500">{label}</dt>
+            <dd className="mt-1 break-words text-sm font-medium text-stone-200">{value}</dd>
           </div>
         ))}
       </dl>
 
-      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
-        <p className="text-xs font-semibold uppercase text-stone-500">Timeline</p>
+      <div className="mt-4 border-t border-white/10 pt-4">
+        <p className="text-[11px] font-semibold uppercase text-stone-500">Timeline</p>
         <div className="mt-3 space-y-2">
           {timeline.map(([label, detail], index) => (
-            <div key={label} className="grid gap-3 rounded-lg border border-stone-200 bg-white p-3 sm:grid-cols-[24px_minmax(0,1fr)]">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-stone-950 text-[11px] font-semibold text-white">{index + 1}</span>
+            <div key={label} className="grid gap-3 rounded-md border border-white/10 bg-black/10 p-3 sm:grid-cols-[24px_minmax(0,1fr)]">
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white/10 text-[11px] font-semibold text-stone-200">{index + 1}</span>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-stone-950">{label}</p>
+                <p className="text-sm font-semibold text-stone-200">{label}</p>
                 <p className="mt-1 break-words text-xs leading-5 text-stone-500">{detail}</p>
               </div>
             </div>
@@ -2299,17 +2299,17 @@ function LocalJobDetailPanel({
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
-        <p className="text-xs font-semibold uppercase text-stone-500">Local source health</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+      <div className="mt-4 border-t border-white/10 pt-4">
+        <p className="text-[11px] font-semibold uppercase text-stone-500">Local source health</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
           {[
             ["Valid", snapshot.localJobs.health.validRecordCount],
             ["Invalid", snapshot.localJobs.health.invalidRecordCount],
             ["Records", snapshot.localJobs.health.recordCount],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-lg border border-stone-200 bg-white p-3">
+            <div key={label}>
               <p className="text-xs text-stone-500">{label}</p>
-              <p className="mt-1 text-lg font-semibold text-stone-950">{value}</p>
+              <p className="mt-1 text-lg font-semibold text-stone-200">{value}</p>
             </div>
           ))}
         </div>
@@ -2322,7 +2322,7 @@ function LocalJobDetailPanel({
             key={action}
             type="button"
             disabled
-            className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
+            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-stone-500 disabled:cursor-not-allowed"
           >
             {action} locked
           </button>
@@ -2334,13 +2334,13 @@ function LocalJobDetailPanel({
 
 function InlineArtifactCard({ artifact }: { artifact: ScannedWorkspaceArtifact }) {
   return (
-    <article className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+    <article className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase text-stone-500">Artifact / {workspaceFor(artifact.inferredWorkflow)}</p>
-          <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-950">{artifact.title}</h3>
+          <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-stone-100">{artifact.title}</h3>
         </div>
-        <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
           {artifact.format}
         </span>
       </div>
@@ -2361,21 +2361,21 @@ function StartTaskCard({
   project: WorkspaceProjectId;
 }) {
   return (
-    <section className="rounded-2xl border border-dashed border-stone-300 bg-white/80 p-5 text-center shadow-sm">
-      <p className="text-sm font-semibold text-stone-950">Start a task to open the composer</p>
-      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-stone-600">
+    <section className="rounded-lg border border-dashed border-white/15 bg-white/[0.035] p-5 text-center">
+      <p className="text-sm font-semibold text-stone-100">Start a task to open the composer</p>
+      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-stone-400">
         Pick a project room or start a new task. Atlas will save a local draft in this workspace; nothing executes yet.
       </p>
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         <Link
           href={workspaceHref({ room: "audits", role, project })}
-          className="inline-flex h-9 items-center rounded-md bg-stone-950 px-3 text-sm font-semibold text-white"
+          className="inline-flex h-9 items-center rounded-md bg-stone-100 px-3 text-sm font-semibold text-stone-950"
         >
           New task
         </Link>
         <Link
           href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })}
-          className="inline-flex h-9 items-center rounded-md border border-stone-300 bg-white px-3 text-sm font-medium text-stone-700"
+          className="inline-flex h-9 items-center rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-stone-300"
         >
           Open library
         </Link>
@@ -2404,21 +2404,21 @@ function SessionThread({
   const artifacts = snapshot.artifacts.recent.slice(0, 3);
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-74px)] w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6">
-      <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+    <div className="mx-auto flex min-h-[calc(100vh-65px)] w-full max-w-3xl flex-col gap-5 px-4 py-6 sm:px-6">
+      <section className="border-b border-white/10 pb-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase text-stone-500">Atlas</p>
-            <h3 className="mt-1 text-lg font-semibold text-stone-950">{activeSession ? `${roomInfo.label} session` : "Workspace home"}</h3>
-            <p className="mt-2 text-sm leading-6 text-stone-600">{roomInfo.description}</p>
+            <p className="text-[11px] font-semibold uppercase text-stone-500">Atlas</p>
+            <h3 className="mt-1 text-lg font-semibold text-stone-100">{activeSession ? `${roomInfo.label} session` : "Workspace home"}</h3>
+            <p className="mt-2 text-sm leading-6 text-stone-400">{roomInfo.description}</p>
           </div>
-          <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-600">
+          <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
             Local only
           </span>
         </div>
       </section>
 
-      <section className="space-y-3">
+      <section className="space-y-3 border-b border-white/10 pb-5">
         {visibleJobs.length ? (
           visibleJobs.map((job) => (
             <LocalJobThreadCard
@@ -2439,10 +2439,10 @@ function SessionThread({
       {selectedJob ? <LocalJobDetailPanel job={selectedJob} snapshot={snapshot} /> : null}
 
       {artifacts.length ? (
-        <section className="space-y-3">
+        <section className="space-y-3 border-t border-white/10 pt-5">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-stone-950">Recent artifacts</p>
-            <Link href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })} className="text-xs font-medium text-stone-500 hover:text-stone-950">
+            <p className="text-sm font-semibold text-stone-200">Recent artifacts</p>
+            <Link href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })} className="text-xs font-medium text-stone-500 hover:text-stone-200">
               Library
             </Link>
           </div>
@@ -2452,17 +2452,17 @@ function SessionThread({
         </section>
       ) : null}
 
-      <section className="grid gap-3 md:grid-cols-2">
-        <QueueRow
-          label="Memory"
-          value={snapshot.memoryMaintenance.status}
-          detail={`${snapshot.memoryMaintenance.summary.contextPacksGenerated} context packs, ${snapshot.memoryMaintenance.summary.reviewQueueItems} review items.`}
-        />
-        <QueueRow
-          label="Readiness"
-          value={`${snapshot.localJobs.health.validRecordCount} local`}
-          detail={`${snapshot.localJobs.health.invalidRecordCount} invalid local job records. External execution remains locked.`}
-        />
+      <section className="grid gap-4 border-t border-white/10 pt-5 text-sm md:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium uppercase text-stone-500">Memory</p>
+          <p className="mt-1 font-semibold text-stone-200">{snapshot.memoryMaintenance.status}</p>
+          <p className="mt-1 text-xs leading-5 text-stone-500">{snapshot.memoryMaintenance.summary.contextPacksGenerated} context packs, {snapshot.memoryMaintenance.summary.reviewQueueItems} review items.</p>
+        </div>
+        <div>
+          <p className="text-xs font-medium uppercase text-stone-500">Readiness</p>
+          <p className="mt-1 font-semibold text-stone-200">{snapshot.localJobs.health.validRecordCount} local</p>
+          <p className="mt-1 text-xs leading-5 text-stone-500">{snapshot.localJobs.health.invalidRecordCount} invalid local job records. External execution remains locked.</p>
+        </div>
       </section>
 
       <div className="mt-auto">
@@ -2490,7 +2490,7 @@ function WorkspaceRail({
   const recentTasks = snapshot.localJobs.records.slice(0, 4);
 
   return (
-    <aside className="max-w-full overflow-x-hidden border-b border-stone-800 bg-[#171716] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
+    <aside className="max-w-full overflow-x-hidden border-b border-white/10 bg-[#161616] px-4 py-4 text-white lg:min-h-screen lg:border-b-0 lg:px-3">
       <div className="flex items-center justify-between gap-3 lg:block">
         <div>
           <p className="text-xs font-semibold text-stone-400">Atlas</p>
@@ -2502,7 +2502,7 @@ function WorkspaceRail({
       <div className="mt-5">
         <Link
           href={workspaceHref({ room: "audits", role, project })}
-          className="flex min-h-10 items-center justify-center rounded-md bg-white px-3 text-sm font-semibold text-stone-950 transition hover:bg-stone-100"
+          className="flex min-h-9 items-center justify-center rounded-md border border-white/10 bg-white/[0.08] px-3 text-sm font-semibold text-stone-100 transition hover:bg-white/[0.12]"
         >
           New task
         </Link>
@@ -2525,7 +2525,7 @@ function WorkspaceRail({
       </nav>
 
       <div className="mt-6 hidden lg:block">
-        <p className="px-3 text-xs font-medium text-stone-500">Projects</p>
+        <p className="px-2.5 text-[11px] font-medium uppercase text-stone-600">Projects</p>
         <div className="mt-2 space-y-1">
           {PROJECTS.map((candidate) => (
             <RailItem
@@ -2539,7 +2539,7 @@ function WorkspaceRail({
       </div>
 
       <div className="mt-6 hidden lg:block">
-        <p className="px-3 text-xs font-medium text-stone-500">Recent tasks</p>
+        <p className="px-2.5 text-[11px] font-medium uppercase text-stone-600">Recent tasks</p>
         <div className="mt-2 space-y-1">
           {recentTasks.length ? recentTasks.map((job) => (
             <RailItem
@@ -2556,7 +2556,7 @@ function WorkspaceRail({
       </div>
 
       <div className="mt-6 hidden lg:block">
-        <p className="px-3 text-xs font-medium text-stone-500">Library</p>
+        <p className="px-2.5 text-[11px] font-medium uppercase text-stone-600">Library</p>
         <div className="mt-2 space-y-1">
           <RailItem label="Artifact library" href={workspaceHref({ room: "knowledge", role, project: "memory-knowledge" })} active={room === "knowledge"} />
           <RailItem label="Training" href={workspaceHref({ room: "training", role, project })} active={room === "training"} />
@@ -2584,18 +2584,18 @@ function ContextInspector({
   const artifactDiscovery = snapshot.artifactControl.discovery.counts;
 
   return (
-    <aside className="space-y-4 bg-[#eeece7] px-4 py-5 sm:px-6 lg:min-h-screen">
+    <aside className="space-y-5 border-t border-white/10 bg-[#181818] px-4 py-5 sm:px-6 lg:min-h-screen lg:border-t-0">
       {selectedJob ? (
-        <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
-          <p className="text-sm font-semibold text-stone-950">Task context</p>
-          <p className="mt-2 text-sm leading-6 text-stone-600">{selectedJob.execution.reason}</p>
+        <section className="border-b border-white/10 pb-5">
+          <p className="text-sm font-semibold text-stone-100">Task context</p>
+          <p className="mt-2 text-sm leading-6 text-stone-400">{selectedJob.execution.reason}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {["Run", "Attach files", "Assign worker", "Send"].map((action) => (
               <button
                 key={action}
                 type="button"
                 disabled
-                className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-medium text-stone-400 disabled:cursor-not-allowed"
+                className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-stone-500 disabled:cursor-not-allowed"
               >
                 {action}
               </button>
@@ -2604,35 +2604,35 @@ function ContextInspector({
         </section>
       ) : null}
 
-      <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
-        <p className="text-sm font-semibold text-stone-950">Workspace pulse</p>
-        <dl className="mt-4 grid grid-cols-2 gap-3">
+      <section className="border-b border-white/10 pb-5">
+        <p className="text-sm font-semibold text-stone-100">Workspace pulse</p>
+        <dl className="mt-4 grid grid-cols-2 gap-4">
           {[
             ["Local", snapshot.localJobs.health.validRecordCount],
             ["Artifacts", snapshot.artifactControl.counts.artifacts],
             ["Memory", snapshot.memoryMaintenance.summary.contextPacksGenerated],
             ["Invalid", snapshot.localJobs.health.invalidRecordCount + snapshot.artifactControl.counts.totalInvalidRecords],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+            <div key={label}>
               <dt className="text-xs font-medium text-stone-500">{label}</dt>
-              <dd className="mt-1 text-lg font-semibold text-stone-950">{value}</dd>
+              <dd className="mt-1 text-lg font-semibold text-stone-200">{value}</dd>
             </div>
           ))}
         </dl>
       </section>
 
-      <section className="rounded-2xl border border-stone-300 bg-white p-4 shadow-sm">
-        <p className="text-sm font-semibold text-stone-950">Source health</p>
-        <div className="mt-4 space-y-2">
+      <section>
+        <p className="text-sm font-semibold text-stone-100">Source health</p>
+        <div className="mt-4 space-y-3">
           {[
             ["Local job records", snapshot.localJobs.health.recordCount],
             ["Artifact sidecars", artifactDiscovery.realMetadataRecordsFound],
             ["Exports matched", artifactDiscovery.exportFilesMatched],
             ["Memory review items", snapshot.memoryMaintenance.summary.reviewQueueItems],
           ].map(([label, value]) => (
-            <div key={label} className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
-              <p className="text-sm font-medium text-stone-950">{label}</p>
-              <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600">{value}</span>
+            <div key={label} className="flex items-center justify-between gap-3 border-b border-white/10 pb-3 last:border-b-0">
+              <p className="text-sm font-medium text-stone-300">{label}</p>
+              <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">{value}</span>
             </div>
           ))}
         </div>
@@ -2654,11 +2654,11 @@ export default async function WorkspacePage({
   const activeSession = Boolean(selectedJob) || !["home", "readiness"].includes(room);
 
   return (
-    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#f7f6f2] text-stone-950">
+    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#111111] text-stone-100">
       <div className="mx-auto min-h-screen w-full max-w-[1760px] overflow-x-hidden lg:grid lg:grid-cols-[260px_minmax(0,1fr)_320px]">
         <WorkspaceRail room={room} role={role} project={project} snapshot={snapshot} />
 
-        <section className="min-w-0 max-w-full overflow-x-hidden border-stone-200 lg:border-x">
+        <section className="min-w-0 max-w-full overflow-x-hidden bg-[#131313] lg:border-x lg:border-white/10">
           <WorkspaceTopBar room={room} project={project} activeSession={activeSession} />
           <SessionThread
             room={room}
