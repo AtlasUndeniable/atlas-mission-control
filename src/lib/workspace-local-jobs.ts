@@ -3,6 +3,8 @@ import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import type { WorkspaceLibrarianReference } from "./workspace-librarian-references";
+
 export const WORKSPACE_LOCAL_JOBS_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-local-jobs";
 export const WORKSPACE_LOCAL_JOBS_FILE = "local-jobs.jsonl";
 export const WORKSPACE_LOCAL_JOB_CONTROLS_FILE = "local-job-controls.jsonl";
@@ -191,6 +193,7 @@ export type WorkspaceLocalWorkerAdapterRequest = {
     memoryMaintenanceApi: string;
     readinessRoomUrl: string;
   };
+  librarianReferences: WorkspaceLibrarianReference[];
   constraints: string[];
   resultInstructions: string[];
 };
@@ -210,6 +213,7 @@ export type WorkspaceLocalJobControlEvent = {
   requestFiles?: WorkspaceLocalWorkerRequestFiles;
   resultPath?: string;
   errorMessage?: string;
+  librarianReferences?: WorkspaceLibrarianReference[];
   note?: string;
 };
 
@@ -232,6 +236,7 @@ export type WorkspaceLocalJobControlInput = {
   requestFiles?: WorkspaceLocalWorkerRequestFiles;
   resultPath?: string;
   errorMessage?: string;
+  librarianReferences?: WorkspaceLibrarianReference[];
   note?: string;
 } & WorkspaceLocalJobControlPatch;
 
@@ -250,6 +255,7 @@ export type WorkspaceLocalJobsProjection = {
   workerPackagesByJob: Record<string, WorkspaceLocalWorkerPackage>;
   workerRequestsByJob: Record<string, WorkspaceLocalWorkerRequestFiles>;
   workerResultPathsByJob: Record<string, string[]>;
+  librarianReferencesByJob: Record<string, WorkspaceLibrarianReference[]>;
   resultsByJob: Record<string, WorkspaceLocalWorkerResult[]>;
   health: {
     present: boolean;
@@ -456,11 +462,41 @@ function validateWorkerRequestFiles(value: unknown): WorkspaceLocalJobValidation
     : { ok: true, value: { adapter, requestJsonPath, requestMarkdownPath, resultJsonPath, resultMarkdownPath } };
 }
 
+function validateLibrarianReferences(value: unknown): WorkspaceLocalJobValidationResult<WorkspaceLibrarianReference[]> {
+  const errors: string[] = [];
+  if (!Array.isArray(value)) return { ok: false, errors: ["librarianReferences must be an array."] };
+  const references: WorkspaceLibrarianReference[] = [];
+  value.slice(0, 8).forEach((item, index) => {
+    if (!isRecord(item)) {
+      errors.push(`librarianReferences[${index}] must be an object.`);
+      return;
+    }
+    const title = typeof item.title === "string" ? item.title.trim().slice(0, 160) : "";
+    const type = typeof item.type === "string" ? item.type.trim().slice(0, 80) : "";
+    const sourcePath = typeof item.sourcePath === "string" ? item.sourcePath.trim() : "";
+    const relevanceReason = typeof item.relevanceReason === "string" ? item.relevanceReason.trim().slice(0, 240) : "";
+    if (!title) errors.push(`librarianReferences[${index}].title is required.`);
+    if (!type) errors.push(`librarianReferences[${index}].type is required.`);
+    if (!sourcePath) errors.push(`librarianReferences[${index}].sourcePath is required.`);
+    if (!relevanceReason) errors.push(`librarianReferences[${index}].relevanceReason is required.`);
+    references.push({
+      title,
+      type,
+      sourcePath,
+      ...(typeof item.summary === "string" && item.summary.trim() ? { summary: item.summary.trim().slice(0, 300) } : {}),
+      relevanceReason,
+      ...(typeof item.updatedAt === "string" && item.updatedAt.trim() ? { updatedAt: item.updatedAt.trim() } : {}),
+    });
+  });
+  return errors.length ? { ok: false, errors } : { ok: true, value: references };
+}
+
 export function buildWorkspaceLocalWorkerAdapterRequest({
   job,
   projection,
   adapter = "codex",
   files,
+  librarianReferences = [],
   now = new Date(),
   idFactory = randomUUID,
 }: {
@@ -468,6 +504,7 @@ export function buildWorkspaceLocalWorkerAdapterRequest({
   projection: WorkspaceLocalJobsProjection;
   adapter?: string;
   files: WorkspaceLocalWorkerRequestFiles;
+  librarianReferences?: WorkspaceLibrarianReference[];
   now?: Date;
   idFactory?: () => string;
 }): WorkspaceLocalWorkerAdapterRequest {
@@ -501,6 +538,7 @@ export function buildWorkspaceLocalWorkerAdapterRequest({
       memoryMaintenanceApi: "/api/workspace/memory-maintenance",
       readinessRoomUrl: "/workspace?room=readiness",
     },
+    librarianReferences,
     constraints: [
       ...WORKSPACE_WORKER_HANDOFF_CONSTRAINTS,
       `Write the final result to ${files.resultMarkdownPath} or ${files.resultJsonPath} only.`,
@@ -543,6 +581,19 @@ export function formatWorkspaceLocalWorkerAdapterRequest(request: WorkspaceLocal
     `- Artifacts API: ${request.contextPointers.artifactProjectionApi}`,
     `- Memory API: ${request.contextPointers.memoryMaintenanceApi}`,
     `- Readiness room: ${request.contextPointers.readinessRoomUrl}`,
+    "",
+    "## Librarian References",
+    "",
+    request.librarianReferences.length
+      ? request.librarianReferences.map((reference) => [
+          `- ${reference.title}`,
+          `  - type: ${reference.type}`,
+          `  - source: ${reference.sourcePath}`,
+          reference.updatedAt ? `  - updated: ${reference.updatedAt}` : "",
+          reference.summary ? `  - summary: ${reference.summary}` : "",
+          `  - relevance: ${reference.relevanceReason}`,
+        ].filter(Boolean).join("\n")).join("\n")
+      : "No Librarian references found.",
     "",
     "## Constraints",
     "",
@@ -697,6 +748,16 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
     errors.push("Only worker_failed controls can include errorMessage.");
   }
 
+  let librarianReferences: WorkspaceLibrarianReference[] | undefined;
+  if (value.librarianReferences !== undefined) {
+    const checkedReferences = validateLibrarianReferences(value.librarianReferences);
+    if (!checkedReferences.ok) errors.push(...checkedReferences.errors);
+    else librarianReferences = checkedReferences.value;
+  }
+  if (!["worker_claimed", "worker_staged"].includes(typedAction) && value.librarianReferences !== undefined) {
+    errors.push("Only worker claim/stage events can include librarianReferences.");
+  }
+
   const note = cleanPrompt(value.note).slice(0, 1000);
 
   return errors.length
@@ -713,6 +774,7 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
           ...(requestFiles ? { requestFiles } : {}),
           ...(resultPath ? { resultPath } : {}),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(librarianReferences ? { librarianReferences } : {}),
           ...(note ? { note } : {}),
           ...patch,
         },
@@ -865,6 +927,14 @@ export function validateWorkspaceLocalJobControlEvent(value: unknown): Workspace
     errors.push("Only worker_failed events can include errorMessage.");
   }
 
+  if (value.librarianReferences !== undefined) {
+    const checkedReferences = validateLibrarianReferences(value.librarianReferences);
+    if (!checkedReferences.ok) errors.push(...checkedReferences.errors);
+    if (value.action !== "worker_claimed" && value.action !== "worker_staged") {
+      errors.push("Only worker_claimed or worker_staged events can include librarianReferences.");
+    }
+  }
+
   return errors.length ? { ok: false, errors } : { ok: true, value: value as WorkspaceLocalJobControlEvent };
 }
 
@@ -957,6 +1027,7 @@ export async function applyWorkspaceLocalJobControl(
     ...(requestFiles ? { requestFiles } : {}),
     ...(resultPath ? { resultPath } : {}),
     ...(errorMessage ? { errorMessage } : {}),
+    ...(checked.value.librarianReferences ? { librarianReferences: checked.value.librarianReferences } : {}),
     ...(note ? { note } : {}),
   };
 
@@ -985,12 +1056,14 @@ export async function claimWorkspaceLocalWorkerJob({
   jobId,
   adapter = "codex",
   root = WORKSPACE_LOCAL_JOBS_ROOT,
+  librarianReferences,
   now = new Date(),
   idFactory = randomUUID,
 }: {
   jobId?: string;
   adapter?: string;
   root?: string;
+  librarianReferences?: WorkspaceLibrarianReference[] | false;
   now?: Date;
   idFactory?: () => string;
 } = {}): Promise<WorkspaceLocalWorkerClaimResult> {
@@ -1005,11 +1078,15 @@ export async function claimWorkspaceLocalWorkerJob({
 
   const safeAdapter = cleanAdapter(adapter);
   const files = workerRequestFiles({ root, jobId: job.id, adapter: safeAdapter });
+  const resolvedLibrarianReferences = librarianReferences === false
+    ? []
+    : librarianReferences ?? [];
   const request = buildWorkspaceLocalWorkerAdapterRequest({
     job,
     projection,
     adapter: safeAdapter,
     files,
+    librarianReferences: resolvedLibrarianReferences,
     now,
     idFactory,
   });
@@ -1025,6 +1102,7 @@ export async function claimWorkspaceLocalWorkerJob({
       action: "worker_claimed",
       adapter: safeAdapter,
       requestFiles: files,
+      librarianReferences: resolvedLibrarianReferences,
       note: `Claimed by ${safeAdapter} local adapter. No worker was invoked.`,
     },
     { root, now, idFactory },
@@ -1035,6 +1113,7 @@ export async function claimWorkspaceLocalWorkerJob({
       action: "worker_staged",
       adapter: safeAdapter,
       requestFiles: files,
+      librarianReferences: resolvedLibrarianReferences,
       note: `Request package written for ${safeAdapter}. Result must be written to the staged result path only.`,
     },
     { root, now, idFactory },
@@ -1133,6 +1212,7 @@ export async function getWorkspaceLocalJobs(
     workerPackagesByJob: {},
     workerRequestsByJob: {},
     workerResultPathsByJob: {},
+    librarianReferencesByJob: {},
     resultsByJob: {},
     health: {
       present: false,
@@ -1286,6 +1366,7 @@ export async function getWorkspaceLocalJobs(
 
       if (event.action === "worker_claimed" && event.requestFiles) {
         projection.workerRequestsByJob[event.jobId] = event.requestFiles;
+        if (event.librarianReferences) projection.librarianReferencesByJob[event.jobId] = event.librarianReferences;
         jobsById.set(event.jobId, {
           ...job,
           status: "worker_claimed",
@@ -1296,6 +1377,7 @@ export async function getWorkspaceLocalJobs(
 
       if (event.action === "worker_staged" && event.requestFiles) {
         projection.workerRequestsByJob[event.jobId] = event.requestFiles;
+        if (event.librarianReferences) projection.librarianReferencesByJob[event.jobId] = event.librarianReferences;
         jobsById.set(event.jobId, {
           ...job,
           status: "worker_staged",

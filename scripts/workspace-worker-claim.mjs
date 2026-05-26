@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import {
+  getWorkspaceLocalJobs,
   claimWorkspaceLocalWorkerJob,
 } from "../src/lib/workspace-local-jobs.ts";
+import { resolveWorkspaceLibrarianReferences } from "../src/lib/workspace-librarian-references.ts";
 
 function parseArgs(argv) {
   const args = { adapter: "codex" };
@@ -32,9 +34,17 @@ try {
     process.exit(0);
   }
 
+  const projection = await getWorkspaceLocalJobs();
+  const job = args.jobId
+    ? projection.records.find((record) => record.id === args.jobId)
+    : projection.records.find((record) => record.status === "ready_for_worker");
+  if (!job) throw new Error(args.jobId ? `Local job ${args.jobId} was not found.` : "No ready local worker job was found.");
+  const librarianReferences = await resolveWorkspaceLibrarianReferences(job);
+
   const result = await claimWorkspaceLocalWorkerJob({
     jobId: args.jobId,
     adapter: args.adapter,
+    librarianReferences,
   });
 
   console.log(JSON.stringify({
@@ -47,6 +57,7 @@ try {
     requestMarkdownPath: result.files.requestMarkdownPath,
     resultJsonPath: result.files.resultJsonPath,
     resultMarkdownPath: result.files.resultMarkdownPath,
+    librarianReferences: result.request.librarianReferences,
     events: result.events.map((event) => event.action),
   }, null, 2));
 } catch (error) {

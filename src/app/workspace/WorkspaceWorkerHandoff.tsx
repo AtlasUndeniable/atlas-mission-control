@@ -63,6 +63,10 @@ export default function WorkspaceWorkerHandoff({
     () => [...events].reverse().find((event) => event.resultPath)?.resultPath ?? null,
     [events],
   );
+  const latestLibrarianReferences = useMemo(
+    () => [...events].reverse().find((event) => event.librarianReferences?.length)?.librarianReferences ?? [],
+    [events],
+  );
   const localAdapterState = useMemo(() => {
     if (job.status === "completed_local") return "completed local";
     if (job.status === "worker_failed") return "failed locally";
@@ -165,6 +169,27 @@ export default function WorkspaceWorkerHandoff({
             <p className="break-all">Result JSON: {latestRequestFiles.resultJsonPath}</p>
             <p className="break-all">Result MD: {latestRequestFiles.resultMarkdownPath}</p>
             {latestResultPath ? <p className="break-all text-emerald-300">Imported result path: {latestResultPath}</p> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {latestLibrarianReferences.length ? (
+        <div className="mt-4 rounded-md border border-white/10 bg-black/15 p-3">
+          <p className="text-[11px] font-semibold uppercase text-stone-500">Existing Librarian outputs</p>
+          <div className="mt-2 grid gap-2">
+            {latestLibrarianReferences.map((reference) => (
+              <div key={`${reference.type}-${reference.sourcePath}`} className="border-b border-white/10 pb-2 last:border-b-0 last:pb-0">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-stone-200">{reference.title}</p>
+                  <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-stone-400">
+                    {reference.type}
+                  </span>
+                </div>
+                <p className="mt-1 break-all text-xs leading-5 text-stone-500">{reference.sourcePath}</p>
+                {reference.summary ? <p className="mt-1 text-xs leading-5 text-stone-400">{reference.summary}</p> : null}
+                <p className="mt-1 text-xs leading-5 text-emerald-300">{reference.relevanceReason}</p>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
@@ -279,6 +304,11 @@ export default function WorkspaceWorkerHandoff({
                     <p className="break-all">Request: {event.requestFiles.requestMarkdownPath}</p>
                     <p className="break-all">Result target: {event.requestFiles.resultMarkdownPath}</p>
                   </div>
+                ) : null}
+                {event.librarianReferences?.length ? (
+                  <p className="mt-1 text-xs text-stone-500">
+                    {event.librarianReferences.length} existing Librarian reference{event.librarianReferences.length === 1 ? "" : "s"} included.
+                  </p>
                 ) : null}
                 {event.resultPath ? (
                   <p className="mt-1 break-all text-xs text-emerald-300">{event.resultPath}</p>
