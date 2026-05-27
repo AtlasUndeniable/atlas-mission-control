@@ -22,6 +22,9 @@ export const WORKSPACE_LOCAL_JOB_STATUSES = [
   "worker_staged",
   "worker_result_written",
   "worker_failed",
+  "execution_started",
+  "execution_completed",
+  "execution_failed",
   "archived",
 ] as const;
 export const WORKSPACE_LOCAL_JOB_WORKFLOWS = [
@@ -66,7 +69,10 @@ export type WorkspaceLocalJobControlAction =
   | "worker_claimed"
   | "worker_staged"
   | "worker_result_written"
-  | "worker_failed";
+  | "worker_failed"
+  | "execution_started"
+  | "execution_completed"
+  | "execution_failed";
 
 export type WorkspaceLocalJob = {
   schemaVersion: 1;
@@ -313,6 +319,9 @@ const CONTROL_ACTION_SET = new Set<string>([
   "worker_staged",
   "worker_result_written",
   "worker_failed",
+  "execution_started",
+  "execution_completed",
+  "execution_failed",
 ]);
 
 export const WORKSPACE_WORKER_HANDOFF_CONSTRAINTS = [
@@ -729,23 +738,23 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
     if (!checkedFiles.ok) errors.push(...checkedFiles.errors);
     else requestFiles = checkedFiles.value;
   }
-  if (["worker_claimed", "worker_staged"].includes(typedAction) && !requestFiles) {
+  if (["worker_claimed", "worker_staged", "execution_started"].includes(typedAction) && !requestFiles) {
     errors.push("Worker claim/stage events require request files.");
   }
-  if (!["worker_claimed", "worker_staged"].includes(typedAction) && value.requestFiles !== undefined) {
-    errors.push("Only worker claim/stage events can include request files.");
+  if (!["worker_claimed", "worker_staged", "execution_started"].includes(typedAction) && value.requestFiles !== undefined) {
+    errors.push("Only worker claim/stage/execution start events can include request files.");
   }
 
   const resultPath = typeof value.resultPath === "string" ? value.resultPath.trim() : "";
-  if (typedAction === "worker_result_written" && !resultPath) errors.push("resultPath is required.");
-  if (typedAction !== "worker_result_written" && value.resultPath !== undefined) {
-    errors.push("Only worker_result_written controls can include resultPath.");
+  if (["worker_result_written", "execution_completed"].includes(typedAction) && !resultPath) errors.push("resultPath is required.");
+  if (!["worker_result_written", "execution_completed"].includes(typedAction) && value.resultPath !== undefined) {
+    errors.push("Only worker_result_written or execution_completed controls can include resultPath.");
   }
 
   const errorMessage = typeof value.errorMessage === "string" ? value.errorMessage.trim().slice(0, 2000) : "";
-  if (typedAction === "worker_failed" && !errorMessage) errors.push("errorMessage is required.");
-  if (typedAction !== "worker_failed" && value.errorMessage !== undefined) {
-    errors.push("Only worker_failed controls can include errorMessage.");
+  if (["worker_failed", "execution_failed"].includes(typedAction) && !errorMessage) errors.push("errorMessage is required.");
+  if (!["worker_failed", "execution_failed"].includes(typedAction) && value.errorMessage !== undefined) {
+    errors.push("Only worker_failed or execution_failed controls can include errorMessage.");
   }
 
   let librarianReferences: WorkspaceLibrarianReference[] | undefined;
@@ -754,8 +763,8 @@ export function validateWorkspaceLocalJobControlInput(value: unknown): Workspace
     if (!checkedReferences.ok) errors.push(...checkedReferences.errors);
     else librarianReferences = checkedReferences.value;
   }
-  if (!["worker_claimed", "worker_staged"].includes(typedAction) && value.librarianReferences !== undefined) {
-    errors.push("Only worker claim/stage events can include librarianReferences.");
+  if (!["worker_claimed", "worker_staged", "execution_started"].includes(typedAction) && value.librarianReferences !== undefined) {
+    errors.push("Only worker claim/stage/execution start events can include librarianReferences.");
   }
 
   const note = cleanPrompt(value.note).slice(0, 1000);
@@ -908,30 +917,30 @@ export function validateWorkspaceLocalJobControlEvent(value: unknown): Workspace
     errors.push("adapter must be a non-empty string.");
   }
 
-  if (value.action === "worker_claimed" || value.action === "worker_staged") {
+  if (value.action === "worker_claimed" || value.action === "worker_staged" || value.action === "execution_started") {
     const checkedFiles = validateWorkerRequestFiles(value.requestFiles);
     if (!checkedFiles.ok) errors.push(...checkedFiles.errors);
   } else if (value.requestFiles !== undefined) {
-    errors.push("Only worker_claimed or worker_staged events can include requestFiles.");
+    errors.push("Only worker_claimed, worker_staged, or execution_started events can include requestFiles.");
   }
 
-  if (value.action === "worker_result_written") {
+  if (value.action === "worker_result_written" || value.action === "execution_completed") {
     if (typeof value.resultPath !== "string" || !value.resultPath.trim()) errors.push("resultPath is required.");
   } else if (value.resultPath !== undefined) {
-    errors.push("Only worker_result_written events can include resultPath.");
+    errors.push("Only worker_result_written or execution_completed events can include resultPath.");
   }
 
-  if (value.action === "worker_failed") {
+  if (value.action === "worker_failed" || value.action === "execution_failed") {
     if (typeof value.errorMessage !== "string" || !value.errorMessage.trim()) errors.push("errorMessage is required.");
   } else if (value.errorMessage !== undefined) {
-    errors.push("Only worker_failed events can include errorMessage.");
+    errors.push("Only worker_failed or execution_failed events can include errorMessage.");
   }
 
   if (value.librarianReferences !== undefined) {
     const checkedReferences = validateLibrarianReferences(value.librarianReferences);
     if (!checkedReferences.ok) errors.push(...checkedReferences.errors);
-    if (value.action !== "worker_claimed" && value.action !== "worker_staged") {
-      errors.push("Only worker_claimed or worker_staged events can include librarianReferences.");
+    if (value.action !== "worker_claimed" && value.action !== "worker_staged" && value.action !== "execution_started") {
+      errors.push("Only worker_claimed, worker_staged, or execution_started events can include librarianReferences.");
     }
   }
 
@@ -1386,6 +1395,17 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
+      if (event.action === "execution_started" && event.requestFiles) {
+        projection.workerRequestsByJob[event.jobId] = event.requestFiles;
+        if (event.librarianReferences) projection.librarianReferencesByJob[event.jobId] = event.librarianReferences;
+        jobsById.set(event.jobId, {
+          ...job,
+          status: "execution_started",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
       if (event.action === "worker_package_created" && event.workerPackage) {
         projection.workerPackagesByJob[event.jobId] = event.workerPackage;
         jobsById.set(event.jobId, {
@@ -1409,6 +1429,15 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
+      if (event.action === "execution_completed" && event.resultPath) {
+        jobsById.set(event.jobId, {
+          ...job,
+          status: job.status === "completed_local" ? "completed_local" : "execution_completed",
+          updatedAt: event.createdAt,
+        });
+        return;
+      }
+
       if (event.action === "result_imported" && event.result) {
         resultsById.set(event.result.id, event.result);
         jobsById.set(event.jobId, {
@@ -1419,7 +1448,7 @@ export async function getWorkspaceLocalJobs(
         return;
       }
 
-      if (event.action === "worker_failed") {
+      if (event.action === "worker_failed" || event.action === "execution_failed") {
         jobsById.set(event.jobId, {
           ...job,
           status: "worker_failed",

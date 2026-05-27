@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -23,6 +23,11 @@ import {
   WORKSPACE_LOCAL_JOBS_FILE,
 } from "../src/lib/workspace-local-jobs.ts";
 import { resolveWorkspaceLibrarianReferences } from "../src/lib/workspace-librarian-references.ts";
+import {
+  buildSanitizedCodexEnv,
+  discoverCodexExecutionOptions,
+  runWorkspaceCodexExecution,
+} from "../src/lib/workspace-codex-execution.ts";
 
 async function withTempRoot(fn: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "atlas-workspace-local-jobs-"));
@@ -406,6 +411,153 @@ test("workspace codex worker adapter claims, exports, and imports through local 
     const baseLines = (await readFile(join(root, WORKSPACE_LOCAL_JOBS_FILE), "utf8")).trim().split("\n");
     assert.equal(baseLines.length, 1);
   });
+});
+
+test("workspace codex execution adapter fails closed when no safe runner is available", async () => {
+  await withTempRoot(async (root) => {
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Prepare this local job for unavailable Codex runner verification",
+        project: "undeniable-os",
+        room: "home",
+        requesterRole: "rhys",
+        intendedWorkflow: "ask_atlas",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T01:02:03.000Z"),
+        idFactory: () => "codex-runner-unavailable",
+      },
+    );
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "ready_for_worker" },
+      {
+        root,
+        now: new Date("2026-05-26T02:00:00.000Z"),
+        idFactory: () => "ready-unavailable",
+      },
+    );
+
+    const result = await runWorkspaceCodexExecution({
+      jobId: job.id,
+      root,
+      env: {
+        PATH: "",
+        ATLAS_WORKSPACE_CODEX_RUNNER_DISABLED: "1",
+      },
+      now: new Date("2026-05-26T02:01:00.000Z"),
+      idFactory: () => "unavailable-run",
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "manual_required");
+    assert.equal(result.runnerAvailable, false);
+    assert.ok(result.requestFiles);
+    assert.match(result.discovery.manualCommand ?? "", /codex exec/);
+
+    const projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records[0].status, "worker_staged");
+    assert.deepEqual(
+      projection.eventsByJob[job.id].map((event) => event.action),
+      ["ready_for_worker", "worker_claimed", "worker_staged"],
+    );
+  });
+});
+
+test("workspace codex execution adapter runs one staged job through a safe local codex binary", async () => {
+  await withTempRoot(async (root) => {
+    const bin = join(root, "bin");
+    await mkdir(bin, { recursive: true });
+    const fakeCodex = join(bin, "codex");
+    await writeFile(
+      fakeCodex,
+      [
+        "#!/bin/sh",
+        "out=\"\"",
+        "while [ \"$#\" -gt 0 ]; do",
+        "  if [ \"$1\" = \"--output-last-message\" ]; then",
+        "    shift",
+        "    out=\"$1\"",
+        "  fi",
+        "  shift",
+        "done",
+        "cat >/dev/null",
+        "printf '# Fake Codex result\\n\\nLocal one-shot result body only.\\n' > \"$out\"",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakeCodex, 0o755);
+
+    const job = await createWorkspaceLocalJob(
+      {
+        prompt: "Run this local job through a fake Codex binary",
+        project: "undeniable-os",
+        room: "home",
+        requesterRole: "rhys",
+        intendedWorkflow: "ask_atlas",
+      },
+      {
+        root,
+        now: new Date("2026-05-26T01:02:03.000Z"),
+        idFactory: () => "codex-runner-target",
+      },
+    );
+    await applyWorkspaceLocalJobControl(
+      { jobId: job.id, action: "ready_for_worker" },
+      {
+        root,
+        now: new Date("2026-05-26T02:00:00.000Z"),
+        idFactory: () => "ready-runner",
+      },
+    );
+
+    const result = await runWorkspaceCodexExecution({
+      jobId: job.id,
+      root,
+      env: {
+        PATH: bin,
+        OPENAI_API_KEY: "must-not-be-forwarded",
+        CODEX_CI: "1",
+      },
+      now: new Date("2026-05-26T02:01:00.000Z"),
+      idFactory: () => "runner-event",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "completed");
+    assert.equal(result.discovery.runnerPath, fakeCodex);
+    assert.deepEqual(result.events, ["execution_started", "worker_result_written", "result_imported", "execution_completed"]);
+
+    const projection = await getWorkspaceLocalJobs({ root });
+    assert.equal(projection.records[0].status, "completed_local");
+    assert.equal(projection.resultsByJob[job.id][0].title, "Fake Codex result");
+    assert.match(projection.resultsByJob[job.id][0].body, /Local one-shot result body only/);
+  });
+});
+
+test("workspace codex execution discovery and env sanitizing avoid unsafe secret handling", async () => {
+  const sanitized = buildSanitizedCodexEnv({
+    PATH: "/tmp/bin",
+    OPENAI_API_KEY: "secret",
+    ANTHROPIC_AUTH_TOKEN: "secret",
+    CODEX_CI: "1",
+  });
+
+  assert.equal(sanitized.OPENAI_API_KEY, undefined);
+  assert.equal(sanitized.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(sanitized.CODEX_CI, "1");
+  assert.equal(sanitized.CODEX_WORKSPACE_EXECUTION_ADAPTER, "atlas-workspace-local-v0");
+
+  const discovery = await discoverCodexExecutionOptions({
+    env: {
+      PATH: "",
+      ATLAS_WORKSPACE_CODEX_RUNNER_DISABLED: "1",
+      CODEX_THREAD_ID: "thread-id-present",
+    },
+    packageJsonPath: "/tmp/not-present-package.json",
+  });
+  assert.equal(discovery.available, false);
+  assert.deepEqual(discovery.environmentSignals, ["CODEX_THREAD_ID"]);
 });
 
 test("workspace local job reader skips malformed and invalid records safely", async () => {

@@ -8,7 +8,8 @@
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
     "workspace:worker:claim": "node scripts/workspace-worker-claim.mjs",
-    "workspace:worker:import": "node scripts/workspace-worker-import.mjs"
+    "workspace:worker:import": "node scripts/workspace-worker-import.mjs",
+    "workspace:worker:run-codex": "node scripts/workspace-worker-run-codex.mjs"
   },
   "dependencies": {
     "next": "16.2.0",

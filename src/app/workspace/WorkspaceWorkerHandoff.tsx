@@ -67,6 +67,10 @@ export default function WorkspaceWorkerHandoff({
     () => [...events].reverse().find((event) => event.librarianReferences?.length)?.librarianReferences ?? [],
     [events],
   );
+  const codexTerminalCommand = useMemo(
+    () => `npm run workspace:worker:run-codex -- --job ${job.id}`,
+    [job.id],
+  );
   const localAdapterState = useMemo(() => {
     if (job.status === "completed_local") return "completed local";
     if (job.status === "worker_failed") return "failed locally";
@@ -121,6 +125,17 @@ export default function WorkspaceWorkerHandoff({
     } catch {
       setHandoffState("error");
       setMessage("Clipboard copy was unavailable. The package remains visible below.");
+    }
+  }
+
+  async function copyCodexCommand() {
+    try {
+      await navigator.clipboard.writeText(codexTerminalCommand);
+      setHandoffState("copied");
+      setMessage("Codex terminal command copied. It only runs if pasted into a terminal; the browser did not execute it.");
+    } catch {
+      setHandoffState("error");
+      setMessage(`Clipboard copy was unavailable. Terminal command: ${codexTerminalCommand}`);
     }
   }
 
@@ -220,10 +235,10 @@ export default function WorkspaceWorkerHandoff({
         </button>
         <button
           type="button"
-          disabled
-          className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-stone-600 sm:px-3"
+          onClick={copyCodexCommand}
+          className="rounded-md border border-emerald-300/20 bg-emerald-400/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 sm:px-3"
         >
-          Run unavailable
+          Copy Codex command
         </button>
         <button
           type="button"
@@ -240,6 +255,11 @@ export default function WorkspaceWorkerHandoff({
       )}>
         {message}
       </p>
+
+      <div className="mt-3 rounded-md border border-white/10 bg-black/15 p-3">
+        <p className="text-[11px] font-semibold uppercase text-stone-500">Terminal-only Codex execution</p>
+        <p className="mt-2 break-all font-mono text-xs leading-5 text-stone-300">{codexTerminalCommand}</p>
+      </div>
 
       <div className="mt-4 grid gap-4">
         <label className="grid gap-1">
