@@ -42,7 +42,7 @@ interface AdapterEventContext {
 }
 
 const dynamicImport: DynamicImport = (specifier) => new Function("specifier", "return import(specifier)")(specifier) as Promise<unknown>;
-const DEFAULT_CLAUDE_MODEL = "claude-3-5-sonnet-latest";
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514";
 const MASSTRA_STREAM_TIMEOUT_MS = 90_000;
 const STREAM_CHUNK_SIZE = 28;
 
@@ -214,12 +214,14 @@ async function resolveMastraDependencies(env: NodeJS.ProcessEnv): Promise<Mastra
   }
 
   try {
-    const [aiModule, anthropicModule] = await Promise.all([
+    const [aiModule, anthropicModule, mastraModule] = await Promise.all([
       dynamicImport("ai"),
       dynamicImport("@ai-sdk/anthropic"),
+      dynamicImport("@mastra/core"),
     ]);
     const streamText = readFunctionExport<AiSdkStreamText>(aiModule, "streamText");
     const createAnthropic = readFunctionExport<AnthropicProviderFactory>(anthropicModule, "createAnthropic");
+    assertModuleLoaded(mastraModule, "@mastra/core");
     const modelId = env.ATLAS_WORKSPACE_DEMO_CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
     return {
       ok: true,
@@ -242,6 +244,12 @@ function readFunctionExport<T extends (...args: never[]) => unknown>(moduleValue
   const value = (moduleValue as Record<string, unknown>)[exportName];
   if (typeof value !== "function") throw new Error(`${exportName} export is missing.`);
   return value as T;
+}
+
+function assertModuleLoaded(moduleValue: unknown, packageName: string): void {
+  if (!moduleValue || typeof moduleValue !== "object") {
+    throw new Error(`${packageName} did not load.`);
+  }
 }
 
 function createEventContext(ctx: WorkspaceLocalRuntimeContext, runPrefix: string): AdapterEventContext {

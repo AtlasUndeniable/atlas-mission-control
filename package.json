@@ -12,6 +12,9 @@
     "workspace:worker:run-codex": "node scripts/workspace-worker-run-codex.mjs"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "3.0.81",
+    "@mastra/core": "1.37.1",
+    "ai": "6.0.193",
     "next": "16.2.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
