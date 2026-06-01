@@ -21,6 +21,7 @@ import {
   createWorkspaceRuntimeAdapter,
   resolveWorkspaceRuntimeProvider,
 } from "../src/lib/workspace-runtime-provider.ts";
+import { buildWorkspaceRuntimeContext } from "../src/lib/workspace-runtime-context.ts";
 import type { AgentEvent } from "../src/lib/workspace-demo-events.ts";
 
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
@@ -121,6 +122,33 @@ test("workspace runtime provider defaults to mock and gates local codex and mast
   assert.ok(createWorkspaceRuntimeAdapter("mastra"));
 });
 
+test("workspace runtime context carries Atlas visibility and execution boundaries", () => {
+  const context = buildWorkspaceRuntimeContext({
+    prompt: "Prepare the workspace for a readiness pass.",
+    title: "Readiness pass",
+  }, { provider: "local-codex" });
+
+  assert.equal(context.workspace.id, workspaceDemoRuntimeIds.workspaceId);
+  assert.equal(context.workspace.project, "Undeniable");
+  assert.equal(context.workspace.room, "workspace-demo");
+  assert.equal(context.user.role, "rhys_owner");
+  assert.equal(context.user.view, "owner");
+  assert.equal(context.provider, "local-codex");
+  assert.ok(context.eventVisibilityRules.some((rule) => rule.includes("visibility=presentation")));
+  assert.ok(context.eventVisibilityRules.some((rule) => rule.includes("visibility=internal")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("live Supabase")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("files")));
+  assert.ok(context.librarianReferences.length >= 2);
+  assert.ok(context.librarianReferences.some((reference) => reference.handle.includes("obsidian")));
+  assert.equal(context.librarianReferences.every((reference) => reference.pathSummary.length < 140), true);
+  assert.match(context.internalSummary, /librarian_handles=/);
+  assert.match(context.systemPrompt, /Rhys owner view/);
+  assert.match(context.systemPrompt, /presentation events/i);
+  assert.match(context.systemPrompt, /Obsidian/);
+  assert.doesNotMatch(context.systemPrompt, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+});
+
 test("safe mock adapter streams presentation text and completes the task chip", async () => {
   const events = await collectEvents(new TerminalLocalRuntimeAdapter());
 
@@ -182,6 +210,11 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
     assert.equal(calledWith?.command, fakeCodex);
     assert.deepEqual(calledWith?.args.slice(0, 2), ["exec", "--cd"]);
     assert.equal(calledWith?.env?.OPENAI_API_KEY, undefined);
+    assert.match(calledWith?.input ?? "", /Project: Undeniable/);
+    assert.match(calledWith?.input ?? "", /Rhys owner view/);
+    assert.match(calledWith?.input ?? "", /Librarian context/);
+    assert.match(calledWith?.input ?? "", /Obsidian/);
+    assert.doesNotMatch(calledWith?.input ?? "", /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
     assert.ok(events.some((event) => event.kind === "message.delta"));
     assert.ok(events.some((event) => event.kind === "artifact.created"));
   } finally {

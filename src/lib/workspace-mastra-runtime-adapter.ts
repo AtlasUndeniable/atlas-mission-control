@@ -7,6 +7,7 @@ import type {
   WorkspaceLocalRuntimeInput,
 } from "./workspace-local-runtime-adapter.ts";
 import { validateLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
+import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -50,6 +51,7 @@ const STREAM_CHUNK_SIZE = 28;
 export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
   async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
     const checkedInput = validateLocalRuntimeInput(input);
+    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, { provider: "mastra" });
     const eventCtx = createEventContext(ctx, "run_mastra");
     const messageId = `${eventCtx.runId}_assistant`;
     const steps: TaskStep[] = [
@@ -72,8 +74,8 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       toolName: "runtime.mastra-ai-sdk",
       label: "Select Mastra/Vercel AI SDK runtime",
       inputSummary: dependencyCheck.ok
-        ? `provider=anthropic; model=${dependencyCheck.modelId}; timeout_ms=${MASSTRA_STREAM_TIMEOUT_MS}`
-        : dependencyCheck.reason,
+        ? `provider=anthropic; model=${dependencyCheck.modelId}; timeout_ms=${MASSTRA_STREAM_TIMEOUT_MS}; ${runtimeContext.internalSummary}`
+        : `${dependencyCheck.reason}; ${runtimeContext.internalSummary}`,
     };
 
     if (!dependencyCheck.ok) {
@@ -92,7 +94,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
         visibility: "internal",
         toolName: "runtime.mastra-ai-sdk",
         label: "Mastra runtime unavailable",
-        resultSummary: dependencyCheck.reason,
+        resultSummary: `${dependencyCheck.reason}; ${runtimeContext.internalSummary}`,
       };
       yield {
         ...baseEvent(eventCtx),
@@ -130,11 +132,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       const response = await withTimeout(
         dependencyCheck.streamText({
           model: dependencyCheck.model,
-          system: [
-            "You are Atlas Workspace running through a dormant Mastra/Vercel AI SDK runtime skeleton.",
-            "Return concise presentation-safe output for the workspace thread.",
-            "Do not claim to call Slack, Monday, Typeform, OpenClaw, Supabase, Mastra tools, browser automation, or production sends.",
-          ].join("\n"),
+          system: runtimeContext.systemPrompt,
           prompt: checkedInput.prompt,
           onError: ({ error }) => {
             streamError = error;
@@ -165,7 +163,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
         visibility: "internal",
         toolName: "runtime.mastra-ai-sdk",
         label: "Mastra runtime streamed output",
-        resultSummary: `provider=anthropic; model=${dependencyCheck.modelId}; output_chars=${content.length}`,
+        resultSummary: `provider=anthropic; model=${dependencyCheck.modelId}; output_chars=${content.length}; ${runtimeContext.internalSummary}`,
       };
 
       steps[1] = { ...steps[1], status: "complete", summary: "Streamed assistant output through AgentEvent deltas." };
@@ -189,7 +187,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
         visibility: "internal",
         toolName: "runtime.mastra-ai-sdk",
         label: "Mastra runtime failed closed",
-        resultSummary: `provider=anthropic; model=${dependencyCheck.modelId}; error=${message}`,
+        resultSummary: `provider=anthropic; model=${dependencyCheck.modelId}; error=${message}; ${runtimeContext.internalSummary}`,
       };
       yield {
         ...baseEvent(eventCtx),

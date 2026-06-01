@@ -4,7 +4,9 @@ import { constants as fsConstants } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import type { AgentEvent, Artifact, Task, TaskStep } from "./workspace-demo-events";
+import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
 
 export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
 
@@ -107,6 +109,9 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     const env = ctx.env ?? process.env;
     const cwd = ctx.cwd ?? env.PWD ?? ".";
     const selection = await selectLocalRunner({ cwd, env, options: this.options });
+    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, {
+      provider: selection.mode === "mock" ? "mock" : "local-codex",
+    });
     steps[0] = { ...steps[0], status: "complete", summary: selection.reason };
     steps[1] = { ...steps[1], status: "running" };
     yield taskStep(eventCtx, steps[0]);
@@ -118,11 +123,14 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
         cwd,
         env,
         selection,
+        runtimeContext,
         commandRunner: ctx.commandRunner ?? runTerminalCommand,
       })
       : selection.explicit
-        ? buildBlockedOutput(checkedInput, selection)
-        : buildMockOutput(checkedInput, selection.reason);
+        ? buildBlockedOutput(checkedInput, selection, {
+          internalSummary: `${selection.reason}; ${runtimeContext.internalSummary}`,
+        })
+        : buildMockOutput(checkedInput, selection.reason, runtimeContext);
 
     yield {
       ...baseEvent(eventCtx),
@@ -132,8 +140,8 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       toolName: `local.${selection.mode}`,
       label: selection.available && selection.command ? "Run approved local command" : "Select local runtime",
       inputSummary: selection.available && selection.command
-        ? `cwd=${cwd}; command=${selection.command}; args=${selection.args.join(" ")}; timeout_ms=${DEFAULT_TIMEOUT_MS}`
-        : selection.reason,
+        ? `cwd=${cwd}; command=${selection.command}; args=${selection.args.join(" ")}; timeout_ms=${DEFAULT_TIMEOUT_MS}; ${runtimeContext.internalSummary}`
+        : `${selection.reason}; ${runtimeContext.internalSummary}`,
     };
 
     yield {
@@ -386,16 +394,18 @@ async function runApprovedCommand({
   cwd,
   env,
   selection,
+  runtimeContext,
   commandRunner,
 }: {
   input: WorkspaceLocalRuntimeInput;
   cwd: string;
   env: NodeJS.ProcessEnv;
   selection: LocalRunnerSelection;
+  runtimeContext: WorkspaceRuntimeContextPacket;
   commandRunner: TerminalCommandRunner;
 }): Promise<LocalAdapterOutput> {
-  if (!selection.command) return buildMockOutput(input, selection.reason);
-  const commandInput = buildCommandPrompt(input);
+  if (!selection.command) return buildMockOutput(input, selection.reason, runtimeContext);
+  const commandInput = buildCommandPrompt(input, runtimeContext);
   const result = await commandRunner({
     command: selection.command,
     args: selection.args,
@@ -415,6 +425,7 @@ async function runApprovedCommand({
         `exit_code=${String(result.exitCode)}`,
         `timed_out=${String(result.timedOut)}`,
         `stderr=${limitText(result.stderr || "No stderr.")}`,
+        runtimeContext.internalSummary,
       ].join("; "),
       error: `Approved ${selection.mode} command failed closed. Exit code: ${String(result.exitCode)}. ${result.timedOut ? "Timed out. " : ""}${limitText(result.stderr || "No stderr.")}`,
     });
@@ -430,6 +441,7 @@ async function runApprovedCommand({
       `args=${selection.args.join(" ")}`,
       `cwd=${cwd}`,
       result.stderr ? `stderr=${limitText(result.stderr)}` : "stderr=<empty>",
+      runtimeContext.internalSummary,
     ].join("; "),
     artifact: buildArtifact(input, presentationText, selection.mode),
     usedFallback: false,
@@ -437,7 +449,11 @@ async function runApprovedCommand({
   };
 }
 
-function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string): LocalAdapterOutput {
+function buildMockOutput(
+  input: WorkspaceLocalRuntimeInput,
+  reason: string,
+  runtimeContext = buildWorkspaceRuntimeContext(input, { provider: "mock" }),
+): LocalAdapterOutput {
   const presentationText = [
     "Local adapter V0 is running in safe mock mode.",
     "",
@@ -455,7 +471,7 @@ function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string): Loc
   return {
     presentationText,
     presentationSummary: "Safe mock local runner produced presentation output.",
-    internalSummary: reason,
+    internalSummary: `${reason}; ${runtimeContext.internalSummary}`,
     artifact: buildArtifact(input, presentationText, "mock"),
     usedFallback: true,
     error: null,
@@ -506,12 +522,9 @@ function buildTask(taskId: string, title: string, steps: TaskStep[]): Task {
   };
 }
 
-function buildCommandPrompt(input: WorkspaceLocalRuntimeInput): string {
+function buildCommandPrompt(input: WorkspaceLocalRuntimeInput, runtimeContext: WorkspaceRuntimeContextPacket): string {
   return [
-    "You are the Atlas Workspace local runtime adapter V0.",
-    "Return a concise presentation-safe answer for the workspace thread.",
-    "Do not call Slack, Monday, Typeform, OpenClaw, Supabase, or external delivery systems.",
-    "Do not mutate files unless the user explicitly requested a file artifact.",
+    runtimeContext.systemPrompt,
     "",
     `Task: ${input.prompt}`,
   ].join("\n");
