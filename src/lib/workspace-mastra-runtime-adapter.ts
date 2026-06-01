@@ -14,6 +14,7 @@ type AiSdkStreamText = (options: {
   model: unknown;
   prompt: string;
   system?: string;
+  onError?: (event: { error: unknown }) => void | Promise<void>;
 }) => Promise<{
   textStream?: AsyncIterable<string>;
   text?: Promise<string> | string;
@@ -124,6 +125,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
     yield taskStep(eventCtx, steps[1]);
 
     let content = "";
+    let streamError: unknown = null;
     try {
       const response = await withTimeout(
         dependencyCheck.streamText({
@@ -134,6 +136,9 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
             "Do not claim to call Slack, Monday, Typeform, OpenClaw, Supabase, Mastra tools, browser automation, or production sends.",
           ].join("\n"),
           prompt: checkedInput.prompt,
+          onError: ({ error }) => {
+            streamError = error;
+          },
         }),
         MASSTRA_STREAM_TIMEOUT_MS,
       );
@@ -149,7 +154,9 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       }
 
       content = normalizePresentationText(content);
-      if (!content) throw new Error("AI SDK returned no presentation text.");
+      if (!content) {
+        throw new Error(streamError ? readErrorMessage(streamError) : "AI SDK returned no presentation text.");
+      }
 
       yield {
         ...baseEvent(eventCtx),
@@ -250,6 +257,20 @@ function assertModuleLoaded(moduleValue: unknown, packageName: string): void {
   if (!moduleValue || typeof moduleValue !== "object") {
     throw new Error(`${packageName} did not load.`);
   }
+}
+
+function readErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    if (typeof record.message === "string") return record.message;
+    if (record.error && typeof record.error === "object") {
+      const nested = record.error as Record<string, unknown>;
+      if (typeof nested.message === "string") return nested.message;
+    }
+  }
+  return "Mastra runtime failed.";
 }
 
 function createEventContext(ctx: WorkspaceLocalRuntimeContext, runPrefix: string): AdapterEventContext {
