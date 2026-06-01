@@ -32,6 +32,7 @@ export interface TerminalCommandRequest {
   command: string;
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   input: string;
   timeoutMs: number;
 }
@@ -57,9 +58,19 @@ interface AdapterEventContext {
 interface LocalRunnerSelection {
   mode: WorkspaceLocalRuntimeMode;
   available: boolean;
+  explicit: boolean;
   command: string | null;
   args: string[];
   reason: string;
+}
+
+interface LocalAdapterOutput {
+  presentationText: string;
+  presentationSummary: string;
+  internalSummary: string;
+  artifact: Artifact | null;
+  usedFallback: boolean;
+  error: string | null;
 }
 
 const APPROVED_LOCAL_COMMANDS = ["codex", "claude"] as const;
@@ -94,20 +105,23 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       ? await runApprovedCommand({
         input: checkedInput,
         cwd,
+        env,
         selection,
         commandRunner: ctx.commandRunner ?? runTerminalCommand,
       })
-      : buildMockOutput(checkedInput, selection.reason);
+      : selection.explicit
+        ? buildBlockedOutput(checkedInput, selection)
+        : buildMockOutput(checkedInput, selection.reason);
 
     yield {
       ...baseEvent(eventCtx),
       id: eventCtx.nextId("evt_internal"),
       kind: "tool.call",
       visibility: "internal",
-      toolName: selection.available && selection.command ? `local.${selection.mode}` : "local.mock",
-      label: selection.available && selection.command ? "Run approved local command" : "Use safe mock local runner",
+      toolName: `local.${selection.mode}`,
+      label: selection.available && selection.command ? "Run approved local command" : "Select local runtime",
       inputSummary: selection.available && selection.command
-        ? `${selection.command} ${selection.args.join(" ")}`
+        ? `cwd=${cwd}; command=${selection.command}; args=${selection.args.join(" ")}; timeout_ms=${DEFAULT_TIMEOUT_MS}`
         : selection.reason,
     };
 
@@ -116,10 +130,21 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       id: eventCtx.nextId("evt_internal"),
       kind: "tool.result",
       visibility: "internal",
-      toolName: selection.available && selection.command ? `local.${selection.mode}` : "local.mock",
-      label: output.usedFallback ? "Safe mock fallback complete" : "Local adapter output captured",
+      toolName: `local.${selection.mode}`,
+      label: output.usedFallback ? "Safe mock fallback complete" : output.error ? "Local adapter blocked" : "Local adapter output captured",
       resultSummary: output.internalSummary,
     };
+
+    if (output.error) {
+      yield {
+        ...baseEvent(eventCtx),
+        id: eventCtx.nextId("evt_internal"),
+        kind: "error",
+        visibility: "internal",
+        message: output.error,
+        recoverable: true,
+      };
+    }
 
     steps[1] = {
       ...steps[1],
@@ -155,7 +180,13 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       };
     }
 
-    steps[2] = { ...steps[2], status: "complete", summary: "Rendered through the P1 AgentEvent contract." };
+    steps[2] = {
+      ...steps[2],
+      status: "complete",
+      summary: output.error
+        ? "Rendered a clean presentation failure through the P1 AgentEvent contract."
+        : "Rendered through the P1 AgentEvent contract.",
+    };
     yield taskStep(eventCtx, steps[2]);
     yield {
       ...baseEvent(eventCtx),
@@ -192,6 +223,7 @@ export async function selectLocalRunner({
     return {
       mode: "mock",
       available: false,
+      explicit: false,
       command: null,
       args: [],
       reason: "Safe mock mode is active. Set ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER=codex or claude to opt into an approved local CLI.",
@@ -201,17 +233,19 @@ export async function selectLocalRunner({
   const commandPath = await findExecutable(requested, env);
   if (!commandPath) {
     return {
-      mode: "mock",
+      mode: requested,
       available: false,
+      explicit: true,
       command: null,
       args: [],
-      reason: `${requested} CLI was requested but no executable local binary was found; using safe mock fallback.`,
+      reason: `${requested} CLI was requested but no executable approved local binary was found.`,
     };
   }
 
   return {
     mode: requested,
     available: true,
+    explicit: true,
     command: commandPath,
     args: requested === "codex"
       ? ["exec", "--cd", cwd, "--sandbox", "read-only", "--ephemeral", "-"]
@@ -224,7 +258,7 @@ export async function runTerminalCommand(request: TerminalCommandRequest): Promi
   return new Promise((resolveResult) => {
     const child = spawn(request.command, request.args, {
       cwd: request.cwd,
-      env: buildSafeCommandEnv(process.env),
+      env: buildSafeCommandEnv(request.env ?? process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -326,46 +360,60 @@ function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
 async function runApprovedCommand({
   input,
   cwd,
+  env,
   selection,
   commandRunner,
 }: {
   input: WorkspaceLocalRuntimeInput;
   cwd: string;
+  env: NodeJS.ProcessEnv;
   selection: LocalRunnerSelection;
   commandRunner: TerminalCommandRunner;
-}) {
+}): Promise<LocalAdapterOutput> {
   if (!selection.command) return buildMockOutput(input, selection.reason);
   const commandInput = buildCommandPrompt(input);
   const result = await commandRunner({
     command: selection.command,
     args: selection.args,
     cwd,
+    env: buildSafeCommandEnv(env),
     input: commandInput,
     timeoutMs: DEFAULT_TIMEOUT_MS,
   });
 
   if (!result.ok || !result.stdout.trim()) {
-    return buildMockOutput(
-      input,
-      `Approved ${selection.mode} command did not return usable output; using safe mock fallback.`,
-      {
-        error: result.stderr || `Exit code ${String(result.exitCode)}`,
-      },
-    );
+    return buildBlockedOutput(input, selection, {
+      internalSummary: [
+        `${selection.mode} command failed closed.`,
+        `command=${selection.command}`,
+        `args=${selection.args.join(" ")}`,
+        `cwd=${cwd}`,
+        `exit_code=${String(result.exitCode)}`,
+        `timed_out=${String(result.timedOut)}`,
+        `stderr=${limitText(result.stderr || "No stderr.")}`,
+      ].join("; "),
+      error: `Approved ${selection.mode} command failed closed. Exit code: ${String(result.exitCode)}. ${result.timedOut ? "Timed out. " : ""}${limitText(result.stderr || "No stderr.")}`,
+    });
   }
 
   const presentationText = normalizePresentationText(result.stdout);
   return {
     presentationText,
     presentationSummary: `Captured output from approved local ${selection.mode} CLI.`,
-    internalSummary: `${selection.mode} exited ${String(result.exitCode)} with ${result.stdout.length} stdout characters.`,
+    internalSummary: [
+      `${selection.mode} exited ${String(result.exitCode)} with ${result.stdout.length} stdout characters.`,
+      `command=${selection.command}`,
+      `args=${selection.args.join(" ")}`,
+      `cwd=${cwd}`,
+      result.stderr ? `stderr=${limitText(result.stderr)}` : "stderr=<empty>",
+    ].join("; "),
     artifact: buildArtifact(input, presentationText, selection.mode),
     usedFallback: false,
     error: null,
   };
 }
 
-function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string, options: { error?: string } = {}) {
+function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string): LocalAdapterOutput {
   const presentationText = [
     "Local adapter V0 is running in safe mock mode.",
     "",
@@ -383,10 +431,32 @@ function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string, opti
   return {
     presentationText,
     presentationSummary: "Safe mock local runner produced presentation output.",
-    internalSummary: options.error ? `${reason} ${options.error}` : reason,
+    internalSummary: reason,
     artifact: buildArtifact(input, presentationText, "mock"),
     usedFallback: true,
-    error: options.error ?? null,
+    error: null,
+  };
+}
+
+function buildBlockedOutput(
+  input: WorkspaceLocalRuntimeInput,
+  selection: LocalRunnerSelection,
+  options: { internalSummary?: string; error?: string } = {},
+): LocalAdapterOutput {
+  const presentationText = [
+    "I could not safely run the requested real local adapter.",
+    "",
+    "The workspace did not call any external systems, and the command details were kept internal for the Inspector.",
+    "",
+    "Set up the approved local runner and try the task again when you want the real CLI path.",
+  ].join("\n");
+  return {
+    presentationText,
+    presentationSummary: `Real local ${selection.mode} runner failed closed.`,
+    internalSummary: options.internalSummary ?? selection.reason,
+    artifact: null,
+    usedFallback: false,
+    error: options.error ?? selection.reason,
   };
 }
 

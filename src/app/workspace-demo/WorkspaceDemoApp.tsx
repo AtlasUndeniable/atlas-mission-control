@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   demoStarterPrompts,
   demoUserPrompt,
@@ -157,7 +157,17 @@ function IconChevronDown({ expanded = false, size = 14 }: { expanded?: boolean; 
   );
 }
 
-function Composer({ runState, onStart }: { runState: RunState; onStart: () => void }) {
+function Composer({
+  prompt,
+  runState,
+  onPromptChange,
+  onStart,
+}: {
+  prompt: string;
+  runState: RunState;
+  onPromptChange: (prompt: string) => void;
+  onStart: (nextPrompt?: string) => void;
+}) {
   const isRunning = runState === "running";
   return (
     <div className={styles.composerWrap}>
@@ -169,11 +179,18 @@ function Composer({ runState, onStart }: { runState: RunState; onStart: () => vo
           <button className={styles.toolIcon} type="button" title="Slack" aria-label="Slack">S</button>
           <button className={styles.toolIcon} type="button" title="Monday" aria-label="Monday">M</button>
         </div>
-        <input className={styles.composerInput} value={runState === "idle" ? "" : ""} placeholder="Message Atlas" readOnly aria-label="Message Atlas" />
+        <input
+          className={styles.composerInput}
+          value={prompt}
+          placeholder="Message Atlas"
+          readOnly={isRunning}
+          aria-label="Message Atlas"
+          onChange={(event) => onPromptChange(event.target.value)}
+        />
         <button className={styles.composerIcon} type="button" aria-label="Voice input">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v4" /></svg>
         </button>
-        <button className={styles.composerSend} type="button" onClick={onStart} disabled={isRunning} aria-label="Send canned task">
+        <button className={styles.composerSend} type="button" onClick={() => onStart()} disabled={isRunning} aria-label="Send canned task">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
         </button>
       </div>
@@ -182,14 +199,32 @@ function Composer({ runState, onStart }: { runState: RunState; onStart: () => vo
   );
 }
 
-function EmptyState({ onStart }: { onStart: () => void }) {
+function EmptyState({
+  prompt,
+  onPromptChange,
+  onStart,
+}: {
+  prompt: string;
+  onPromptChange: (prompt: string) => void;
+  onStart: (nextPrompt?: string) => void;
+}) {
   return (
     <section className={styles.emptyState}>
       <p className={styles.emptyKicker}>What do you want to do?</p>
-      <Composer runState="idle" onStart={onStart} />
+      <Composer prompt={prompt} runState="idle" onPromptChange={onPromptChange} onStart={onStart} />
       <div className={styles.starterChips}>
         {demoStarterPrompts.map((prompt) => (
-          <button key={prompt} className={styles.starterChip} type="button" onClick={onStart}>{prompt}</button>
+          <button
+            key={prompt}
+            className={styles.starterChip}
+            type="button"
+            onClick={() => {
+              onPromptChange(prompt);
+              onStart(prompt);
+            }}
+          >
+            {prompt}
+          </button>
         ))}
       </div>
     </section>
@@ -321,6 +356,12 @@ function Sidebar({ runState }: { runState: RunState }) {
 
 function Inspector({ events }: { events: AgentEvent[] }) {
   const [open, setOpen] = useState(false);
+  const eventDetail = (event: AgentEvent) => {
+    if (event.kind === "tool.call") return event.inputSummary;
+    if (event.kind === "tool.result") return event.resultSummary;
+    if (event.kind === "error") return event.message;
+    return event.id;
+  };
   return (
     <div className={styles.inspector}>
       <button className={styles.inspectorButton} type="button" onClick={() => setOpen((value) => !value)}>
@@ -330,8 +371,11 @@ function Inspector({ events }: { events: AgentEvent[] }) {
         <div className={styles.inspectorPanel}>
           {events.length === 0 ? <p>No internal events yet.</p> : events.map((event) => (
             <div className={styles.inspectorEvent} key={event.id}>
-              <span>{event.kind}</span>
-              <small>{"toolName" in event ? event.toolName : event.id}</small>
+              <span>
+                <strong>{event.kind}</strong>
+                {"toolName" in event ? <em>{event.toolName}</em> : null}
+              </span>
+              <small>{eventDetail(event)}</small>
             </div>
           ))}
         </div>
@@ -343,26 +387,41 @@ function Inspector({ events }: { events: AgentEvent[] }) {
 export default function WorkspaceDemoApp() {
   const [threadState, setThreadState] = useState<ThreadState>(initialThreadState);
   const [runState, setRunState] = useState<RunState>("idle");
-  const source = useMemo(() => new LocalWorkspaceEventSource({
-    endpoint: "/api/workspace-demo/local-run",
-    input: {
-      prompt: demoUserPrompt,
-      title: "Competitive intel: home services agencies",
-    },
-  }), []);
+  const [prompt, setPrompt] = useState(demoUserPrompt);
+  const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    return source.subscribe((event) => {
+    return () => {
+      unsubscribeRef.current?.();
+      sourceRef.current?.stop();
+    };
+  }, []);
+
+  const subscribeToSource = (source: LocalWorkspaceEventSource) => {
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = source.subscribe((event) => {
       setThreadState((state) => reduceEvent(state, event));
       if (event.kind === "task.complete" || event.kind === "error") setRunState(event.kind === "error" ? "complete" : "complete");
     });
-  }, [source]);
+  };
 
-  const startReplay = () => {
+  const startReplay = (nextPrompt?: string) => {
     if (runState === "running") return;
-    source.reset();
+    const activePrompt = nextPrompt?.trim() || prompt.trim() || demoUserPrompt;
+    setPrompt(activePrompt);
+    sourceRef.current?.reset();
     setThreadState(initialThreadState);
     setRunState("running");
+    const source = new LocalWorkspaceEventSource({
+      endpoint: "/api/workspace-demo/local-run",
+      input: {
+        prompt: activePrompt,
+        title: "Competitive intel: home services agencies",
+      },
+    });
+    sourceRef.current = source;
+    subscribeToSource(source);
     source.start();
   };
 
@@ -380,7 +439,9 @@ export default function WorkspaceDemoApp() {
           <button className={styles.iconButton} type="button" aria-label="More"><IconMore /></button>
           <Inspector events={threadState.internalEvents} />
         </header>
-        {runState === "idle" ? <EmptyState onStart={startReplay} /> : <><ChatThread state={threadState} runState={runState} /><Composer runState={runState} onStart={startReplay} /></>}
+        {runState === "idle"
+          ? <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
+          : <><ChatThread state={threadState} runState={runState} /><Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} /></>}
       </section>
     </main>
   );

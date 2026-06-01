@@ -115,6 +115,7 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
       env: {
         ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER: "codex",
         ATLAS_CODEX_EXECUTABLE: fakeCodex,
+        OPENAI_API_KEY: "must-not-reach-runner",
       },
       commandRunner: async (request) => {
         calledWith = request;
@@ -130,8 +131,52 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
 
     assert.equal(calledWith?.command, fakeCodex);
     assert.deepEqual(calledWith?.args.slice(0, 2), ["exec", "--cd"]);
+    assert.equal(calledWith?.env?.OPENAI_API_KEY, undefined);
     assert.ok(events.some((event) => event.kind === "message.delta"));
     assert.ok(events.some((event) => event.kind === "artifact.created"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit real runner failure fails closed with command details internal only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-demo-runner-"));
+  try {
+    const fakeCodex = join(root, "codex");
+    await mkdir(root, { recursive: true });
+    await writeFile(fakeCodex, "#!/bin/sh\nexit 1\n");
+    await chmod(fakeCodex, 0o755);
+
+    const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+      env: {
+        ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER: "codex",
+        ATLAS_CODEX_EXECUTABLE: fakeCodex,
+      },
+      commandRunner: async () => ({
+        ok: false,
+        stdout: "",
+        stderr: "simulated stderr with /tmp/internal/path",
+        exitCode: 7,
+        timedOut: false,
+      }),
+    });
+
+    const presentationText = events
+      .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+      .map((event) => event.delta)
+      .join("");
+    const internalText = events
+      .filter((event) => event.visibility === "internal")
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const taskComplete = events.find((event) => event.kind === "task.complete");
+
+    assert.match(presentationText, /could not safely run/i);
+    assert.doesNotMatch(presentationText, /simulated stderr|\/tmp\/internal\/path|exit_code=7|codex/);
+    assert.match(internalText, /simulated stderr/);
+    assert.match(internalText, /exit_code=7/);
+    assert.equal(taskComplete?.kind, "task.complete");
+    assert.equal(taskComplete?.task.status, "error");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
