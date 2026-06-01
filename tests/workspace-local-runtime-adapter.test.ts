@@ -16,6 +16,11 @@ import {
   workspaceDemoRuntimeIds,
   type TerminalCommandRequest,
 } from "../src/lib/workspace-local-runtime-adapter.ts";
+import { MastraAiSdkRuntimeAdapter } from "../src/lib/workspace-mastra-runtime-adapter.ts";
+import {
+  createWorkspaceRuntimeAdapter,
+  resolveWorkspaceRuntimeProvider,
+} from "../src/lib/workspace-runtime-provider.ts";
 import type { AgentEvent } from "../src/lib/workspace-demo-events.ts";
 
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
@@ -51,6 +56,39 @@ async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   return events;
 }
 
+async function collectRuntimeEvents(adapter: {
+  runTask(input: { prompt: string; title?: string }, ctx: {
+    workspaceId: string;
+    taskId: string;
+    runId?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    now?: () => Date;
+    idFactory?: () => string;
+  }): AsyncIterable<AgentEvent>;
+}, options: { env?: NodeJS.ProcessEnv } = {}): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  let id = 0;
+  for await (const event of adapter.runTask(
+    {
+      prompt: "Summarize the top 3 themes this workspace is built around.",
+      title: "Runtime provider smoke",
+    },
+    {
+      workspaceId: workspaceDemoRuntimeIds.workspaceId,
+      taskId: workspaceDemoRuntimeIds.taskId,
+      runId: "run_runtime_test",
+      cwd: "/tmp",
+      env: options.env ?? {},
+      now: () => new Date("2026-06-01T00:00:00.000Z"),
+      idFactory: () => String(id++).padStart(3, "0"),
+    },
+  )) {
+    events.push(event);
+  }
+  return events;
+}
+
 test("local runtime input validation rejects blank or oversized prompts", () => {
   assert.throws(() => validateLocalRuntimeInput({ prompt: "  " }), /prompt is required/);
   assert.throws(() => validateLocalRuntimeInput({ prompt: "x".repeat(4_001) }), /4000 characters/);
@@ -69,6 +107,18 @@ test("local runner selection is safe mock by default and only approves known com
   assert.equal(selection.mode, "mock");
   assert.equal(selection.available, false);
   assert.equal(selection.command, null);
+});
+
+test("workspace runtime provider defaults to mock and gates local codex and mastra explicitly", () => {
+  assert.equal(resolveWorkspaceRuntimeProvider({}), "mock");
+  assert.equal(resolveWorkspaceRuntimeProvider({ ATLAS_WORKSPACE_DEMO_RUNTIME: "mock" }), "mock");
+  assert.equal(resolveWorkspaceRuntimeProvider({ ATLAS_WORKSPACE_DEMO_RUNTIME: "local-codex" }), "local-codex");
+  assert.equal(resolveWorkspaceRuntimeProvider({ ATLAS_WORKSPACE_DEMO_RUNTIME: "mastra" }), "mastra");
+  assert.equal(resolveWorkspaceRuntimeProvider({ ATLAS_WORKSPACE_DEMO_RUNTIME: "unknown" }), "mock");
+
+  assert.ok(createWorkspaceRuntimeAdapter("mock"));
+  assert.ok(createWorkspaceRuntimeAdapter("local-codex"));
+  assert.ok(createWorkspaceRuntimeAdapter("mastra"));
 });
 
 test("safe mock adapter streams presentation text and completes the task chip", async () => {
@@ -180,4 +230,24 @@ test("explicit real runner failure fails closed with command details internal on
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("mastra ai sdk runtime fails closed when Claude env is missing", async () => {
+  const events = await collectRuntimeEvents(new MastraAiSdkRuntimeAdapter(), { env: {} });
+  const presentationText = events
+    .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+    .map((event) => event.delta)
+    .join("");
+  const internalText = events
+    .filter((event) => event.visibility === "internal")
+    .map((event) => JSON.stringify(event))
+    .join("\n");
+  const taskComplete = events.find((event) => event.kind === "task.complete");
+
+  assert.match(presentationText, /could not safely start the Mastra AI runtime/i);
+  assert.doesNotMatch(presentationText, /ANTHROPIC_API_KEY|provider=|claude/i);
+  assert.match(internalText, /ANTHROPIC_API_KEY/);
+  assert.match(internalText, /runtime\.mastra-ai-sdk/);
+  assert.equal(taskComplete?.kind, "task.complete");
+  assert.equal(taskComplete?.task.status, "error");
 });

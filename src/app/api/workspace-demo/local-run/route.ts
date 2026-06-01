@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 
 import {
-  TerminalLocalRuntimeAdapter,
   workspaceDemoRuntimeIds,
   type WorkspaceLocalRuntimeInput,
 } from "@/lib/workspace-local-runtime-adapter";
+import {
+  createWorkspaceRuntimeAdapter,
+  resolveWorkspaceRuntimeProvider,
+} from "@/lib/workspace-runtime-provider";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -47,7 +50,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const adapter = new TerminalLocalRuntimeAdapter();
+  const provider = resolveWorkspaceRuntimeProvider(process.env);
+  const adapter = createWorkspaceRuntimeAdapter(provider);
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -70,7 +74,7 @@ export async function POST(request: Request) {
     headers: {
       "content-type": "application/x-ndjson; charset=utf-8",
       "cache-control": "no-store",
-      "x-atlas-local-runtime": process.env.ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER ?? "mock",
+      "x-atlas-workspace-runtime": provider,
     },
   });
 }

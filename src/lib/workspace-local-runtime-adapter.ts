@@ -28,6 +28,11 @@ export interface WorkspaceLocalRuntimeAdapter {
   runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent>;
 }
 
+export interface TerminalLocalRuntimeAdapterOptions {
+  forcedMode?: "mock";
+  forcedRunner?: "codex" | "claude";
+}
+
 export interface TerminalCommandRequest {
   command: string;
   args: string[];
@@ -78,6 +83,12 @@ const DEFAULT_TIMEOUT_MS = 90_000;
 const STREAM_CHUNK_SIZE = 26;
 
 export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
+  private readonly options: TerminalLocalRuntimeAdapterOptions;
+
+  constructor(options: TerminalLocalRuntimeAdapterOptions = {}) {
+    this.options = options;
+  }
+
   async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
     const checkedInput = validateLocalRuntimeInput(input);
     const eventCtx = createEventContext(ctx);
@@ -95,7 +106,7 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
 
     const env = ctx.env ?? process.env;
     const cwd = ctx.cwd ?? env.PWD ?? ".";
-    const selection = await selectLocalRunner({ cwd, env });
+    const selection = await selectLocalRunner({ cwd, env, options: this.options });
     steps[0] = { ...steps[0], status: "complete", summary: selection.reason };
     steps[1] = { ...steps[1], status: "running" };
     yield taskStep(eventCtx, steps[0]);
@@ -214,11 +225,24 @@ export function isApprovedLocalCommand(command: string): boolean {
 export async function selectLocalRunner({
   cwd,
   env,
+  options = {},
 }: {
   cwd: string;
   env: NodeJS.ProcessEnv;
+  options?: TerminalLocalRuntimeAdapterOptions;
 }): Promise<LocalRunnerSelection> {
-  const requested = env.ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER;
+  if (options.forcedMode === "mock") {
+    return {
+      mode: "mock",
+      available: false,
+      explicit: false,
+      command: null,
+      args: [],
+      reason: "Safe mock runtime selected by ATLAS_WORKSPACE_DEMO_RUNTIME=mock.",
+    };
+  }
+
+  const requested = options.forcedRunner ?? env.ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER;
   if (requested !== "codex" && requested !== "claude") {
     return {
       mode: "mock",
