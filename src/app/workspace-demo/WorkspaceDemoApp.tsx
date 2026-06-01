@@ -3,14 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   demoStarterPrompts,
+  demoUserPrompt,
   demoWorkspace,
-  MockWorkspaceEventSource,
   type AgentEvent,
   type Artifact,
   type Message,
   type Task,
   type TaskStep,
 } from "@/lib/workspace-demo-events";
+import { LocalWorkspaceEventSource } from "@/lib/workspace-local-event-source";
 import styles from "./workspace-demo.module.css";
 
 type RunState = "idle" | "running" | "complete";
@@ -342,7 +343,13 @@ function Inspector({ events }: { events: AgentEvent[] }) {
 export default function WorkspaceDemoApp() {
   const [threadState, setThreadState] = useState<ThreadState>(initialThreadState);
   const [runState, setRunState] = useState<RunState>("idle");
-  const source = useMemo(() => new MockWorkspaceEventSource(), []);
+  const source = useMemo(() => new LocalWorkspaceEventSource({
+    endpoint: "/api/workspace-demo/local-run",
+    input: {
+      prompt: demoUserPrompt,
+      title: "Competitive intel: home services agencies",
+    },
+  }), []);
 
   useEffect(() => {
     return source.subscribe((event) => {

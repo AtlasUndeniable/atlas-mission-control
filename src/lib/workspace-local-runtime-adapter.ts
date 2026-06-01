@@ -1,0 +1,494 @@
+import { spawn } from "node:child_process";
+import { access, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { basename, delimiter, isAbsolute, join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+import type { AgentEvent, Artifact, Task, TaskStep } from "./workspace-demo-events";
+
+export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
+
+export interface WorkspaceLocalRuntimeInput {
+  prompt: string;
+  title?: string;
+}
+
+export interface WorkspaceLocalRuntimeContext {
+  workspaceId: string;
+  taskId: string;
+  runId?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  now?: () => Date;
+  idFactory?: () => string;
+  commandRunner?: TerminalCommandRunner;
+}
+
+export interface WorkspaceLocalRuntimeAdapter {
+  runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent>;
+}
+
+export interface TerminalCommandRequest {
+  command: string;
+  args: string[];
+  cwd: string;
+  input: string;
+  timeoutMs: number;
+}
+
+export interface TerminalCommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+}
+
+export type TerminalCommandRunner = (request: TerminalCommandRequest) => Promise<TerminalCommandResult>;
+
+interface AdapterEventContext {
+  workspaceId: string;
+  taskId: string;
+  runId: string;
+  now: () => Date;
+  nextId: (prefix: string) => string;
+}
+
+interface LocalRunnerSelection {
+  mode: WorkspaceLocalRuntimeMode;
+  available: boolean;
+  command: string | null;
+  args: string[];
+  reason: string;
+}
+
+const APPROVED_LOCAL_COMMANDS = ["codex", "claude"] as const;
+const DEFAULT_TIMEOUT_MS = 90_000;
+const STREAM_CHUNK_SIZE = 26;
+
+export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
+  async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
+    const checkedInput = validateLocalRuntimeInput(input);
+    const eventCtx = createEventContext(ctx);
+    const taskTitle = checkedInput.title ?? "Run local workspace task";
+    const userMessageId = `${eventCtx.runId}_user`;
+    const assistantMessageId = `${eventCtx.runId}_assistant`;
+    const steps: TaskStep[] = [
+      { id: "step_prepare_local_runtime", title: "Prepare local runtime", status: "running" },
+      { id: "step_run_local_adapter", title: "Run local adapter", status: "pending" },
+      { id: "step_stream_workspace_events", title: "Stream workspace events", status: "pending" },
+    ];
+
+    yield messageComplete(eventCtx, userMessageId, "user", checkedInput.prompt);
+    yield taskStep(eventCtx, steps[0]);
+
+    const env = ctx.env ?? process.env;
+    const cwd = ctx.cwd ?? env.PWD ?? ".";
+    const selection = await selectLocalRunner({ cwd, env });
+    steps[0] = { ...steps[0], status: "complete", summary: selection.reason };
+    steps[1] = { ...steps[1], status: "running" };
+    yield taskStep(eventCtx, steps[0]);
+    yield taskStep(eventCtx, steps[1]);
+
+    const output = selection.available && selection.command
+      ? await runApprovedCommand({
+        input: checkedInput,
+        cwd,
+        selection,
+        commandRunner: ctx.commandRunner ?? runTerminalCommand,
+      })
+      : buildMockOutput(checkedInput, selection.reason);
+
+    yield {
+      ...baseEvent(eventCtx),
+      id: eventCtx.nextId("evt_internal"),
+      kind: "tool.call",
+      visibility: "internal",
+      toolName: selection.available && selection.command ? `local.${selection.mode}` : "local.mock",
+      label: selection.available && selection.command ? "Run approved local command" : "Use safe mock local runner",
+      inputSummary: selection.available && selection.command
+        ? `${selection.command} ${selection.args.join(" ")}`
+        : selection.reason,
+    };
+
+    yield {
+      ...baseEvent(eventCtx),
+      id: eventCtx.nextId("evt_internal"),
+      kind: "tool.result",
+      visibility: "internal",
+      toolName: selection.available && selection.command ? `local.${selection.mode}` : "local.mock",
+      label: output.usedFallback ? "Safe mock fallback complete" : "Local adapter output captured",
+      resultSummary: output.internalSummary,
+    };
+
+    steps[1] = {
+      ...steps[1],
+      status: output.error ? "error" : "complete",
+      summary: output.presentationSummary,
+    };
+    steps[2] = { ...steps[2], status: "running" };
+    yield taskStep(eventCtx, steps[1]);
+    yield taskStep(eventCtx, steps[2]);
+
+    for (const delta of splitStreamingText(output.presentationText)) {
+      yield {
+        ...baseEvent(eventCtx),
+        id: eventCtx.nextId("evt_msg"),
+        kind: "message.delta",
+        visibility: "presentation",
+        messageId: assistantMessageId,
+        role: "assistant",
+        delta,
+      };
+      await pause(18);
+    }
+
+    yield messageComplete(eventCtx, assistantMessageId, "assistant", output.presentationText);
+
+    if (output.artifact) {
+      yield {
+        ...baseEvent(eventCtx),
+        id: eventCtx.nextId("evt_artifact"),
+        kind: "artifact.created",
+        visibility: "presentation",
+        artifact: output.artifact,
+      };
+    }
+
+    steps[2] = { ...steps[2], status: "complete", summary: "Rendered through the P1 AgentEvent contract." };
+    yield taskStep(eventCtx, steps[2]);
+    yield {
+      ...baseEvent(eventCtx),
+      id: eventCtx.nextId("evt_task"),
+      kind: "task.complete",
+      visibility: "presentation",
+      task: buildTask(eventCtx.taskId, taskTitle, steps),
+    };
+  }
+}
+
+export function validateLocalRuntimeInput(input: WorkspaceLocalRuntimeInput): WorkspaceLocalRuntimeInput {
+  if (!input || typeof input !== "object") throw new Error("Task input is required.");
+  const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+  if (!prompt) throw new Error("Task prompt is required.");
+  if (prompt.length > 4_000) throw new Error("Task prompt must be 4000 characters or fewer.");
+  const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : undefined;
+  return { prompt, title };
+}
+
+export function isApprovedLocalCommand(command: string): boolean {
+  return APPROVED_LOCAL_COMMANDS.includes(command as typeof APPROVED_LOCAL_COMMANDS[number]);
+}
+
+export async function selectLocalRunner({
+  cwd,
+  env,
+}: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<LocalRunnerSelection> {
+  const requested = env.ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER;
+  if (requested !== "codex" && requested !== "claude") {
+    return {
+      mode: "mock",
+      available: false,
+      command: null,
+      args: [],
+      reason: "Safe mock mode is active. Set ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER=codex or claude to opt into an approved local CLI.",
+    };
+  }
+
+  const commandPath = await findExecutable(requested, env);
+  if (!commandPath) {
+    return {
+      mode: "mock",
+      available: false,
+      command: null,
+      args: [],
+      reason: `${requested} CLI was requested but no executable local binary was found; using safe mock fallback.`,
+    };
+  }
+
+  return {
+    mode: requested,
+    available: true,
+    command: commandPath,
+    args: requested === "codex"
+      ? ["exec", "--cd", cwd, "--sandbox", "read-only", "--ephemeral", "-"]
+      : ["-p"],
+    reason: `Using approved local ${requested} CLI after explicit /workspace-demo trigger.`,
+  };
+}
+
+export async function runTerminalCommand(request: TerminalCommandRequest): Promise<TerminalCommandResult> {
+  return new Promise((resolveResult) => {
+    const child = spawn(request.command, request.args, {
+      cwd: request.cwd,
+      env: buildSafeCommandEnv(process.env),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      child.kill("SIGTERM");
+      resolveResult({
+        ok: false,
+        stdout: limitText(stdout),
+        stderr: limitText(stderr || "Local command timed out."),
+        exitCode: null,
+        timedOut: true,
+      });
+    }, request.timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ ok: false, stdout: "", stderr: error.message, exitCode: null, timedOut: false });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({
+        ok: code === 0,
+        stdout: limitText(stdout),
+        stderr: limitText(stderr),
+        exitCode: code,
+        timedOut: false,
+      });
+    });
+    child.stdin.end(request.input);
+  });
+}
+
+export const workspaceDemoRuntimeIds = {
+  workspaceId: "workspace_undeniable_demo",
+  taskId: "task_hybrid_local_demo",
+};
+
+function createEventContext(ctx: WorkspaceLocalRuntimeContext): AdapterEventContext {
+  let index = 0;
+  const idFactory = ctx.idFactory ?? (() => randomUUID().replaceAll("-", "").slice(0, 12));
+  return {
+    workspaceId: ctx.workspaceId,
+    taskId: ctx.taskId,
+    runId: ctx.runId ?? `run_local_${idFactory()}`,
+    now: ctx.now ?? (() => new Date()),
+    nextId: (prefix) => `${prefix}_${String(index++).padStart(3, "0")}_${idFactory()}`,
+  };
+}
+
+function baseEvent(ctx: AdapterEventContext) {
+  return {
+    workspaceId: ctx.workspaceId,
+    taskId: ctx.taskId,
+    runId: ctx.runId,
+    createdAt: ctx.now().toISOString(),
+  };
+}
+
+function messageComplete(
+  ctx: AdapterEventContext,
+  messageId: string,
+  role: "user" | "assistant",
+  content: string,
+): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_msg"),
+    kind: "message.complete",
+    visibility: "presentation",
+    messageId,
+    role,
+    content,
+  };
+}
+
+function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_step"),
+    kind: "task.step",
+    visibility: "presentation",
+    step,
+  };
+}
+
+async function runApprovedCommand({
+  input,
+  cwd,
+  selection,
+  commandRunner,
+}: {
+  input: WorkspaceLocalRuntimeInput;
+  cwd: string;
+  selection: LocalRunnerSelection;
+  commandRunner: TerminalCommandRunner;
+}) {
+  if (!selection.command) return buildMockOutput(input, selection.reason);
+  const commandInput = buildCommandPrompt(input);
+  const result = await commandRunner({
+    command: selection.command,
+    args: selection.args,
+    cwd,
+    input: commandInput,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+  });
+
+  if (!result.ok || !result.stdout.trim()) {
+    return buildMockOutput(
+      input,
+      `Approved ${selection.mode} command did not return usable output; using safe mock fallback.`,
+      {
+        error: result.stderr || `Exit code ${String(result.exitCode)}`,
+      },
+    );
+  }
+
+  const presentationText = normalizePresentationText(result.stdout);
+  return {
+    presentationText,
+    presentationSummary: `Captured output from approved local ${selection.mode} CLI.`,
+    internalSummary: `${selection.mode} exited ${String(result.exitCode)} with ${result.stdout.length} stdout characters.`,
+    artifact: buildArtifact(input, presentationText, selection.mode),
+    usedFallback: false,
+    error: null,
+  };
+}
+
+function buildMockOutput(input: WorkspaceLocalRuntimeInput, reason: string, options: { error?: string } = {}) {
+  const presentationText = [
+    "Local adapter V0 is running in safe mock mode.",
+    "",
+    `I received the workspace task: **${input.prompt}**`,
+    "",
+    "Here is the local pass I would hand back to the Manus-style thread:",
+    "",
+    "- Framed the request as a local-only workspace task.",
+    "- Kept command details internal so the chat receives only presentation-safe output.",
+    "- Produced a small artifact summary and completed the task chip through the same AgentEvent contract.",
+    "",
+    "No Slack, Monday, Typeform, OpenClaw, production Supabase, or Mastra calls were made.",
+  ].join("\n");
+
+  return {
+    presentationText,
+    presentationSummary: "Safe mock local runner produced presentation output.",
+    internalSummary: options.error ? `${reason} ${options.error}` : reason,
+    artifact: buildArtifact(input, presentationText, "mock"),
+    usedFallback: true,
+    error: options.error ?? null,
+  };
+}
+
+function buildArtifact(input: WorkspaceLocalRuntimeInput, content: string, source: WorkspaceLocalRuntimeMode): Artifact {
+  return {
+    id: `artifact_local_${source}_${slugify(input.title ?? input.prompt)}`,
+    type: "brief",
+    title: input.title ?? "Local Adapter Result",
+    subtitle: `Atlas / local ${source} runner / presentation summary`,
+    preview: content.replace(/\s+/g, " ").slice(0, 160),
+  };
+}
+
+function buildTask(taskId: string, title: string, steps: TaskStep[]): Task {
+  const completedSteps = steps.filter((step) => step.status === "complete").length;
+  return {
+    id: taskId,
+    title,
+    status: completedSteps === steps.length ? "complete" : "error",
+    completedSteps,
+    totalSteps: steps.length,
+    steps,
+  };
+}
+
+function buildCommandPrompt(input: WorkspaceLocalRuntimeInput): string {
+  return [
+    "You are the Atlas Workspace local runtime adapter V0.",
+    "Return a concise presentation-safe answer for the workspace thread.",
+    "Do not call Slack, Monday, Typeform, OpenClaw, Supabase, or external delivery systems.",
+    "Do not mutate files unless the user explicitly requested a file artifact.",
+    "",
+    `Task: ${input.prompt}`,
+  ].join("\n");
+}
+
+function splitStreamingText(text: string): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const part of text.split(/(\s+)/)) {
+    current += part;
+    if (current.length >= STREAM_CHUNK_SIZE || part.includes("\n")) {
+      chunks.push(current);
+      current = "";
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function normalizePresentationText(text: string): string {
+  const cleaned = text.trim();
+  if (!cleaned) return "Local adapter completed without presentation output.";
+  return cleaned.length > 6_000 ? `${cleaned.slice(0, 6_000)}\n\n[Output truncated for the demo thread.]` : cleaned;
+}
+
+function limitText(text: string): string {
+  return text.length > 12_000 ? text.slice(0, 12_000) : text;
+}
+
+function slugify(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "result";
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolvePause) => setTimeout(resolvePause, ms));
+}
+
+async function findExecutable(command: "codex" | "claude", env: NodeJS.ProcessEnv): Promise<string | null> {
+  const envKey = command === "codex" ? "ATLAS_CODEX_EXECUTABLE" : "ATLAS_CLAUDE_EXECUTABLE";
+  const candidates = [
+    env[envKey],
+    ...(env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, command)),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    if (!isApprovedLocalCommand(command)) continue;
+    if (!isAbsolute(candidate)) continue;
+    if (basename(candidate) !== command) continue;
+    if (await isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function isExecutable(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, fsConstants.X_OK);
+    const info = await stat(filePath);
+    return info.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function buildSafeCommandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    HOME: env.HOME,
+    PATH: env.PATH,
+    SHELL: env.SHELL,
+    TERM: env.TERM,
+    NODE_ENV: env.NODE_ENV,
+    CODEX_HOME: env.CODEX_HOME,
+    ATLAS_WORKSPACE_DEMO_LOCAL_ADAPTER: "1",
+  };
+}
