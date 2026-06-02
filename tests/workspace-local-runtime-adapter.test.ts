@@ -79,6 +79,7 @@ function matchedReferencePacket(): WorkspaceReferencePacket {
 
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   env?: NodeJS.ProcessEnv;
+  input?: { prompt: string; title?: string };
   referencePacket?: WorkspaceReferencePacket;
   draftArtifactRoot?: string;
   commandRunner?: (request: TerminalCommandRequest) => Promise<{
@@ -94,8 +95,8 @@ async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   const transientRoot = options.draftArtifactRoot ? null : await mkdtemp(join(tmpdir(), "atlas-workspace-draft-events-"));
   try {
     for await (const event of adapter.runTask(
-      {
-        prompt: "Draft a local summary for the workspace demo",
+      options.input ?? {
+        prompt: "Summarize the workspace demo status for Rhys.",
         title: "Workspace local demo",
       },
       {
@@ -375,9 +376,7 @@ test("safe mock adapter streams presentation text and completes the task chip", 
 
   assert.ok(deltas.length > 3);
   assert.equal(completions.length, 2);
-  assert.equal(artifacts.length, 1);
-  assert.equal(artifacts[0]?.kind, "artifact.created");
-  assert.equal(artifacts[0]?.artifact.type, "markdown");
+  assert.equal(artifacts.length, 0);
   assert.equal(taskComplete?.kind, "task.complete");
   assert.equal(taskComplete?.task.status, "complete");
   assert.equal(taskComplete?.task.completedSteps, taskComplete?.task.totalSteps);
@@ -429,6 +428,10 @@ test("local draft artifact writes markdown and keeps path metadata internal", as
   const root = await mkdtemp(join(tmpdir(), "atlas-workspace-demo-artifacts-"));
   try {
     const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+      input: {
+        prompt: "Create a local summary doc for the workspace demo.",
+        title: "Workspace local demo document",
+      },
       draftArtifactRoot: root,
     });
     const artifactEvent = events.find((event) => event.kind === "artifact.created");
@@ -437,18 +440,20 @@ test("local draft artifact writes markdown and keeps path metadata internal", as
     );
     assert.equal(artifactEvent?.kind, "artifact.created");
     assert.equal(artifactEvent?.artifact.type, "markdown");
-    assert.match(artifactEvent?.artifact.title ?? "", /Workspace local demo draft/);
+    assert.match(artifactEvent?.artifact.title ?? "", /Workspace local demo document draft/);
     assert.doesNotMatch(JSON.stringify(artifactEvent), /\/Users\/atlasai|workspace-demo-artifacts/);
     assert.equal(metadataEvent?.kind, "tool.result");
     assert.equal(metadataEvent?.visibility, "internal");
     const metadata = JSON.parse(metadataEvent?.resultSummary ?? "{}") as {
       localPath?: string;
       metadataPath?: string;
+      requestedFormat?: string;
       runtimeProvider?: string;
       type?: string;
     };
     assert.equal(metadata.runtimeProvider, "mock");
     assert.equal(metadata.type, "markdown");
+    assert.equal(metadata.requestedFormat, "document");
     assert.match(metadata.localPath ?? "", /atlas-workspace-demo-artifacts-/);
     const markdown = await readFile(metadata.localPath ?? "", "utf8");
     assert.match(markdown, /# Workspace local demo/);
@@ -474,6 +479,10 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
     await chmod(fakeCodex, 0o755);
 
     const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+      input: {
+        prompt: "Create a local workspace answer doc.",
+        title: "Workspace CLI smoke document",
+      },
       env: {
         ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER: "codex",
         ATLAS_CODEX_EXECUTABLE: fakeCodex,

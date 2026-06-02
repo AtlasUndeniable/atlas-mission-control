@@ -24,6 +24,9 @@ export interface WorkspaceDraftArtifactMetadata {
   createdAt: string;
   taskTitle: string;
   runtimeProvider: WorkspaceDraftArtifactProvider;
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat;
+  intentReason: string;
+  exportLimitation?: string;
   localPath: string;
   metadataPath: string;
   userFacingName: string;
@@ -37,25 +40,70 @@ export interface WorkspaceDraftArtifactResult {
 
 export const WORKSPACE_DEMO_ARTIFACT_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-artifacts";
 
-const DRAFT_INTENT_PATTERN = /\b(doc|document|handover|brief|plan|audit|report|playbook|draft|artifact)\b|content plan/i;
+export type WorkspaceDraftArtifactRequestedFormat =
+  | "document"
+  | "markdown"
+  | "pdf"
+  | "docx"
+  | "report"
+  | "handover"
+  | "deck"
+  | "export"
+  | "file"
+  | "deliverable";
+
+export interface WorkspaceDraftArtifactIntent {
+  shouldCreate: boolean;
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat | null;
+  reason: string;
+  exportLimitation?: string;
+}
 
 export function shouldCreateWorkspaceDraftArtifact(input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">): boolean {
-  return DRAFT_INTENT_PATTERN.test(`${input.prompt} ${input.taskTitle ?? ""}`);
+  return detectWorkspaceDraftArtifactIntent(input).shouldCreate;
+}
+
+export function detectWorkspaceDraftArtifactIntent(
+  input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">,
+): WorkspaceDraftArtifactIntent {
+  const text = `${input.prompt} ${input.taskTitle ?? ""}`.toLowerCase();
+  if (/\bpdfs?\b|make this a pdf|as a pdf/.test(text)) {
+    return limitedExportIntent("pdf", "PDF export requested.");
+  }
+  if (/\bdocx\b|\bword doc\b|\bword document\b|as a docx|make this a docx/.test(text)) {
+    return limitedExportIntent("docx", "DOCX export requested.");
+  }
+  if (/\bmarkdown\b|\bmd\b/.test(text)) return createIntent("markdown", "Markdown draft requested.");
+  if (/\bhandover(?:s)?\b/.test(text)) return createIntent("handover", "Handover deliverable requested.");
+  if (/\bdocs?\b|\bdocument(?:s|ation)?\b/.test(text)) return createIntent("document", "Document deliverable requested.");
+  if (/\breport(?:s)?\b/.test(text)) return createIntent("report", "Report deliverable requested.");
+  if (/\bdeck(?:s)?\b|\bslide deck\b|\bslides\b/.test(text)) return createIntent("deck", "Deck deliverable requested.");
+  if (/\bexport(?:s|ed|ing)?\b|\bpackage this\b|\bpackage it\b/.test(text)) return createIntent("export", "Export/package requested.");
+  if (/\bfile(?:s)?\b|\bsave this\b|\bsave it\b|\bsave the\b/.test(text)) return createIntent("file", "File/save requested.");
+  if (/\bdeliverable(?:s)?\b/.test(text)) return createIntent("deliverable", "Deliverable requested.");
+  if (/\baudit(?:s)?\b|\bplaybook(?:s)?\b/.test(text)) return createIntent("document", "Document-style deliverable requested.");
+  return {
+    shouldCreate: false,
+    requestedFormat: null,
+    reason: "No explicit artifact or deliverable intent detected.",
+  };
 }
 
 export async function maybeWriteWorkspaceDraftArtifact(
   input: WorkspaceDraftArtifactInput,
 ): Promise<WorkspaceDraftArtifactResult | null> {
-  if (!shouldCreateWorkspaceDraftArtifact(input)) return null;
-  return writeWorkspaceDraftArtifact(input);
+  const intent = detectWorkspaceDraftArtifactIntent(input);
+  if (!intent.shouldCreate) return null;
+  return writeWorkspaceDraftArtifact(input, intent);
 }
 
 export async function writeWorkspaceDraftArtifact(
   input: WorkspaceDraftArtifactInput,
+  intent = detectWorkspaceDraftArtifactIntent(input),
 ): Promise<WorkspaceDraftArtifactResult> {
   const createdAt = (input.now ?? (() => new Date()))().toISOString();
   const taskTitle = input.taskTitle?.trim() || "Workspace draft";
-  const userFacingName = `${taskTitle} draft`;
+  const userFacingName = artifactTitleForIntent(taskTitle, intent);
   const id = draftArtifactId({ taskTitle, runId: input.runId, createdAt });
   const root = input.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const filename = `${id}.md`;
@@ -75,6 +123,9 @@ export async function writeWorkspaceDraftArtifact(
     createdAt,
     taskTitle,
     runtimeProvider: input.runtimeProvider,
+    requestedFormat: intent.requestedFormat ?? "document",
+    intentReason: intent.reason,
+    ...(intent.exportLimitation ? { exportLimitation: intent.exportLimitation } : {}),
     localPath,
     metadataPath,
     userFacingName,
@@ -89,12 +140,53 @@ export async function writeWorkspaceDraftArtifact(
       id,
       type: "markdown",
       title: userFacingName,
-      subtitle: `Atlas / ${input.runtimeProvider} / markdown draft`,
+      subtitle: artifactSubtitleForIntent(input.runtimeProvider, intent),
       preview: input.content.replace(/\s+/g, " ").slice(0, 160),
     },
     metadata,
     markdown,
   };
+}
+
+function createIntent(
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat,
+  reason: string,
+): WorkspaceDraftArtifactIntent {
+  return {
+    shouldCreate: true,
+    requestedFormat,
+    reason,
+  };
+}
+
+function limitedExportIntent(
+  requestedFormat: "pdf" | "docx",
+  reason: string,
+): WorkspaceDraftArtifactIntent {
+  const label = requestedFormat.toUpperCase();
+  return {
+    shouldCreate: true,
+    requestedFormat,
+    reason,
+    exportLimitation: `Draft saved; ${label} export is not wired yet.`,
+  };
+}
+
+function artifactTitleForIntent(taskTitle: string, intent: WorkspaceDraftArtifactIntent): string {
+  if (intent.requestedFormat === "pdf") return `${taskTitle} PDF draft`;
+  if (intent.requestedFormat === "docx") return `${taskTitle} DOCX draft`;
+  if (intent.requestedFormat === "markdown") return `${taskTitle} markdown draft`;
+  if (intent.requestedFormat === "deck") return `${taskTitle} deck draft`;
+  if (intent.requestedFormat === "report") return `${taskTitle} report draft`;
+  return `${taskTitle} draft`;
+}
+
+function artifactSubtitleForIntent(
+  runtimeProvider: WorkspaceDraftArtifactProvider,
+  intent: WorkspaceDraftArtifactIntent,
+): string {
+  if (intent.exportLimitation) return intent.exportLimitation;
+  return `Atlas / ${runtimeProvider} / markdown draft`;
 }
 
 function buildDraftMarkdown({
