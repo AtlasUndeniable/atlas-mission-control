@@ -197,6 +197,9 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("live Supabase")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("files")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("PDF")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("DOCX")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack return")));
   assert.ok(context.librarianReferences.length >= 2);
   assert.ok(context.librarianReferences.some((reference) => reference.handle.includes("obsidian")));
   assert.equal(context.librarianReferences.every((reference) => reference.pathSummary.length < 140), true);
@@ -206,6 +209,11 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.match(context.systemPrompt, /Obsidian/);
   assert.match(context.systemPrompt, /do not print JSON, XML, AgentEvent tags/i);
   assert.match(context.systemPrompt, /No matching Workspace references were resolved/i);
+  assert.match(context.systemPrompt, /local Markdown draft card/i);
+  assert.match(context.systemPrompt, /Do not claim PDF, DOCX, export/i);
+  assert.match(context.systemPrompt, /Do not list unavailable formats unless the user asks/i);
+  assert.match(context.systemPrompt, /short acknowledgement, concise draft summary/i);
+  assert.match(context.systemPrompt, /Do not narrate process repeatedly/i);
   assert.doesNotMatch(context.systemPrompt, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
 });
 
@@ -285,6 +293,7 @@ test("Mastra presentation sanitizer removes event envelope narration", () => {
     "I'll help with the Ricky handover.",
     "<AgentEvent type=\"task.step\" visibility=\"internal\">Searching internal context</AgentEvent>",
     "<AgentEvent type=\"message.delta\" visibility=\"presentation\">Use clearer bands and a pyramid.</AgentEvent>",
+    "Internal notes live at /Users/atlasai/.openclaw/workspace/state/state-current.md and .openclaw/workspace/tools/librarian-reports/ricky.md.",
     "```json",
     "{\"visibility\":\"internal\",\"provider\":\"anthropic\"}",
     "```",
@@ -292,7 +301,8 @@ test("Mastra presentation sanitizer removes event envelope narration", () => {
 
   assert.match(cleaned, /Ricky handover/);
   assert.match(cleaned, /clearer bands and a pyramid/);
-  assert.doesNotMatch(cleaned, /AgentEvent|task\.step|visibility|provider|anthropic|internal context/);
+  assert.match(cleaned, /\[Workspace internal path\]/);
+  assert.doesNotMatch(cleaned, /AgentEvent|task\.step|visibility|provider|anthropic|internal context|\/Users\/atlasai|\.openclaw\/workspace/);
 });
 
 test("safe mock adapter streams presentation text and completes the task chip", async () => {
@@ -413,7 +423,7 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
         calledWith = request;
         return {
           ok: true,
-          stdout: "CLI generated a concise local workspace answer.",
+          stdout: "CLI generated a concise local workspace answer from /Users/atlasai/.openclaw/workspace/state/state-current.md.",
           stderr: "",
           exitCode: 0,
           timedOut: false,
@@ -429,7 +439,12 @@ test("approved CLI path uses injected runner only when explicitly selected", asy
     assert.match(calledWith?.input ?? "", /Librarian context/);
     assert.match(calledWith?.input ?? "", /Obsidian/);
     assert.doesNotMatch(calledWith?.input ?? "", /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
-    assert.ok(events.some((event) => event.kind === "message.delta"));
+    const presentationText = events
+      .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+      .map((event) => event.delta)
+      .join("");
+    assert.match(presentationText, /\[Workspace internal path\]/);
+    assert.doesNotMatch(presentationText, /\/Users\/atlasai|\.openclaw\/workspace/);
     assert.ok(events.some((event) => event.kind === "artifact.created"));
   } finally {
     await rm(root, { recursive: true, force: true });

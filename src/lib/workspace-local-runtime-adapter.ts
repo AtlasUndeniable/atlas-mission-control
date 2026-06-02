@@ -592,7 +592,9 @@ function splitStreamingText(text: string): string[] {
 }
 
 function normalizePresentationText(text: string): string {
-  const cleaned = text.trim();
+  const cleaned = text
+    .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
+    .trim();
   if (!cleaned) return "Local adapter completed without presentation output.";
   return cleaned.length > 6_000 ? `${cleaned.slice(0, 6_000)}\n\n[Output truncated for the demo thread.]` : cleaned;
 }

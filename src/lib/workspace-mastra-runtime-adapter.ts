@@ -301,6 +301,7 @@ export function sanitizeMastraPresentationText(text: string): string {
     .replace(/<task\.step\b[^>]*>[\s\S]*?<\/task\.step>/gi, "")
     .replace(/<\/?(?:AgentEvent|message\.delta|message\.complete|task\.step|task\.complete)\b[^>]*>/gi, "")
     .replace(/```json\s*\{[\s\S]*?"visibility"\s*:\s*"internal"[\s\S]*?```\s*/gi, "")
+    .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

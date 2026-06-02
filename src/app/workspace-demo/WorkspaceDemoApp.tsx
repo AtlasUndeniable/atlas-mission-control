@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
@@ -237,6 +237,17 @@ function Composer({
   onStart: (nextPrompt?: string) => void;
 }) {
   const isRunning = runState === "running";
+  const enterSubmitRef = useRef(false);
+  const handleSubmit = () => {
+    if (!isRunning) onStart(prompt);
+  };
+  const handleEnterSubmit = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const isEnter = event.key === "Enter" || event.code === "Enter" || event.keyCode === 13;
+    if (!isEnter || event.shiftKey) return false;
+    event.preventDefault();
+    handleSubmit();
+    return true;
+  };
   return (
     <div className={styles.composerWrap}>
       <div className={styles.composer}>
@@ -247,18 +258,29 @@ function Composer({
           <button className={styles.toolIcon} type="button" title="Slack" aria-label="Slack">S</button>
           <button className={styles.toolIcon} type="button" title="Monday" aria-label="Monday">M</button>
         </div>
-        <input
+        <textarea
           className={styles.composerInput}
           value={prompt}
           placeholder="Message Atlas"
           readOnly={isRunning}
           aria-label="Message Atlas"
+          rows={1}
           onChange={(event) => onPromptChange(event.target.value)}
+          onKeyDown={(event) => {
+            enterSubmitRef.current = handleEnterSubmit(event);
+          }}
+          onKeyUp={(event) => {
+            if (enterSubmitRef.current) {
+              enterSubmitRef.current = false;
+              return;
+            }
+            handleEnterSubmit(event);
+          }}
         />
         <button className={styles.composerIcon} type="button" aria-label="Voice input">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v4" /></svg>
         </button>
-        <button className={styles.composerSend} type="button" onClick={() => onStart()} disabled={isRunning} aria-label="Send canned task">
+        <button className={styles.composerSend} type="button" onClick={handleSubmit} disabled={isRunning} aria-label="Send message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
         </button>
       </div>
@@ -323,14 +345,17 @@ function MarkdownLite({ content, streaming }: { content: string; streaming: bool
 
 function ArtifactCard({ artifact }: { artifact: Artifact }) {
   return (
-    <button className={styles.artifactCard} type="button">
+    <div className={styles.artifactCard}>
       <span className={styles.artifactIcon}><IconDocument /></span>
       <span className={styles.artifactBody}>
         <span className={styles.artifactTitle}>{artifact.title}</span>
         <span className={styles.artifactMeta}>{artifact.subtitle}</span>
       </span>
-      <span className={styles.artifactOpen}>Open</span>
-    </button>
+      <span className={styles.artifactState}>
+        <span>Markdown draft saved</span>
+        <small>Preview coming next</small>
+      </span>
+    </div>
   );
 }
 
@@ -386,14 +411,32 @@ function ChatThread({
   runState: RunState;
   referencePacket: ReferenceInspectorPacket | null;
 }) {
-  const threadRef = useRef<HTMLDivElement | null>(null);
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollRef = useRef(true);
+
+  const handleScroll = () => {
+    const chat = chatRef.current;
+    if (!chat) return;
+    autoScrollRef.current = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 96;
+  };
 
   useEffect(() => {
-    threadRef.current?.scrollIntoView({ block: "end" });
+    if (runState === "running" && state.messages.length === 0) {
+      autoScrollRef.current = true;
+    }
+  }, [runState, state.messages.length]);
+
+  useEffect(() => {
+    if (!autoScrollRef.current) return;
+    const chat = chatRef.current;
+    if (!chat) return;
+    requestAnimationFrame(() => {
+      chat.scrollTop = chat.scrollHeight;
+    });
   }, [state.messages, state.artifacts, state.steps]);
 
   return (
-    <section className={styles.chat}>
+    <section className={styles.chat} ref={chatRef} onScroll={handleScroll}>
       <div className={styles.thread}>
         {state.messages.map((message) => (
           message.role === "user" ? (
@@ -407,7 +450,6 @@ function ChatThread({
             </div>
           )
         ))}
-        <div ref={threadRef} />
       </div>
     </section>
   );
@@ -532,6 +574,7 @@ export default function WorkspaceDemoApp() {
   const [threadState, setThreadState] = useState<ThreadState>(initialThreadState);
   const [runState, setRunState] = useState<RunState>("idle");
   const [prompt, setPrompt] = useState(demoUserPrompt);
+  const [activeTaskTitle, setActiveTaskTitle] = useState("New session");
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const referencePacket = useMemo(
@@ -558,7 +601,8 @@ export default function WorkspaceDemoApp() {
     if (runState === "running") return;
     const activePrompt = nextPrompt?.trim() || prompt.trim() || demoUserPrompt;
     const activeTitle = titleForPrompt(activePrompt);
-    setPrompt(activePrompt);
+    setActiveTaskTitle(activeTitle);
+    setPrompt("");
     sourceRef.current?.reset();
     setThreadState(initialThreadState);
     setRunState("running");
@@ -574,7 +618,7 @@ export default function WorkspaceDemoApp() {
     source.start();
   };
 
-  const taskTitle = runState === "idle" ? "New session" : titleForPrompt(prompt);
+  const taskTitle = runState === "idle" ? "New session" : activeTaskTitle;
 
   return (
     <main className={styles.app}>
