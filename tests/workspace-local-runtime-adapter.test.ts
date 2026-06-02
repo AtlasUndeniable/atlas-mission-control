@@ -204,7 +204,7 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("live Supabase")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("files")));
-  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("PDF")));
+  assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Markdown/PDF")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("DOCX")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack return")));
   assert.ok(context.librarianReferences.length >= 2);
@@ -219,8 +219,9 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.match(context.systemPrompt, /Obsidian/);
   assert.match(context.systemPrompt, /do not print JSON, XML, AgentEvent tags/i);
   assert.match(context.systemPrompt, /No matching Workspace references were resolved/i);
-  assert.match(context.systemPrompt, /local Markdown draft card/i);
-  assert.match(context.systemPrompt, /Do not claim PDF, DOCX, export/i);
+  assert.match(context.systemPrompt, /local Markdown drafts are wired/i);
+  assert.match(context.systemPrompt, /explicitly requested local PDF drafts are wired/i);
+  assert.match(context.systemPrompt, /Do not claim DOCX, export/i);
   assert.match(context.systemPrompt, /Do not list unavailable formats unless the user asks/i);
   assert.match(context.systemPrompt, /short acknowledgement, concise draft summary/i);
   assert.match(context.systemPrompt, /Do not narrate process repeatedly/i);
@@ -261,8 +262,8 @@ test("workspace cognition forbids fake retrieval and unsupported export claims",
   assert.match(promptText, /thin call or trend coverage/i);
   assert.match(promptText, /Do not claim fake search/i);
   assert.match(promptText, /fake transcript review/i);
-  assert.match(promptText, /Do not claim PDF, DOCX, export packages/i);
-  assert.match(promptText, /Local Markdown draft artifacts are the only generated artifact format currently wired/i);
+  assert.match(promptText, /Do not claim DOCX, export packages/i);
+  assert.match(promptText, /explicitly requested local PDF drafts are wired/i);
 });
 
 test("runtime context includes cognition guidance for useful first-pass drafts", () => {

@@ -262,7 +262,7 @@ function validateAgentEventShape(value: unknown): asserts value is AgentEvent {
 function validateArtifact(value: unknown): void {
   if (!isObjectRecord(value)) throw new Error("artifact.created.artifact must be an object");
   assertNonEmptyString(value.id, "artifact.id");
-  assertOneOf(value.type, ["document", "spreadsheet", "audit", "brief", "playbook", "markdown"], "artifact.type");
+  assertOneOf(value.type, ["document", "spreadsheet", "audit", "brief", "playbook", "markdown", "pdf"], "artifact.type");
   assertNonEmptyString(value.title, "artifact.title");
   assertString(value.subtitle, "artifact.subtitle");
   assertString(value.preview, "artifact.preview");

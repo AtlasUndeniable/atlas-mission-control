@@ -111,11 +111,16 @@
 .previewClose { align-self: start; color: var(--text-3); border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; font-size: 12px; }
 .previewClose:hover { color: var(--text-1); border-color: var(--border-strong); background: var(--bg-elev-1); }
 .previewActions { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--border); }
-.previewActions button { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; color: var(--text-2); background: var(--bg-elev-1); font-size: 12px; }
-.previewActions button:hover:not(:disabled) { color: var(--text-1); border-color: var(--border-strong); background: var(--bg-elev-2); }
+.previewActions button,
+.previewActions a { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; color: var(--text-2); background: var(--bg-elev-1); font-size: 12px; text-decoration: none; }
+.previewActions button:hover:not(:disabled),
+.previewActions a:hover { color: var(--text-1); border-color: var(--border-strong); background: var(--bg-elev-2); }
 .previewActions button:disabled { opacity: .46; cursor: not-allowed; }
 .previewBody { min-height: 0; flex: 1; overflow: auto; padding: 22px 24px 34px; }
 .previewEmpty { color: var(--text-3); margin: 0; }
+.previewPdf { min-height: 100%; display: grid; grid-template-rows: minmax(420px, 1fr) auto; gap: 12px; }
+.previewPdf iframe { width: 100%; height: 100%; min-height: 420px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elev-1); }
+.previewPdf p { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .previewMarkdown { max-width: 660px; color: var(--text-1); overflow-wrap: anywhere; }
 .previewMarkdown p { margin: 0 0 12px; line-height: 1.62; }
 .previewMarkdown h3, .previewMarkdown h4 { margin: 22px 0 10px; color: var(--text-1); line-height: 1.28; font-weight: 600; letter-spacing: 0; }

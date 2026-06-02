@@ -20,7 +20,7 @@ export interface WorkspaceDraftArtifactInput {
 export interface WorkspaceDraftArtifactMetadata {
   id: string;
   title: string;
-  type: "markdown";
+  type: "markdown" | "pdf";
   createdAt: string;
   taskTitle: string;
   runtimeProvider: WorkspaceDraftArtifactProvider;
@@ -28,6 +28,8 @@ export interface WorkspaceDraftArtifactMetadata {
   intentReason: string;
   exportLimitation?: string;
   localPath: string;
+  sourceMarkdownPath?: string;
+  pdfPath?: string;
   metadataPath: string;
   userFacingName: string;
 }
@@ -36,6 +38,7 @@ export interface WorkspaceDraftArtifactResult {
   artifact: Artifact;
   metadata: WorkspaceDraftArtifactMetadata;
   markdown: string;
+  pdf?: Buffer;
 }
 
 export const WORKSPACE_DEMO_ARTIFACT_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-artifacts";
@@ -43,12 +46,18 @@ export const WORKSPACE_DEMO_ARTIFACT_ROOT = "/Users/atlasai/.openclaw/workspace/
 export interface WorkspaceDraftArtifactPreview {
   id: string;
   title: string;
-  type: "markdown";
+  type: "markdown" | "pdf";
   createdAt: string;
   taskTitle: string;
   runtimeProvider: WorkspaceDraftArtifactProvider;
   requestedFormat: WorkspaceDraftArtifactRequestedFormat;
-  markdown: string;
+  markdown?: string;
+  pdf?: {
+    url: string;
+    downloadUrl: string;
+    filename: string;
+    byteLength: number;
+  };
 }
 
 export type WorkspaceDraftArtifactRequestedFormat =
@@ -79,7 +88,7 @@ export function detectWorkspaceDraftArtifactIntent(
 ): WorkspaceDraftArtifactIntent {
   const text = `${input.prompt} ${input.taskTitle ?? ""}`.toLowerCase();
   if (/\bpdfs?\b|make this a pdf|as a pdf/.test(text)) {
-    return limitedExportIntent("pdf", "PDF export requested.");
+    return createIntent("pdf", "PDF export requested.");
   }
   if (/\bdocx\b|\bword doc\b|\bword document\b|as a docx|make this a docx/.test(text)) {
     return limitedExportIntent("docx", "DOCX export requested.");
@@ -117,8 +126,8 @@ export async function writeWorkspaceDraftArtifact(
   const userFacingName = artifactTitleForIntent(taskTitle, intent);
   const id = draftArtifactId({ taskTitle, runId: input.runId, createdAt });
   const root = input.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
-  const filename = `${id}.md`;
-  const localPath = join(root, filename);
+  const markdownPath = join(root, `${id}.md`);
+  const pdfPath = join(root, `${id}.pdf`);
   const metadataPath = join(root, `${id}.metadata.json`);
   const markdown = buildDraftMarkdown({
     prompt: input.prompt,
@@ -127,44 +136,56 @@ export async function writeWorkspaceDraftArtifact(
     runtimeProvider: input.runtimeProvider,
     createdAt,
   });
+  const shouldWritePdf = intent.requestedFormat === "pdf";
+  const pdf = shouldWritePdf ? renderWorkspaceDraftPdf({
+    title: userFacingName,
+    createdAt,
+    markdown,
+  }) : null;
   const metadata: WorkspaceDraftArtifactMetadata = {
     id,
     title: taskTitle,
-    type: "markdown",
+    type: shouldWritePdf ? "pdf" : "markdown",
     createdAt,
     taskTitle,
     runtimeProvider: input.runtimeProvider,
     requestedFormat: intent.requestedFormat ?? "document",
     intentReason: intent.reason,
     ...(intent.exportLimitation ? { exportLimitation: intent.exportLimitation } : {}),
-    localPath,
+    localPath: shouldWritePdf ? pdfPath : markdownPath,
+    ...(shouldWritePdf ? { sourceMarkdownPath: markdownPath, pdfPath } : {}),
     metadataPath,
     userFacingName,
   };
 
   await mkdir(root, { recursive: true });
-  await writeFile(localPath, markdown, "utf8");
+  await writeFile(markdownPath, markdown, "utf8");
+  if (pdf) await writeFile(pdfPath, pdf);
   await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 
   return {
     artifact: {
       id,
-      type: "markdown",
+      type: shouldWritePdf ? "pdf" : "markdown",
       title: userFacingName,
       subtitle: artifactSubtitleForIntent(input.runtimeProvider, intent),
       preview: input.content.replace(/\s+/g, " ").slice(0, 160),
     },
     metadata,
     markdown,
+    ...(pdf ? { pdf } : {}),
   };
 }
 
 export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArtifactResult): string {
-  const formatLabel = result.metadata.requestedFormat === "pdf"
-    ? "Markdown draft saved; PDF export is not wired yet."
+  const formatLabel = result.metadata.type === "pdf"
+    ? "PDF draft saved."
     : result.metadata.requestedFormat === "docx"
       ? "Markdown draft saved; DOCX export is not wired yet."
       : "Markdown draft saved.";
+  const openLine = result.metadata.type === "pdf"
+    ? "- Open the artifact card to preview and download the PDF."
+    : "- Open the artifact card to preview the full draft.";
   const preview = cleanArtifactPreview(result.artifact.preview);
   return [
     `${formatLabel}`,
@@ -172,8 +193,8 @@ export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArt
     `**${result.artifact.title}**`,
     "",
     preview ? `- Draft focus: ${preview}` : "- Draft focus: Ready for review in the artifact card.",
-    "- Open the artifact card to preview the full draft.",
-    "- Next: review the confirmation fields before this becomes a real export.",
+    openLine,
+    "- Delivery: local artifact only; no external send performed.",
   ].join("\n");
 }
 
@@ -187,13 +208,34 @@ export async function readWorkspaceDraftArtifactPreview(
 
   const root = options.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const markdownPath = safeWorkspaceDraftArtifactPath(root, `${id}.md`);
+  const pdfPath = safeWorkspaceDraftArtifactPath(root, `${id}.pdf`);
   const metadataPath = safeWorkspaceDraftArtifactPath(root, `${id}.metadata.json`);
   try {
-    const [markdown, metadataText] = await Promise.all([
-      readFile(markdownPath, "utf8"),
-      readFile(metadataPath, "utf8"),
-    ]);
+    const metadataText = await readFile(metadataPath, "utf8");
     const metadata = parseWorkspaceDraftArtifactMetadata(metadataText, id);
+    if (metadata.type === "pdf") {
+      const [markdown, pdf] = await Promise.all([
+        readFile(markdownPath, "utf8").catch(() => ""),
+        readFile(pdfPath),
+      ]);
+      return {
+        id: metadata.id,
+        title: metadata.userFacingName || metadata.title,
+        type: metadata.type,
+        createdAt: metadata.createdAt,
+        taskTitle: metadata.taskTitle,
+        runtimeProvider: metadata.runtimeProvider,
+        requestedFormat: metadata.requestedFormat,
+        ...(markdown ? { markdown } : {}),
+        pdf: {
+          url: `/api/workspace-demo/artifacts/${encodeURIComponent(metadata.id)}?format=pdf`,
+          downloadUrl: `/api/workspace-demo/artifacts/${encodeURIComponent(metadata.id)}?format=pdf&download=1`,
+          filename: `${slugify(metadata.userFacingName || metadata.title)}.pdf`,
+          byteLength: pdf.byteLength,
+        },
+      };
+    }
+    const markdown = await readFile(markdownPath, "utf8");
     return {
       id: metadata.id,
       title: metadata.userFacingName || metadata.title,
@@ -243,7 +285,7 @@ function parseWorkspaceDraftArtifactMetadata(value: string, expectedId: string):
   const parsed = JSON.parse(value) as Partial<WorkspaceDraftArtifactMetadata>;
   if (!parsed || typeof parsed !== "object") throw new Error("Artifact metadata is invalid.");
   if (parsed.id !== expectedId) throw new Error("Artifact metadata id mismatch.");
-  if (parsed.type !== "markdown") throw new Error("Only markdown draft artifacts can be previewed.");
+  if (parsed.type !== "markdown" && parsed.type !== "pdf") throw new Error("Only markdown and PDF draft artifacts can be previewed.");
   if (typeof parsed.title !== "string" || typeof parsed.createdAt !== "string" || typeof parsed.taskTitle !== "string") {
     throw new Error("Artifact metadata is incomplete.");
   }
@@ -308,6 +350,7 @@ function artifactSubtitleForIntent(
   runtimeProvider: WorkspaceDraftArtifactProvider,
   intent: WorkspaceDraftArtifactIntent,
 ): string {
+  if (intent.requestedFormat === "pdf") return `Atlas / ${runtimeProvider} / PDF draft`;
   if (intent.exportLimitation) return intent.exportLimitation;
   return `Atlas / ${runtimeProvider} / markdown draft`;
 }
@@ -358,4 +401,176 @@ function draftArtifactId({
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 44) || "draft";
+}
+
+export async function readWorkspaceDraftArtifactPdf(
+  id: string,
+  options: { root?: string } = {},
+): Promise<{ bytes: Buffer; filename: string } | null> {
+  if (!isSafeWorkspaceDraftArtifactId(id)) {
+    throw new Error("Unsafe artifact id.");
+  }
+
+  const root = options.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
+  const metadataPath = safeWorkspaceDraftArtifactPath(root, `${id}.metadata.json`);
+  const pdfPath = safeWorkspaceDraftArtifactPath(root, `${id}.pdf`);
+  try {
+    const metadata = parseWorkspaceDraftArtifactMetadata(await readFile(metadataPath, "utf8"), id);
+    if (metadata.type !== "pdf") return null;
+    return {
+      bytes: await readFile(pdfPath),
+      filename: `${slugify(metadata.userFacingName || metadata.title)}.pdf`,
+    };
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function renderWorkspaceDraftPdf({
+  title,
+  createdAt,
+  markdown,
+}: {
+  title: string;
+  createdAt: string;
+  markdown: string;
+}): Buffer {
+  const lines = markdownToPdfLines(markdown, title, createdAt);
+  const pages = paginateLines(lines, 44);
+  const objects: string[] = [];
+  const pageObjectIds: number[] = [];
+  const addObject = (body: string) => {
+    objects.push(body);
+    return objects.length;
+  };
+
+  const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
+  const pagesId = addObject("__PAGES__");
+  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  void catalogId;
+  void pagesId;
+
+  for (const pageLines of pages) {
+    const content = pageContentStream(pageLines);
+    const contentId = addObject(`<< /Length ${Buffer.byteLength(content, "ascii")} >>\nstream\n${content}\nendstream`);
+    const pageId = addObject([
+      "<< /Type /Page",
+      "/Parent 2 0 R",
+      "/MediaBox [0 0 612 792]",
+      `/Resources << /Font << /F1 ${fontId} 0 R >> >>`,
+      `/Contents ${contentId} 0 R`,
+      ">>",
+    ].join(" "));
+    pageObjectIds.push(pageId);
+  }
+
+  objects[pagesId - 1] = [
+    "<< /Type /Pages",
+    `/Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}]`,
+    `/Count ${pageObjectIds.length}`,
+    ">>",
+  ].join(" ");
+
+  return buildPdf(objects);
+}
+
+function markdownToPdfLines(markdown: string, title: string, createdAt: string): string[] {
+  const source = [
+    title,
+    `Created: ${createdAt}`,
+    "",
+    ...markdown
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((line) => line
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^\s*[-*]\s+/, "- ")
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .trimEnd()),
+  ];
+  return source.flatMap((line) => wrapPdfLine(normalizePdfText(line), 88));
+}
+
+function normalizePdfText(value: string): string {
+  return value
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/→/g, "->")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "")
+    .trimEnd();
+}
+
+function wrapPdfLine(line: string, width: number): string[] {
+  if (!line.trim()) return [""];
+  const words = line.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+    if (`${current} ${word}`.length > width) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = `${current} ${word}`;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function paginateLines(lines: string[], linesPerPage: number): string[][] {
+  const pages: string[][] = [];
+  for (let index = 0; index < lines.length; index += linesPerPage) {
+    pages.push(lines.slice(index, index + linesPerPage));
+  }
+  return pages.length ? pages : [[""]];
+}
+
+function pageContentStream(lines: string[]): string {
+  const content = ["BT", "/F1 10 Tf", "50 742 Td", "14 TL"];
+  lines.forEach((line, index) => {
+    if (index > 0) content.push("T*");
+    content.push(`(${escapePdfString(line)}) Tj`);
+  });
+  content.push("ET");
+  return content.join("\n");
+}
+
+function escapePdfString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function buildPdf(objects: string[]): Buffer {
+  const chunks = ["%PDF-1.4\n"];
+  const offsets: number[] = [0];
+  let byteLength = Buffer.byteLength(chunks[0], "ascii");
+  objects.forEach((body, index) => {
+    offsets.push(byteLength);
+    const chunk = `${index + 1} 0 obj\n${body}\nendobj\n`;
+    chunks.push(chunk);
+    byteLength += Buffer.byteLength(chunk, "ascii");
+  });
+  const xrefOffset = byteLength;
+  chunks.push(`xref\n0 ${objects.length + 1}\n`);
+  chunks.push("0000000000 65535 f \n");
+  for (let index = 1; index < offsets.length; index += 1) {
+    chunks.push(`${String(offsets[index]).padStart(10, "0")} 00000 n \n`);
+  }
+  chunks.push([
+    "trailer",
+    `<< /Size ${objects.length + 1} /Root 1 0 R >>`,
+    "startxref",
+    String(xrefOffset),
+    "%%EOF",
+    "",
+  ].join("\n"));
+  return Buffer.from(chunks.join(""), "ascii");
 }

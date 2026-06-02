@@ -22,12 +22,18 @@ type ReferenceCoverage = "matched" | "thin" | "none";
 interface ArtifactPreview {
   id: string;
   title: string;
-  type: "markdown";
+  type: "markdown" | "pdf";
   createdAt: string;
   taskTitle: string;
   runtimeProvider: string;
   requestedFormat: string;
-  markdown: string;
+  markdown?: string;
+  pdf?: {
+    url: string;
+    downloadUrl: string;
+    filename: string;
+    byteLength: number;
+  };
 }
 
 type ArtifactPreviewState =
@@ -467,6 +473,7 @@ function ThinkingIndicator() {
 }
 
 function ArtifactCard({ artifact, onOpen }: { artifact: Artifact; onOpen: (artifact: Artifact) => void }) {
+  const isPdf = artifact.type === "pdf";
   return (
     <button className={styles.artifactCard} type="button" onClick={() => onOpen(artifact)} aria-label={`Open ${artifact.title}`}>
       <span className={styles.artifactIcon}><IconDocument /></span>
@@ -475,8 +482,8 @@ function ArtifactCard({ artifact, onOpen }: { artifact: Artifact; onOpen: (artif
         <span className={styles.artifactMeta}>{artifact.subtitle}</span>
       </span>
       <span className={styles.artifactState}>
-        <span>Markdown draft saved</span>
-        <small>Open preview</small>
+        <span>{isPdf ? "PDF draft saved" : "Markdown draft saved"}</span>
+        <small>{isPdf ? "Open / Download PDF" : "Open preview"}</small>
       </span>
     </button>
   );
@@ -494,7 +501,8 @@ function ArtifactPreviewPanel({
   const title = state.status === "ready" ? state.preview.title : state.artifact.title;
   const type = state.status === "ready" ? state.preview.type : state.artifact.type;
   const createdAt = state.status === "ready" ? formatArtifactCreatedAt(state.preview.createdAt) : null;
-  const previewMarkdown = state.status === "ready" ? artifactPreviewDisplayMarkdown(state.preview.markdown) : "";
+  const isPdf = state.status === "ready" && state.preview.type === "pdf";
+  const previewMarkdown = state.status === "ready" && state.preview.markdown ? artifactPreviewDisplayMarkdown(state.preview.markdown) : "";
   const canUseMarkdown = previewMarkdown.trim().length > 0;
 
   const downloadMarkdown = () => {
@@ -521,15 +529,28 @@ function ArtifactPreviewPanel({
           </div>
         </header>
         <div className={styles.previewActions}>
+          {isPdf && state.preview.pdf ? (
+            <>
+              <a href={state.preview.pdf.url} target="_blank" rel="noreferrer">Open PDF</a>
+              <a href={state.preview.pdf.downloadUrl}>Download PDF</a>
+            </>
+          ) : null}
           <button type="button" onClick={downloadMarkdown} disabled={!canUseMarkdown}>Download markdown</button>
         </div>
         <div className={styles.previewBody}>
           {state.status === "loading" ? (
-            <p className={styles.previewEmpty}>Loading markdown draft...</p>
+            <p className={styles.previewEmpty}>Loading artifact preview...</p>
           ) : state.status === "missing" ? (
             <p className={styles.previewEmpty}>This draft is no longer available locally.</p>
           ) : state.status === "error" ? (
             <p className={styles.previewEmpty}>{state.message}</p>
+          ) : isPdf && state.preview.pdf ? (
+            <div className={styles.previewPdf}>
+              <iframe title={`${state.preview.title} PDF`} src={state.preview.pdf.url} />
+              <p>
+                PDF ready locally. Use Open PDF or Download PDF if the inline viewer is unavailable.
+              </p>
+            </div>
           ) : (
             <div className={styles.previewMarkdown}>
               <MarkdownLite content={previewMarkdown} streaming={false} />

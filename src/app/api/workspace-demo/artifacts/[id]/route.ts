@@ -1,13 +1,36 @@
 import { NextResponse } from "next/server";
 
-import { readWorkspaceDraftArtifactPreview } from "@/lib/workspace-draft-artifacts";
+import {
+  readWorkspaceDraftArtifactPdf,
+  readWorkspaceDraftArtifactPreview,
+} from "@/lib/workspace-draft-artifacts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(_request: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   try {
+    const url = new URL(request.url);
+    if (url.searchParams.get("format") === "pdf") {
+      const pdf = await readWorkspaceDraftArtifactPdf(id);
+      if (!pdf) {
+        return NextResponse.json(
+          { ok: false, error: "PDF artifact not found." },
+          { status: 404 },
+        );
+      }
+      const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+      const body = Uint8Array.from(pdf.bytes).buffer;
+      return new Response(body, {
+        headers: {
+          "content-type": "application/pdf",
+          "content-disposition": `${disposition}; filename="${pdf.filename}"`,
+          "cache-control": "no-store",
+        },
+      });
+    }
+
     const artifact = await readWorkspaceDraftArtifactPreview(id);
     if (!artifact) {
       return NextResponse.json(

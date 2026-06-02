@@ -659,7 +659,7 @@ async function readWorkspaceDemoArtifacts(
     const metadataPath = join(root, entry.name);
     try {
       const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Partial<WorkspaceDraftArtifactMetadata>;
-      if (!metadata.id || !metadata.title || metadata.type !== "markdown") continue;
+      if (!metadata.id || !metadata.title || (metadata.type !== "markdown" && metadata.type !== "pdf")) continue;
       const markdownPath = join(root, `${metadata.id}.md`);
       const markdown = await readFile(markdownPath, "utf8").catch(() => "");
       const info = await stat(metadataPath);
@@ -669,6 +669,7 @@ async function readWorkspaceDemoArtifacts(
         metadata.taskTitle,
         metadata.userFacingName,
         metadata.requestedFormat,
+        metadata.type,
         markdown.slice(0, 2000),
       ].filter(Boolean).join(" ");
       const typePenalty = requestedType && metadata.type !== requestedType ? -8 : 0;

@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -56,7 +56,7 @@ test("draft artifact intent tracks requested format and export limitation", () =
 
   assert.equal(pdfIntent.shouldCreate, true);
   assert.equal(pdfIntent.requestedFormat, "pdf");
-  assert.match(pdfIntent.exportLimitation ?? "", /PDF export is not wired yet/);
+  assert.equal(pdfIntent.exportLimitation, undefined);
   assert.equal(docxIntent.shouldCreate, true);
   assert.equal(docxIntent.requestedFormat, "docx");
   assert.match(docxIntent.exportLimitation ?? "", /DOCX export is not wired yet/);
@@ -149,7 +149,7 @@ test("draft artifact preview reads only safe markdown artifact ids", async () =>
   }
 });
 
-test("pdf request saves markdown draft with honest export limitation", async () => {
+test("pdf request saves real local PDF artifact with markdown source kept internal", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-"));
   try {
     const result = await maybeWriteWorkspaceDraftArtifact({
@@ -164,14 +164,33 @@ test("pdf request saves markdown draft with honest export limitation", async () 
     });
 
     assert.ok(result);
-    assert.equal(result.artifact.type, "markdown");
+    assert.equal(result.artifact.type, "pdf");
     assert.match(result.artifact.title, /Readiness summary PDF draft/);
-    assert.match(result.artifact.subtitle, /Draft saved; PDF export is not wired yet/);
+    assert.match(result.artifact.subtitle, /PDF draft/);
     assert.equal(result.metadata.requestedFormat, "pdf");
-    assert.match(result.metadata.exportLimitation ?? "", /PDF export is not wired yet/);
-    const markdown = await readFile(result.metadata.localPath, "utf8");
+    assert.equal(result.metadata.type, "pdf");
+    assert.equal(result.metadata.exportLimitation, undefined);
+    assert.ok(result.metadata.sourceMarkdownPath);
+    assert.ok(result.metadata.pdfPath);
+    assert.equal(result.metadata.localPath, result.metadata.pdfPath);
+    const markdown = await readFile(result.metadata.sourceMarkdownPath, "utf8");
     assert.match(markdown, /Delivery: local draft only; no external send performed/);
-    assert.doesNotMatch(result.artifact.subtitle, /generated|created PDF/i);
+    const pdf = await readFile(result.metadata.pdfPath, "utf8");
+    assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
+    assert.ok((await stat(result.metadata.pdfPath)).size > 500);
+    assert.doesNotMatch(result.artifact.subtitle, /not wired/i);
+
+    const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
+    assert.ok(preview);
+    assert.equal(preview.type, "pdf");
+    assert.ok(preview.pdf);
+    assert.match(preview.pdf.filename, /readiness_summary_pdf_draft\.pdf/);
+    assert.doesNotMatch(JSON.stringify(preview), /localPath|metadataPath|pdfPath|sourceMarkdownPath|\/Users\/atlasai|workspace-demo-artifacts/);
+
+    const chatSummary = summarizeWorkspaceDraftArtifactForChat(result);
+    assert.match(chatSummary, /PDF draft saved/);
+    assert.match(chatSummary, /download the PDF/);
+    assert.doesNotMatch(chatSummary, /PDF export is not wired|Markdown draft saved/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

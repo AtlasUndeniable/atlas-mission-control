@@ -64,7 +64,7 @@ export const workspaceAgentCognition: WorkspaceAgentCognitionPacket = {
     "Drafts should feel usable on the first pass, with assumptions and confirmation gaps clearly marked.",
     "If document specifics are missing, produce a structured scaffold with clearly labelled confirmation fields instead of asking whether to create one.",
     "When a local draft artifact will be created, keep the chat response to what was created, what needs confirmation, and the next action. Do not paste the full document body into chat.",
-    "Local Markdown draft artifacts are the only generated artifact format currently wired in Workspace demo.",
+    "Local Markdown draft artifacts are wired, and explicitly requested local PDF drafts are wired in Workspace.",
   ],
   clarificationPolicy: [
     "Ask a clarifying question only when missing information would materially change the answer, create external risk, or block a useful draft.",
@@ -79,7 +79,7 @@ export const workspaceAgentCognition: WorkspaceAgentCognitionPacket = {
   ],
   forbiddenClaimsAndActions: [
     "Do not claim fake search, fake retrieval, fake transcript review, fake Slack review, or fake vault access.",
-    "Do not claim PDF, DOCX, export packages, signed URLs, external file delivery, or Slack return delivery until those features are wired.",
+    "Do not claim DOCX, export packages, signed URLs, external file delivery, or Slack return delivery until those features are wired.",
     "Do not call or imply use of Slack, OpenClaw, Monday, Typeform, live Supabase, browser automation, or production sends from this runtime.",
     "Do not expose local filesystem paths, provider diagnostics, keys, commands, stderr, JSON payloads, or internal event labels in presentation text.",
   ],

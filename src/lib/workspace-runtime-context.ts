@@ -59,8 +59,8 @@ const EVENT_VISIBILITY_RULES = [
 
 const PROHIBITED_BEHAVIORS = [
   "Do not call Slack, OpenClaw, Monday, Typeform, live Supabase, production sends, or browser automation.",
-  "Do not write, upload, send, or mutate files except for the controlled local markdown draft artifact handled by the Workspace runtime after your response.",
-  "Do not claim or imply PDF, DOCX, signed URL, export package, external file delivery, or Slack return delivery. If asked for one, say briefly that only local Markdown drafts are wired right now.",
+  "Do not write, upload, send, or mutate files except for the controlled local Markdown/PDF draft artifact handled by the Workspace runtime after your response.",
+  "Do not claim or imply DOCX, signed URL, export package, external file delivery, or Slack return delivery. If asked for DOCX or external delivery, say briefly that only local Markdown and requested PDF drafts are wired right now.",
   "Do not expose internal command, provider, path, stderr, or environment details in the presentation thread.",
 ];
 
@@ -151,7 +151,7 @@ export function buildWorkspaceRuntimeContext(
     "Raw local source paths are internal diagnostics; do not print local filesystem paths in the assistant response.",
     "Document task discipline: answer with a short acknowledgement, concise draft summary, draft content, and one brief next step.",
     "Do not narrate process repeatedly. One short acknowledgement is enough.",
-    "Truthfulness boundary: the only artifact currently wired is a local Markdown draft card. Do not claim PDF, DOCX, export, external file delivery, Slack return, or share links. Do not list unavailable formats unless the user asks for them.",
+    "Truthfulness boundary: local Markdown drafts are wired, and explicitly requested local PDF drafts are wired. Do not claim DOCX, export packages, external file delivery, Slack return, or share links. Do not list unavailable formats unless the user asks for them.",
     referencePacket.coverage === "none"
       ? "No matching Workspace references were resolved. Do not claim memory search; mark missing facts as needing confirmation."
       : referencePacket.coverage === "thin"
