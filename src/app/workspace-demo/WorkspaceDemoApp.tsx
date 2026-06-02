@@ -68,6 +68,7 @@ interface ThreadState {
   artifacts: Artifact[];
   steps: TaskStep[];
   task: Task | null;
+  tasks: Task[];
   internalEvents: AgentEvent[];
 }
 
@@ -76,8 +77,17 @@ const initialThreadState: ThreadState = {
   artifacts: [],
   steps: [],
   task: null,
+  tasks: [],
   internalEvents: [],
 };
+
+interface StoredWorkspaceThread {
+  threadState: ThreadState;
+  runState: Exclude<RunState, "running">;
+  activeTaskTitle: string;
+}
+
+const THREAD_STORAGE_KEY = "atlas.workspace.activeThread.v1";
 
 function titleForPrompt(prompt: string): string {
   return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Atlas workspace session";
@@ -131,10 +141,49 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
   }
 
   if (event.kind === "task.complete") {
-    return { ...state, task: event.task, steps: event.task.steps };
+    const taskSnapshot: Task = { ...event.task, id: `${event.runId}:${event.task.id}` };
+    return {
+      ...state,
+      task: event.task,
+      tasks: state.tasks.some((task) => task.id === taskSnapshot.id)
+        ? state.tasks.map((task) => (task.id === taskSnapshot.id ? taskSnapshot : task))
+        : [...state.tasks, taskSnapshot],
+      steps: event.task.steps,
+    };
   }
 
   return state;
+}
+
+function safeStoredThread(value: string | null): StoredWorkspaceThread | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<StoredWorkspaceThread>;
+    if (!parsed.threadState || typeof parsed.threadState !== "object") return null;
+    const thread = parsed.threadState as Partial<ThreadState>;
+    if (!Array.isArray(thread.messages) || !Array.isArray(thread.artifacts) || !Array.isArray(thread.internalEvents)) return null;
+    return {
+      threadState: {
+        messages: thread.messages,
+        artifacts: thread.artifacts,
+        steps: Array.isArray(thread.steps) ? thread.steps : [],
+        task: thread.task ?? null,
+        tasks: Array.isArray(thread.tasks) ? thread.tasks : thread.task ? [thread.task] : [],
+        internalEvents: thread.internalEvents,
+      },
+      runState: parsed.runState === "complete" ? "complete" : "idle",
+      activeTaskTitle: typeof parsed.activeTaskTitle === "string" && parsed.activeTaskTitle.trim()
+        ? parsed.activeTaskTitle
+        : "New session",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readStoredWorkspaceThread(): StoredWorkspaceThread | null {
+  if (typeof window === "undefined") return null;
+  return safeStoredThread(window.sessionStorage.getItem(THREAD_STORAGE_KEY));
 }
 
 function readLatestReferencePacket(events: AgentEvent[]): ReferenceInspectorPacket | null {
@@ -648,6 +697,8 @@ function ChatThread({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
   const hasAssistantMessage = state.messages.some((message) => message.role === "assistant");
+  const taskCards = state.tasks.length > 0 ? state.tasks : state.steps.length ? [state.task].filter((task): task is Task => Boolean(task)) : [];
+  const showActiveSteps = state.steps.length > 0 && (runState === "running" || taskCards.length === 0);
 
   const handleScroll = () => {
     const chat = chatRef.current;
@@ -656,10 +707,10 @@ function ChatThread({
   };
 
   useEffect(() => {
-    if (runState === "running" && state.messages.length === 0) {
+    if (runState === "running") {
       autoScrollRef.current = true;
     }
-  }, [runState, state.messages.length]);
+  }, [runState]);
 
   useEffect(() => {
     if (!autoScrollRef.current) return;
@@ -680,10 +731,17 @@ function ChatThread({
             <div key={message.id} className={styles.msgAgent}>
               <ReferenceCoverageLine packet={referencePacket} />
               <MarkdownLite content={message.content} streaming={!message.complete && runState === "running"} />
-              {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}
-              <TaskChip task={state.task} steps={state.steps} />
             </div>
           )
+        ))}
+        {state.artifacts.length ? (
+          <div className={styles.threadArtifacts}>
+            {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}
+          </div>
+        ) : null}
+        {showActiveSteps ? <TaskChip task={state.task} steps={state.steps} /> : null}
+        {taskCards.map((task) => (
+          <TaskChip key={task.id} task={task} steps={task.steps} />
         ))}
         {runState === "running" && !hasAssistantMessage ? <ThinkingIndicator /> : null}
       </div>
@@ -691,7 +749,7 @@ function ChatThread({
   );
 }
 
-function Sidebar({ runState }: { runState: RunState }) {
+function Sidebar({ runState, onNewTask }: { runState: RunState; onNewTask: () => void }) {
   const navTabs = ["Tasks", "Library", "Plugins", "Scheduled"] as const;
   const projects = ["Ricky coach hire", "L2 audit review", "Content planning", "Training / Knowledge"] as const;
   const tasks = [
@@ -705,7 +763,7 @@ function Sidebar({ runState }: { runState: RunState }) {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandMark} /><span className={styles.brandName}>Atlas</span><span className={styles.brandSub}>for Undeniable</span></div>
-      <button className={styles.newTask} type="button"><span className={styles.newTaskPlus}>+</span> New task</button>
+      <button className={styles.newTask} type="button" onClick={onNewTask}><span className={styles.newTaskPlus}>+</span> New task</button>
       <nav className={styles.navMini} aria-label="Workspace navigation">
         {navTabs.map((tab) => (
           <button
@@ -832,10 +890,11 @@ function Inspector({
 }
 
 export default function WorkspaceDemoApp() {
-  const [threadState, setThreadState] = useState<ThreadState>(initialThreadState);
-  const [runState, setRunState] = useState<RunState>("idle");
+  const [storedThread] = useState<StoredWorkspaceThread | null>(() => readStoredWorkspaceThread());
+  const [threadState, setThreadState] = useState<ThreadState>(() => storedThread?.threadState ?? initialThreadState);
+  const [runState, setRunState] = useState<RunState>(() => storedThread?.runState ?? "idle");
   const [prompt, setPrompt] = useState(demoUserPrompt);
-  const [activeTaskTitle, setActiveTaskTitle] = useState("New session");
+  const [activeTaskTitle, setActiveTaskTitle] = useState(() => storedThread?.activeTaskTitle ?? "New session");
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -850,6 +909,17 @@ export default function WorkspaceDemoApp() {
       sourceRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (runState === "running") return;
+    const hasThread = threadState.messages.length > 0 || threadState.artifacts.length > 0 || threadState.tasks.length > 0;
+    if (!hasThread) return;
+    sessionStorage.setItem(THREAD_STORAGE_KEY, JSON.stringify({
+      threadState,
+      runState: "complete",
+      activeTaskTitle,
+    } satisfies StoredWorkspaceThread));
+  }, [activeTaskTitle, runState, threadState]);
 
   const subscribeToSource = (source: LocalWorkspaceEventSource) => {
     unsubscribeRef.current?.();
@@ -866,7 +936,7 @@ export default function WorkspaceDemoApp() {
     setActiveTaskTitle(activeTitle);
     setPrompt("");
     sourceRef.current?.reset();
-    setThreadState(initialThreadState);
+    setThreadState((state) => ({ ...state, steps: [], task: null }));
     setRunState("running");
     const source = new LocalWorkspaceEventSource({
       endpoint: "/api/workspace-demo/local-run",
@@ -878,6 +948,19 @@ export default function WorkspaceDemoApp() {
     sourceRef.current = source;
     subscribeToSource(source);
     source.start();
+  };
+
+  const startNewTask = () => {
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    sourceRef.current?.reset();
+    sourceRef.current = null;
+    sessionStorage.removeItem(THREAD_STORAGE_KEY);
+    setThreadState(initialThreadState);
+    setRunState("idle");
+    setPrompt(demoUserPrompt);
+    setActiveTaskTitle("New session");
+    setArtifactPreview({ status: "closed" });
   };
 
   const openArtifactPreview = async (artifact: Artifact) => {
@@ -905,7 +988,7 @@ export default function WorkspaceDemoApp() {
 
   return (
     <main className={styles.app}>
-      <Sidebar runState={runState} />
+      <Sidebar runState={runState} onNewTask={startNewTask} />
       <section className={styles.canvas}>
         <header className={styles.topbar}>
           <div className={styles.taskTitle}>{taskTitle}</div>
