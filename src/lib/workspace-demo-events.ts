@@ -141,27 +141,27 @@ export interface WorkspaceEventSource {
 }
 
 const WORKSPACE_ID = "workspace_undeniable_demo";
-const RUN_ID = "run_competitive_intel_demo";
-const TASK_ID = "task_competitive_intel_demo";
-const ASSISTANT_MESSAGE_ID = "msg_assistant_competitive_intel";
-const USER_MESSAGE_ID = "msg_user_competitive_intel";
+const RUN_ID = "run_atlas_workspace_demo";
+const TASK_ID = "task_atlas_workspace_demo";
+const ASSISTANT_MESSAGE_ID = "msg_assistant_atlas_workspace";
+const USER_MESSAGE_ID = "msg_user_atlas_workspace";
 
 const userPrompt =
-  "Pull together a competitive intel report on the AI automation agencies targeting home services. I want positioning, pricing, who they are winning against, and where the gap is for us.";
+  "Give Rhys a concise Atlas workspace readiness summary and call out what needs confirmation before live testing.";
 
-const assistantReply = `Done. I pulled the field on seven agencies in the AI automation space targeting home services. Three things stand out before the doc:\n\n**The price floor is collapsing.** Scorpion and Podium are still anchored at $5K to $25K a month retainers. Hatch and Broadly are running $1.5K to $3K a month wrappers on top of Claude and GPT. They are pulling air out of the mid-market.\n\n**None of them sell the system, they sell the chat box.** Every competitor leads with AI agent for your business. None leads with the operator brain: the automations, the briefings, and the team workflow layer. That is your door.\n\n**Nobody is fluent in coaching-business language.** Their case studies are HVAC, plumbing, and roofing. The closest is NoGood, and even they treat coaching as just another vertical. You own this room.\n\nThe full breakdown is in the doc. Want me to draft the positioning page for the website using the gap I called out, or stage a note for the team to chew on first?`;
+const assistantReply = `Done. Atlas is ready to use as the primary Workspace test bench for Rhys, with a few boundaries to keep visible before live work.\n\n**The event seam is stable.** Mock, local Codex, and Mastra all stream through the same AgentEvent contract, so the chat thread sees presentation-safe output while Inspector keeps diagnostics internal.\n\n**Reference grounding is visible.** Workspace references now resolve before runtime output and show coverage in Inspector. Matched references can be used directly; thin references should be treated as provisional and confirmed.\n\n**External mutations stay off.** This pass does not send Slack, OpenClaw, Monday, Typeform, files, or live Supabase writes. It is safe for drafting and QA, not production delivery.\n\nNext best test: run the Ricky coach hire pay model handover prompt, check reference coverage, and confirm any missing pay-band facts before turning the draft into a real artifact.`;
 
 const taskSteps: TaskStep[] = [
-  { id: "step_market_scan", title: "Scan competitor positioning", status: "complete", summary: "Mapped seven AI automation agencies in the home-services lane." },
-  { id: "step_pricing", title: "Compare pricing models", status: "complete", summary: "Grouped retainers, setup fees, and low-cost wrappers." },
-  { id: "step_gap", title: "Find the positioning gap", status: "complete", summary: "Identified the system-vs-chat-box opening." },
-  { id: "step_doc", title: "Package the report", status: "complete", summary: "Created the inline competitive-intel artifact." },
-  { id: "step_next", title: "Recommend next moves", status: "complete", summary: "Prepared the website-positioning follow-up path." },
+  { id: "step_runtime", title: "Check runtime seam", status: "complete", summary: "Confirmed mock, local Codex, and Mastra share the AgentEvent stream." },
+  { id: "step_references", title: "Review Workspace references", status: "complete", summary: "Checked reference coverage and safe Inspector handles." },
+  { id: "step_visibility", title: "Verify presentation safety", status: "complete", summary: "Kept provider diagnostics, paths, and command details internal." },
+  { id: "step_boundaries", title: "Confirm no external sends", status: "complete", summary: "Left Slack, OpenClaw, Monday, Typeform, files, and Supabase writes untouched." },
+  { id: "step_next", title: "Prepare Ricky smoke", status: "complete", summary: "Ready to test the Ricky coach hire pay model handover prompt." },
 ];
 
 const finalTask: Task = {
   id: TASK_ID,
-  title: "Compile competitive intelligence report",
+  title: "Atlas workspace readiness session",
   status: "complete",
   completedSteps: 5,
   totalSteps: 5,
@@ -169,11 +169,11 @@ const finalTask: Task = {
 };
 
 const artifact: Artifact = {
-  id: "artifact_home_services_ai_report",
-  type: "document",
-  title: "Competitive Intelligence Report - Home Services AI",
-  subtitle: "Atlas / 2 min ago / 14 pages / markdown + pdf",
-  preview: "A field report on positioning, price bands, and the operator-brain gap for Undeniable.",
+  id: "artifact_atlas_workspace_readiness",
+  type: "brief",
+  title: "Atlas Workspace Readiness Note",
+  subtitle: "Atlas / demo session / presentation-safe brief",
+  preview: "A short readiness note for Rhys covering runtime, references, and no-send boundaries.",
 };
 
 function now(offsetMs: number): string {
@@ -273,10 +273,10 @@ export const demoWorkspace: Workspace = {
 export const demoStarterPrompts = [
   "Update the Ricky coach hire pay model handover with clearer bands and a pyramid structure.",
   "Draft an audit for a new coaching client",
-  "Brief me on this week's calls",
-  "Generate a Monday board from a transcript",
+  "Review recent call themes",
+  "Draft a Monday board from available notes",
   "Pull a content plan for next week",
-  "Write a playbook on retention",
+  "Summarize training notes",
 ];
 
 export const demoUserPrompt = userPrompt;

@@ -56,7 +56,7 @@ const initialThreadState: ThreadState = {
 };
 
 function titleForPrompt(prompt: string): string {
-  return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Competitive intel: home services agencies";
+  return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Atlas workspace session";
 }
 
 function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
@@ -338,7 +338,7 @@ function TaskChip({ task, steps }: { task: Task | null; steps: TaskStep[] }) {
   const [expanded, setExpanded] = useState(false);
   const completed = task?.completedSteps ?? steps.filter((step) => step.status === "complete").length;
   const total = task?.totalSteps ?? 5;
-  const title = task?.title ?? "Compile competitive intelligence report";
+  const title = task?.title ?? "Atlas workspace session";
 
   if (steps.length === 0 && !task) return null;
 
@@ -423,17 +423,17 @@ function Sidebar({ runState }: { runState: RunState }) {
       </nav>
       <div className={styles.sectionHeader}><span>Projects</span><IconPlus /></div>
       <ul className={styles.sidebarList}>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Q2 client audits</span><span className={styles.sidebarCount}>7</span></li>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Content engine</span><span className={styles.sidebarCount}>12</span></li>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Pat dashboard</span><span className={styles.sidebarCount}>3</span></li>
+        <li><IconFolder /><span className={styles.sidebarTitle}>Ricky coach hire</span><span className={styles.sidebarCount}>4</span></li>
+        <li><IconFolder /><span className={styles.sidebarTitle}>L2 audit review</span><span className={styles.sidebarCount}>6</span></li>
+        <li><IconFolder /><span className={styles.sidebarTitle}>Content planning</span><span className={styles.sidebarCount}>9</span></li>
       </ul>
       <div className={styles.sectionHeader}><span>All tasks</span></div>
       <ul className={styles.sidebarList}>
-        <li className={styles.sidebarActive}>{runState === "running" ? <IconSpinner /> : <IconDocument />}<span className={styles.sidebarTitle}>Competitive intel: home services agencies</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>Audit draft for Jess Sidoti</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>Monday board from Jian transcript</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>Weekly content plan, May 19</span></li>
-        <li><IconSpinner /><span className={styles.sidebarTitle}>Brief for Tuesday strategy call</span></li>
+        <li className={styles.sidebarActive}>{runState === "running" ? <IconSpinner /> : <IconDocument />}<span className={styles.sidebarTitle}>Ricky coach hire pay model</span></li>
+        <li><IconDocument /><span className={styles.sidebarTitle}>L2 audit review</span></li>
+        <li><IconDocument /><span className={styles.sidebarTitle}>Content plan</span></li>
+        <li><IconDocument /><span className={styles.sidebarTitle}>Monday board draft</span></li>
+        <li><IconSpinner /><span className={styles.sidebarTitle}>Training notes</span></li>
       </ul>
       <div className={styles.sidebarSpacer} />
       <div className={styles.userRow}><span className={styles.avatar}>R</span><span className={styles.userMeta}><span className={styles.userName}>Rhys</span><span className={styles.userSub}>Undeniable</span></span><span className={styles.userChevron}><IconChevronDown size={13} /></span></div>
