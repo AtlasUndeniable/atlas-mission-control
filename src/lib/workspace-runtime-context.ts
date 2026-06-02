@@ -38,6 +38,7 @@ const EVENT_VISIBILITY_RULES = [
   "Render all user-facing output as AgentEvent message.delta and message.complete events with visibility=presentation.",
   "Keep provider names, command paths, stderr, model choices, tokens, keys, cwd, and diagnostics in visibility=internal events only.",
   "Use task.step and task.complete events to communicate progress and completion through the P1 workspace contract.",
+  "Write natural presentation text only; do not print JSON, XML, AgentEvent tags, task.step labels, or visibility labels in the assistant response.",
 ];
 
 const PROHIBITED_BEHAVIORS = [

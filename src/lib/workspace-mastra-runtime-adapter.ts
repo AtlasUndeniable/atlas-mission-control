@@ -144,17 +144,16 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       if (response.textStream) {
         for await (const delta of response.textStream) {
           content += delta;
-          yield messageDelta(eventCtx, messageId, delta);
         }
       } else if (response.text) {
         content = typeof response.text === "string" ? response.text : await response.text;
-        yield* streamAssistantText(eventCtx, messageId, content);
       }
 
-      content = normalizePresentationText(content);
+      content = sanitizeMastraPresentationText(normalizePresentationText(content));
       if (!content) {
         throw new Error(streamError ? readErrorMessage(streamError) : "AI SDK returned no presentation text.");
       }
+      yield* streamAssistantText(eventCtx, messageId, content);
 
       yield {
         ...baseEvent(eventCtx),
@@ -255,6 +254,16 @@ function assertModuleLoaded(moduleValue: unknown, packageName: string): void {
   if (!moduleValue || typeof moduleValue !== "object") {
     throw new Error(`${packageName} did not load.`);
   }
+}
+
+export function sanitizeMastraPresentationText(text: string): string {
+  return text
+    .replace(/<AgentEvent\b(?=[^>]*visibility=["']internal["'])[^>]*>[\s\S]*?<\/AgentEvent>/gi, "")
+    .replace(/<task\.step\b[^>]*>[\s\S]*?<\/task\.step>/gi, "")
+    .replace(/<\/?(?:AgentEvent|message\.delta|message\.complete|task\.step|task\.complete)\b[^>]*>/gi, "")
+    .replace(/```json\s*\{[\s\S]*?"visibility"\s*:\s*"internal"[\s\S]*?```\s*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function readErrorMessage(error: unknown): string {

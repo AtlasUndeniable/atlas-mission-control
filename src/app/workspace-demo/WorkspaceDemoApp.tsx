@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  demoRhysReadyStarterPrompt,
+  demoRhysReadyTaskTitle,
   demoStarterPrompts,
   demoUserPrompt,
   demoWorkspace,
@@ -31,6 +33,10 @@ const initialThreadState: ThreadState = {
   task: null,
   internalEvents: [],
 };
+
+function titleForPrompt(prompt: string): string {
+  return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Competitive intel: home services agencies";
+}
 
 function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
   if (event.visibility === "internal") {
@@ -409,6 +415,7 @@ export default function WorkspaceDemoApp() {
   const startReplay = (nextPrompt?: string) => {
     if (runState === "running") return;
     const activePrompt = nextPrompt?.trim() || prompt.trim() || demoUserPrompt;
+    const activeTitle = titleForPrompt(activePrompt);
     setPrompt(activePrompt);
     sourceRef.current?.reset();
     setThreadState(initialThreadState);
@@ -417,7 +424,7 @@ export default function WorkspaceDemoApp() {
       endpoint: "/api/workspace-demo/local-run",
       input: {
         prompt: activePrompt,
-        title: "Competitive intel: home services agencies",
+        title: activeTitle,
       },
     });
     sourceRef.current = source;
@@ -425,7 +432,7 @@ export default function WorkspaceDemoApp() {
     source.start();
   };
 
-  const taskTitle = runState === "idle" ? "New session" : "Competitive intel: home services agencies";
+  const taskTitle = runState === "idle" ? "New session" : titleForPrompt(prompt);
 
   return (
     <main className={styles.app}>

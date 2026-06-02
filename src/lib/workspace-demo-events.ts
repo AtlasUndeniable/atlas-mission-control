@@ -224,8 +224,11 @@ export class MockWorkspaceEventSource implements WorkspaceEventSource {
   private listeners = new Set<(event: AgentEvent) => void>();
   private timers: ReturnType<typeof setTimeout>[] = [];
   private running = false;
+  private readonly events: AgentEvent[];
 
-  constructor(private readonly events: AgentEvent[] = createCompetitiveIntelReplayEvents()) {}
+  constructor(events: AgentEvent[] = createCompetitiveIntelReplayEvents()) {
+    this.events = events;
+  }
 
   subscribe(listener: (event: AgentEvent) => void): () => void {
     this.listeners.add(listener);
@@ -268,6 +271,7 @@ export const demoWorkspace: Workspace = {
 };
 
 export const demoStarterPrompts = [
+  "Update the Ricky coach hire pay model handover with clearer bands and a pyramid structure.",
   "Draft an audit for a new coaching client",
   "Brief me on this week's calls",
   "Generate a Monday board from a transcript",
@@ -276,3 +280,6 @@ export const demoStarterPrompts = [
 ];
 
 export const demoUserPrompt = userPrompt;
+
+export const demoRhysReadyStarterPrompt = demoStarterPrompts[0];
+export const demoRhysReadyTaskTitle = "Ricky coach hire pay model handover";

@@ -16,13 +16,21 @@ import {
   workspaceDemoRuntimeIds,
   type TerminalCommandRequest,
 } from "../src/lib/workspace-local-runtime-adapter.ts";
-import { MastraAiSdkRuntimeAdapter } from "../src/lib/workspace-mastra-runtime-adapter.ts";
+import {
+  MastraAiSdkRuntimeAdapter,
+  sanitizeMastraPresentationText,
+} from "../src/lib/workspace-mastra-runtime-adapter.ts";
 import {
   createWorkspaceRuntimeAdapter,
   resolveWorkspaceRuntimeProvider,
 } from "../src/lib/workspace-runtime-provider.ts";
 import { buildWorkspaceRuntimeContext } from "../src/lib/workspace-runtime-context.ts";
-import type { AgentEvent } from "../src/lib/workspace-demo-events.ts";
+import {
+  demoRhysReadyStarterPrompt,
+  demoRhysReadyTaskTitle,
+  demoStarterPrompts,
+  type AgentEvent,
+} from "../src/lib/workspace-demo-events.ts";
 
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   env?: NodeJS.ProcessEnv;
@@ -146,7 +154,32 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.match(context.systemPrompt, /Rhys owner view/);
   assert.match(context.systemPrompt, /presentation events/i);
   assert.match(context.systemPrompt, /Obsidian/);
+  assert.match(context.systemPrompt, /do not print JSON, XML, AgentEvent tags/i);
   assert.doesNotMatch(context.systemPrompt, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+});
+
+test("Rhys-ready starter task is first and carries a handover title", () => {
+  assert.equal(demoStarterPrompts[0], demoRhysReadyStarterPrompt);
+  assert.equal(
+    demoRhysReadyStarterPrompt,
+    "Update the Ricky coach hire pay model handover with clearer bands and a pyramid structure.",
+  );
+  assert.equal(demoRhysReadyTaskTitle, "Ricky coach hire pay model handover");
+});
+
+test("Mastra presentation sanitizer removes event envelope narration", () => {
+  const cleaned = sanitizeMastraPresentationText([
+    "I'll help with the Ricky handover.",
+    "<AgentEvent type=\"task.step\" visibility=\"internal\">Searching internal context</AgentEvent>",
+    "<AgentEvent type=\"message.delta\" visibility=\"presentation\">Use clearer bands and a pyramid.</AgentEvent>",
+    "```json",
+    "{\"visibility\":\"internal\",\"provider\":\"anthropic\"}",
+    "```",
+  ].join("\n"));
+
+  assert.match(cleaned, /Ricky handover/);
+  assert.match(cleaned, /clearer bands and a pyramid/);
+  assert.doesNotMatch(cleaned, /AgentEvent|task\.step|visibility|provider|anthropic|internal context/);
 });
 
 test("safe mock adapter streams presentation text and completes the task chip", async () => {
