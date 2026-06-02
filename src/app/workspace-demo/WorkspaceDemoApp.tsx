@@ -755,6 +755,7 @@ function ChatThread({
   const hasAssistantMessage = state.messages.some((message) => message.role === "assistant");
   const taskCards = state.tasks.length > 0 ? state.tasks : state.steps.length ? [state.task].filter((task): task is Task => Boolean(task)) : [];
   const showActiveSteps = state.steps.length > 0 && (runState === "running" || taskCards.length === 0);
+  const visibleArtifacts = [...state.artifacts].reverse();
 
   const handleScroll = () => {
     const chat = chatRef.current;
@@ -790,9 +791,9 @@ function ChatThread({
             </div>
           )
         ))}
-        {state.artifacts.length ? (
+        {visibleArtifacts.length ? (
           <div className={styles.threadArtifacts}>
-            {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}
+            {visibleArtifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}
           </div>
         ) : null}
         {showActiveSteps ? <TaskChip task={state.task} steps={state.steps} /> : null}
@@ -827,6 +828,8 @@ function Sidebar({
   onPanelChange: (panel: WorkspacePanel) => void;
   onSelectTask: (taskId: string) => void;
 }) {
+  const visibleTasks = [...tasks].reverse();
+  const visibleArtifacts = [...artifacts].reverse();
   const navTabs = [
     { id: "tasks", label: "Tasks" },
     { id: "library", label: "Library" },
@@ -864,13 +867,13 @@ function Sidebar({
       </ul>
       <div className={styles.sectionHeader}><span>Current Session</span></div>
       <ul className={styles.sidebarList}>
-        {runState === "running" && tasks.length === 0 ? (
+        {runState === "running" && visibleTasks.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconSpinner />
             <span className={styles.sidebarTitle}>Running local task</span>
           </li>
         ) : null}
-        {tasks.map((task) => (
+        {visibleTasks.map((task) => (
           <li className={selectedTaskId === task.id ? styles.sidebarActive : undefined} key={task.id}>
             <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectTask(task.id)}>
               {task.status === "running" ? <IconSpinner /> : <IconDocument />}
@@ -878,7 +881,7 @@ function Sidebar({
             </button>
           </li>
         ))}
-        {artifacts.map((artifact) => (
+        {visibleArtifacts.map((artifact) => (
           <li key={artifact.id}>
             <button className={styles.sidebarItemButton} type="button" onClick={() => onOpenArtifact(artifact)}>
               <IconFolder />
@@ -886,7 +889,7 @@ function Sidebar({
             </button>
           </li>
         ))}
-        {runState !== "running" && tasks.length === 0 && artifacts.length === 0 ? (
+        {runState !== "running" && visibleTasks.length === 0 && visibleArtifacts.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconList />
             <span className={styles.sidebarTitle}>No local tasks yet</span>

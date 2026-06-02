@@ -87,7 +87,7 @@ export function detectWorkspaceDraftArtifactIntent(
   input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">,
 ): WorkspaceDraftArtifactIntent {
   const text = `${input.prompt} ${input.taskTitle ?? ""}`.toLowerCase();
-  if (/\bpdfs?\b|make this a pdf|as a pdf/.test(text)) {
+  if (hasExplicitPdfArtifactIntent(text)) {
     return createIntent("pdf", "PDF export requested.");
   }
   if (/\bdocx\b|\bword doc\b|\bword document\b|as a docx|make this a docx/.test(text)) {
@@ -107,6 +107,16 @@ export function detectWorkspaceDraftArtifactIntent(
     requestedFormat: null,
     reason: "No explicit artifact or deliverable intent detected.",
   };
+}
+
+function hasExplicitPdfArtifactIntent(text: string): boolean {
+  return (
+    /\bpdfs?\b/.test(text) ||
+    /\b(?:return|send|bring|give|provide)\s+(?:this|it|that|the\s+\w+)?\s*(?:back\s+)?as\s+a\s+pdf\b/.test(text) ||
+    /\bdownloadable\s+pdf\b/.test(text) ||
+    /\bexport\s+(?:this|it|that|the\s+\w+)?\s*(?:to|as)\s+(?:a\s+)?pdf\b/.test(text) ||
+    /\bmake\s+(?:this|it|that)?\s*(?:a\s+)?pdf\b/.test(text)
+  );
 }
 
 export async function maybeWriteWorkspaceDraftArtifact(

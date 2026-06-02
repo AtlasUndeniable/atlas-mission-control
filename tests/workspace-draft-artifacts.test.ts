@@ -62,6 +62,86 @@ test("draft artifact intent tracks requested format and export limitation", () =
   assert.match(docxIntent.exportLimitation ?? "", /DOCX export is not wired yet/);
 });
 
+test("Ricky handover document without PDF intent remains markdown draft", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-ricky-md-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Please update the Ricky Calder pay structure handover doc.",
+      content: "Updated Ricky pay structure handover.",
+      taskTitle: "Ricky Calder pay structure handover",
+      runtimeProvider: "mastra",
+      runId: "run_ricky_markdown_test",
+      taskId: "task_ricky_markdown_test",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+
+    assert.ok(result);
+    assert.equal(result.artifact.type, "markdown");
+    assert.equal(result.metadata.type, "markdown");
+    assert.equal(result.metadata.requestedFormat, "handover");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit Ricky handover PDF request creates primary PDF artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-ricky-pdf-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Please update the Ricky Calder pay structure handover doc and return it as a PDF.",
+      content: "Updated Ricky pay structure handover.",
+      taskTitle: "Ricky Calder pay structure handover",
+      runtimeProvider: "mastra",
+      runId: "run_ricky_pdf_test",
+      taskId: "task_ricky_pdf_test",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+
+    assert.ok(result);
+    assert.equal(result.artifact.type, "pdf");
+    assert.equal(result.metadata.type, "pdf");
+    assert.equal(result.metadata.requestedFormat, "pdf");
+    assert.ok(result.metadata.sourceMarkdownPath);
+    assert.ok(result.metadata.pdfPath);
+    assert.equal(result.metadata.localPath, result.metadata.pdfPath);
+    assert.match(summarizeWorkspaceDraftArtifactForChat(result), /PDF draft saved/);
+    assert.doesNotMatch(summarizeWorkspaceDraftArtifactForChat(result), /Markdown draft saved|PDF export is not wired/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("send back as pdf phrase creates PDF artifact", () => {
+  const intent = detectWorkspaceDraftArtifactIntent({
+    prompt: "Tidy this up and send this back as a pdf.",
+    taskTitle: "Workspace handover document",
+  });
+
+  assert.equal(intent.shouldCreate, true);
+  assert.equal(intent.requestedFormat, "pdf");
+});
+
+test("PDF intent beats generic document and handover intent", () => {
+  const phrases = [
+    "Please create the handover document as a PDF.",
+    "Please create the document and export to PDF.",
+    "Please create the handover doc as a downloadable PDF.",
+    "Please update the handover doc and send back as a PDF.",
+  ];
+
+  for (const prompt of phrases) {
+    const intent = detectWorkspaceDraftArtifactIntent({
+      prompt,
+      taskTitle: "Ricky Calder handover document",
+    });
+    assert.equal(intent.shouldCreate, true, prompt);
+    assert.equal(intent.requestedFormat, "pdf", prompt);
+    assert.equal(intent.exportLimitation, undefined, prompt);
+  }
+});
+
 test("draft artifact writer saves markdown and metadata under caller root", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-"));
   try {
