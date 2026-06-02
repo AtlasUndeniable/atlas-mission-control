@@ -12,6 +12,7 @@ import { removeLeadingAssistantProcessPromise } from "./workspace-agent-cognitio
 import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 import {
   maybeWriteWorkspaceDraftArtifact,
+  summarizeWorkspaceDraftArtifactForChat,
   type WorkspaceDraftArtifactResult,
 } from "./workspace-draft-artifacts.ts";
 
@@ -162,7 +163,18 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       if (!content) {
         throw new Error(streamError ? readErrorMessage(streamError) : "AI SDK returned no presentation text.");
       }
-      yield* streamAssistantText(eventCtx, messageId, content);
+      const draftArtifact = await maybeWriteWorkspaceDraftArtifact({
+        prompt: checkedInput.prompt,
+        content,
+        taskTitle: checkedInput.title ?? "Run Mastra AI SDK workspace task",
+        runtimeProvider: "mastra",
+        runId: eventCtx.runId,
+        taskId: eventCtx.taskId,
+        now: eventCtx.now,
+        root: ctx.draftArtifactRoot,
+      });
+      const chatContent = draftArtifact ? summarizeWorkspaceDraftArtifactForChat(draftArtifact) : content;
+      yield* streamAssistantText(eventCtx, messageId, chatContent);
 
       yield {
         ...baseEvent(eventCtx),
@@ -177,17 +189,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       steps[1] = { ...steps[1], status: "complete", summary: "Streamed assistant output through AgentEvent deltas." };
       steps[2] = { ...steps[2], status: "complete", summary: "Completed the AgentEvent run." };
       yield taskStep(eventCtx, steps[1]);
-      yield messageComplete(eventCtx, messageId, "assistant", content);
-      const draftArtifact = await maybeWriteWorkspaceDraftArtifact({
-        prompt: checkedInput.prompt,
-        content,
-        taskTitle: checkedInput.title ?? "Run Mastra AI SDK workspace task",
-        runtimeProvider: "mastra",
-        runId: eventCtx.runId,
-        taskId: eventCtx.taskId,
-        now: eventCtx.now,
-        root: ctx.draftArtifactRoot,
-      });
+      yield messageComplete(eventCtx, messageId, "assistant", chatContent);
       if (draftArtifact) {
         yield draftArtifactInspectorEvent(eventCtx, draftArtifact);
         yield {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
@@ -173,6 +173,19 @@ function IconFolder() {
   );
 }
 
+function IconList() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 6h13" />
+      <path d="M8 12h13" />
+      <path d="M8 18h13" />
+      <path d="M3 6h.01" />
+      <path d="M3 12h.01" />
+      <path d="M3 18h.01" />
+    </svg>
+  );
+}
+
 function IconCheck() {
   return (
     <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -252,12 +265,6 @@ function Composer({
     <div className={styles.composerWrap}>
       <div className={styles.composer}>
         <button className={styles.composerIcon} type="button" aria-label="Attach file"><IconPlus /></button>
-        <div className={styles.composerTools} aria-label="Available tools">
-          <button className={styles.toolIcon} type="button" title="Gmail" aria-label="Gmail">G</button>
-          <button className={styles.toolIcon} type="button" title="Drive" aria-label="Drive">D</button>
-          <button className={styles.toolIcon} type="button" title="Slack" aria-label="Slack">S</button>
-          <button className={styles.toolIcon} type="button" title="Monday" aria-label="Monday">M</button>
-        </div>
         <textarea
           className={styles.composerInput}
           value={prompt}
@@ -321,25 +328,69 @@ function EmptyState({
   );
 }
 
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    return part.split("\n").map((line, lineIndex) => (
+      <Fragment key={`${index}-${lineIndex}`}>
+        {lineIndex > 0 ? <br /> : null}
+        {line}
+      </Fragment>
+    ));
+  }).flat();
+}
+
 function MarkdownLite({ content, streaming }: { content: string; streaming: boolean }) {
-  const blocks = content.split(/\n\n+/).filter(Boolean);
+  const blocks = content.split(/\n{2,}/).filter(Boolean);
   return (
     <>
       {blocks.map((block, index) => {
-        const parts = block.split(/(\*\*[^*]+\*\*)/g);
-        return (
-          <p key={`${block.slice(0, 20)}-${index}`}>
-            {parts.map((part, partIndex) => {
-              if (part.startsWith("**") && part.endsWith("**")) {
-                return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
-              }
-              return <span key={partIndex}>{part}</span>;
-            })}
-          </p>
-        );
+        const key = `${block.slice(0, 20)}-${index}`;
+        const heading = block.match(/^(#{1,4})\s+(.+)$/);
+        if (heading) {
+          const HeadingTag = heading[1].length <= 2 ? "h3" : "h4";
+          return <HeadingTag key={key}>{renderInlineMarkdown(heading[2])}</HeadingTag>;
+        }
+
+        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+        const isList = lines.length > 1 && lines.every((line) => /^[-*]\s+/.test(line) || /^\d+[.)]\s+/.test(line) || /^[-*]\s+\[[ xX]\]\s+/.test(line));
+        if (isList) {
+          const ordered = lines.every((line) => /^\d+[.)]\s+/.test(line));
+          const ListTag = ordered ? "ol" : "ul";
+          return (
+            <ListTag key={key} className={styles.markdownList}>
+              {lines.map((line, lineIndex) => {
+                const checklist = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+                if (checklist) {
+                  return (
+                    <li key={lineIndex} className={styles.checkItem}>
+                      <span className={checklist[1].trim() ? styles.checkBoxDone : styles.checkBox} />
+                      <span>{renderInlineMarkdown(checklist[2])}</span>
+                    </li>
+                  );
+                }
+                return <li key={lineIndex}>{renderInlineMarkdown(line.replace(/^[-*]\s+|^\d+[.)]\s+/, ""))}</li>;
+              })}
+            </ListTag>
+          );
+        }
+
+        return <p key={key}>{renderInlineMarkdown(block)}</p>;
       })}
       {streaming ? <span className={styles.streamingCaret} aria-hidden="true" /> : null}
     </>
+  );
+}
+
+function ThinkingIndicator() {
+  return (
+    <div className={`${styles.msgAgent} ${styles.thinkingMessage}`} aria-live="polite">
+      <span>Atlas is thinking</span>
+      <span className={styles.thinkingDots} aria-hidden="true"><span /><span /><span /></span>
+    </div>
   );
 }
 
@@ -413,6 +464,7 @@ function ChatThread({
 }) {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
+  const hasAssistantMessage = state.messages.some((message) => message.role === "assistant");
 
   const handleScroll = () => {
     const chat = chatRef.current;
@@ -450,6 +502,7 @@ function ChatThread({
             </div>
           )
         ))}
+        {runState === "running" && !hasAssistantMessage ? <ThinkingIndicator /> : null}
       </div>
     </section>
   );
@@ -460,22 +513,13 @@ function Sidebar({ runState }: { runState: RunState }) {
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandMark} /><span className={styles.brandName}>Atlas</span><span className={styles.brandSub}>for Undeniable</span></div>
       <button className={styles.newTask} type="button"><span className={styles.newTaskPlus}>+</span> New task</button>
-      <nav className={styles.navMini} aria-label="Workspace sections">
-        <a className={styles.navMiniActive}>Tasks</a><a>Library</a><a>Plugins</a><a>Scheduled</a>
-      </nav>
-      <div className={styles.sectionHeader}><span>Projects</span><IconPlus /></div>
-      <ul className={styles.sidebarList}>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Ricky coach hire</span><span className={styles.sidebarCount}>4</span></li>
-        <li><IconFolder /><span className={styles.sidebarTitle}>L2 audit review</span><span className={styles.sidebarCount}>6</span></li>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Content planning</span><span className={styles.sidebarCount}>9</span></li>
-      </ul>
-      <div className={styles.sectionHeader}><span>All tasks</span></div>
+      <div className={styles.sectionHeader}><span>Workspace</span></div>
       <ul className={styles.sidebarList}>
         <li className={styles.sidebarActive}>{runState === "running" ? <IconSpinner /> : <IconDocument />}<span className={styles.sidebarTitle}>Ricky coach hire pay model</span></li>
         <li><IconDocument /><span className={styles.sidebarTitle}>L2 audit review</span></li>
         <li><IconDocument /><span className={styles.sidebarTitle}>Content plan</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>Monday board draft</span></li>
-        <li><IconSpinner /><span className={styles.sidebarTitle}>Training notes</span></li>
+        <li><IconList /><span className={styles.sidebarTitle}>Monday board</span></li>
+        <li><IconFolder /><span className={styles.sidebarTitle}>Training notes</span></li>
       </ul>
       <div className={styles.sidebarSpacer} />
       <div className={styles.userRow}><span className={styles.avatar}>R</span><span className={styles.userMeta}><span className={styles.userName}>Rhys</span><span className={styles.userSub}>Undeniable</span></span><span className={styles.userChevron}><IconChevronDown size={13} /></span></div>

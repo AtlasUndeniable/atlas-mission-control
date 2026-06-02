@@ -34,9 +34,6 @@
 .newTask { margin: 2px 12px 14px; padding: 10px 12px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 10px; color: var(--text-1); font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 10px; transition: background 120ms ease-out, border-color 120ms ease-out; }
 .newTask:hover { background: var(--bg-elev-2); border-color: var(--border-strong); }
 .newTaskPlus { color: var(--accent); font-size: 16px; line-height: 1; }
-.navMini { display: flex; gap: 2px; padding: 0 10px 12px; }
-.navMini a { flex: 1; text-align: center; padding: 6px 4px; font-size: 12px; color: var(--text-3); border-radius: 6px; }
-.navMini a:hover, .navMiniActive { color: var(--text-1) !important; background: var(--bg-elev-1); }
 .sectionHeader { padding: 16px 18px 6px; color: var(--text-4); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
 .sidebarList { list-style: none; margin: 0; padding: 0 8px; }
 .sidebarList li { position: relative; display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; color: var(--text-2); font-size: 13px; overflow: hidden; white-space: nowrap; }
@@ -44,7 +41,6 @@
 .sidebarActive { background: var(--bg-elev-1); color: var(--text-1) !important; }
 .sidebarActive::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent); border-radius: 2px; }
 .sidebarTitle { overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.sidebarCount { color: var(--text-4); font-size: 12px; font-variant-numeric: tabular-nums; }
 .sidebarSpacer { flex: 1; }
 .userRow { border-top: 1px solid var(--border); padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
 .avatar { width: 26px; height: 26px; border-radius: 999px; background: linear-gradient(135deg, #2d2d34, #1a1a1f); border: 1px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-2); }
@@ -70,11 +66,27 @@
 .msgUser { align-self: flex-end; max-width: min(70%, 620px); overflow-wrap: anywhere; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 14px; padding: 12px 16px; color: var(--text-1); }
 .msgAgent { position: relative; min-width: 0; padding-left: 14px; color: var(--text-1); overflow-wrap: anywhere; }
 .msgAgent::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; background: var(--accent); border-radius: 2px; opacity: .72; }
-.msgAgent p { margin: 0 0 12px; line-height: 1.65; }
+.msgAgent p { margin: 0 0 10px; line-height: 1.62; }
+.msgAgent h3, .msgAgent h4 { margin: 16px 0 8px; color: var(--text-1); font-weight: 600; line-height: 1.28; letter-spacing: 0; }
+.msgAgent h3 { font-size: 16px; }
+.msgAgent h4 { font-size: 14px; color: var(--text-2); }
+.msgAgent h3:first-child, .msgAgent h4:first-child { margin-top: 0; }
 .msgAgent strong { font-weight: 600; }
+.markdownList { margin: 4px 0 12px; padding-left: 20px; display: grid; gap: 5px; color: var(--text-1); }
+.markdownList li { line-height: 1.55; padding-left: 2px; }
+.checkItem { list-style: none; display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: start; gap: 8px; margin-left: -20px; }
+.checkBox, .checkBoxDone { width: 13px; height: 13px; margin-top: 3px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-elev-2); }
+.checkBoxDone { border-color: rgba(127,209,162,.52); background: rgba(127,209,162,.18); position: relative; }
+.checkBoxDone::after { content: ""; position: absolute; left: 3px; top: 1px; width: 4px; height: 7px; border: solid var(--success); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .referenceCoverageLine { width: fit-content; max-width: 100%; margin: 0 0 10px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-3); background: rgba(255,255,255,.025); font-size: 11px; line-height: 1.4; }
 .streamingCaret { display: inline-block; width: 2px; height: 16px; margin-left: 3px; vertical-align: -2px; background: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+.thinkingMessage { width: fit-content; max-width: 100%; display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
+.thinkingDots { display: inline-flex; gap: 3px; align-items: center; padding-top: 2px; }
+.thinkingDots span { width: 4px; height: 4px; border-radius: 999px; background: var(--accent); opacity: .36; animation: thinkingDot 1.2s ease-in-out infinite; }
+.thinkingDots span:nth-child(2) { animation-delay: .16s; }
+.thinkingDots span:nth-child(3) { animation-delay: .32s; }
+@keyframes thinkingDot { 0%, 80%, 100% { opacity: .28; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
 .artifactCard { width: 100%; min-width: 0; margin: 14px 0; padding: 14px 16px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 10px; display: flex; align-items: center; gap: 14px; text-align: left; }
 .artifactIcon { width: 36px; height: 36px; border-radius: 8px; background: var(--bg-elev-3); border: 1px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--accent); }
 .artifactBody { flex: 1; min-width: 0; display: grid; gap: 3px; }
@@ -99,10 +111,8 @@
 .composerWrap { position: sticky; bottom: 0; z-index: 10; padding: 12px 24px 22px; display: flex; flex-direction: column; align-items: center; background: linear-gradient(180deg, transparent, var(--bg-canvas) 28%); border-top: 1px solid rgba(31,31,35,.72); flex-shrink: 0; width: 100%; }
 .composer { width: 100%; max-width: 760px; min-height: 64px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
 .composer:focus-within { border-color: var(--border-strong); background: var(--bg-elev-2); }
-.composerIcon, .toolIcon { width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-3); }
-.toolIcon { width: 26px; height: 26px; font-size: 11px; }
-.composerIcon:hover, .toolIcon:hover { background: var(--bg-elev-3); color: var(--text-1); }
-.composerTools { display: flex; gap: 2px; padding: 0 4px; border-right: 1px solid var(--border); margin-right: 2px; }
+.composerIcon { width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-3); flex-shrink: 0; }
+.composerIcon:hover { background: var(--bg-elev-3); color: var(--text-1); }
 .composerInput { flex: 1; min-width: 0; max-height: 112px; background: transparent; border: 0; outline: 0; color: var(--text-1); font: inherit; line-height: 1.45; padding: 6px 4px; resize: none; overflow-y: auto; }
 .composerInput::placeholder { color: var(--text-3); }
 .composerSend { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--bg-canvas); display: inline-flex; align-items: center; justify-content: center; }
@@ -152,7 +162,6 @@
   .chat { padding: 22px 14px 18px; }
   .composerWrap { padding: 10px 14px 16px; }
   .msgUser { max-width: 88%; }
-  .composerTools { display: none; }
   .artifactCard { align-items: flex-start; }
   .artifactMeta { white-space: normal; }
   .artifactState { justify-items: start; }

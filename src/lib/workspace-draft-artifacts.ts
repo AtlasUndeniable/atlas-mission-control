@@ -148,6 +148,38 @@ export async function writeWorkspaceDraftArtifact(
   };
 }
 
+export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArtifactResult): string {
+  const formatLabel = result.metadata.requestedFormat === "pdf"
+    ? "Markdown draft saved; PDF export is not wired yet."
+    : result.metadata.requestedFormat === "docx"
+      ? "Markdown draft saved; DOCX export is not wired yet."
+      : "Markdown draft saved.";
+  const preview = cleanArtifactPreview(result.artifact.preview);
+  return [
+    `${formatLabel}`,
+    "",
+    `**${result.artifact.title}**`,
+    "",
+    preview ? `- Draft focus: ${preview}` : "- Draft focus: Ready for review in the artifact card.",
+    "- Full draft body is in the artifact card. Preview panel comes next.",
+    "- Next: review the confirmation fields before this becomes a real export.",
+  ].join("\n");
+}
+
+function cleanArtifactPreview(value: string): string {
+  const cleaned = value
+    .replace(/#{1,6}\s*/g, "")
+    .replace(/\*\*/g, "")
+    .replace(/^[-*]\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned
+    .replace(/^I(?:'ll| will)\s+(?:update|create|draft|build|generate|prepare)\s+/i, "")
+    .replace(/^I'm\s+(?:going to\s+)?(?:update|creating|drafting|building|generating|preparing)\s+/i, "")
+    .replace(/\s+(?:Update|Draft|Document)$/i, "")
+    .trim();
+}
+
 function createIntent(
   requestedFormat: WorkspaceDraftArtifactRequestedFormat,
   reason: string,

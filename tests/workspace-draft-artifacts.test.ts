@@ -12,6 +12,7 @@ import {
   detectWorkspaceDraftArtifactIntent,
   maybeWriteWorkspaceDraftArtifact,
   shouldCreateWorkspaceDraftArtifact,
+  summarizeWorkspaceDraftArtifactForChat,
 } from "../src/lib/workspace-draft-artifacts.ts";
 
 test("draft artifact intent is explicit deliverable only", () => {
@@ -93,6 +94,19 @@ test("draft artifact writer saves markdown and metadata under caller root", asyn
     assert.match(markdown, /Use clearer bands/);
     assert.equal(metadataJson.localPath, result.metadata.localPath);
     assert.equal(metadataJson.userFacingName, "Ricky pay structure handover draft");
+    const chatSummary = summarizeWorkspaceDraftArtifactForChat(result);
+    assert.match(chatSummary, /Markdown draft saved/);
+    assert.match(chatSummary, /Full draft body is in the artifact card/);
+    assert.doesNotMatch(chatSummary, /## Ricky pay model/);
+    const processSummary = summarizeWorkspaceDraftArtifactForChat({
+      ...result,
+      artifact: {
+        ...result.artifact,
+        preview: "I'll update the Ricky pay model. Update",
+      },
+    });
+    assert.match(processSummary, /Ricky pay model/);
+    assert.doesNotMatch(processSummary, /I'll update/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

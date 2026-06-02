@@ -275,6 +275,7 @@ test("runtime context includes cognition guidance for useful first-pass drafts",
   assert.match(context.systemPrompt, /When a first-pass draft is possible, produce it and mark assumptions/i);
   assert.match(context.systemPrompt, /Ask a clarifying question only when missing information would materially change the answer/i);
   assert.match(context.systemPrompt, /do not ask whether to make a template/i);
+  assert.match(context.systemPrompt, /Do not paste the full document body into chat/i);
   assert.match(context.systemPrompt, /Do not use generic discovery questions/i);
 });
 

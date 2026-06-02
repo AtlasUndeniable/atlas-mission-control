@@ -63,6 +63,7 @@ export const workspaceAgentCognition: WorkspaceAgentCognitionPacket = {
     "Document tasks should return a short acknowledgement, concise draft summary, draft-ready content, and one brief next step.",
     "Drafts should feel usable on the first pass, with assumptions and confirmation gaps clearly marked.",
     "If document specifics are missing, produce a structured scaffold with clearly labelled confirmation fields instead of asking whether to create one.",
+    "When a local draft artifact will be created, keep the chat response to what was created, what needs confirmation, and the next action. Do not paste the full document body into chat.",
     "Local Markdown draft artifacts are the only generated artifact format currently wired in Workspace demo.",
   ],
   clarificationPolicy: [

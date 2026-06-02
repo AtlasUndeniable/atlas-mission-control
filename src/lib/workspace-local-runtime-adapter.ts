@@ -12,6 +12,7 @@ import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts
 import { createWorkspaceReferenceInspectorPacket } from "./workspace-reference-resolver.ts";
 import {
   maybeWriteWorkspaceDraftArtifact,
+  summarizeWorkspaceDraftArtifactForChat,
   type WorkspaceDraftArtifactResult,
 } from "./workspace-draft-artifacts.ts";
 
@@ -186,21 +187,6 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     yield taskStep(eventCtx, steps[1]);
     yield taskStep(eventCtx, steps[2]);
 
-    for (const delta of splitStreamingText(output.presentationText)) {
-      yield {
-        ...baseEvent(eventCtx),
-        id: eventCtx.nextId("evt_msg"),
-        kind: "message.delta",
-        visibility: "presentation",
-        messageId: assistantMessageId,
-        role: "assistant",
-        delta,
-      };
-      await pause(18);
-    }
-
-    yield messageComplete(eventCtx, assistantMessageId, "assistant", output.presentationText);
-
     const draftArtifact = !output.error
       ? await maybeWriteWorkspaceDraftArtifact({
         prompt: checkedInput.prompt,
@@ -213,6 +199,22 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
         root: ctx.draftArtifactRoot,
       })
       : null;
+    const chatText = draftArtifact ? summarizeWorkspaceDraftArtifactForChat(draftArtifact) : output.presentationText;
+
+    for (const delta of splitStreamingText(chatText)) {
+      yield {
+        ...baseEvent(eventCtx),
+        id: eventCtx.nextId("evt_msg"),
+        kind: "message.delta",
+        visibility: "presentation",
+        messageId: assistantMessageId,
+        role: "assistant",
+        delta,
+      };
+      await pause(18);
+    }
+
+    yield messageComplete(eventCtx, assistantMessageId, "assistant", chatText);
 
     if (draftArtifact) {
       yield draftArtifactInspectorEvent(eventCtx, draftArtifact);
