@@ -26,14 +26,28 @@ import {
 } from "../src/lib/workspace-runtime-provider.ts";
 import { buildWorkspaceRuntimeContext } from "../src/lib/workspace-runtime-context.ts";
 import {
+  createEmptyWorkspaceReferencePacket,
+  type WorkspaceReferencePacket,
+} from "../src/lib/workspace-reference-resolver.ts";
+import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
   demoStarterPrompts,
   type AgentEvent,
 } from "../src/lib/workspace-demo-events.ts";
 
+function emptyReferencePacket(): WorkspaceReferencePacket {
+  return createEmptyWorkspaceReferencePacket({
+    prompt: "test prompt",
+    workspaceId: workspaceDemoRuntimeIds.workspaceId,
+    project: "Undeniable",
+    room: "workspace-demo",
+  }, { now: () => new Date("2026-06-01T00:00:00.000Z") });
+}
+
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   env?: NodeJS.ProcessEnv;
+  referencePacket?: WorkspaceReferencePacket;
   commandRunner?: (request: TerminalCommandRequest) => Promise<{
     ok: boolean;
     stdout: string;
@@ -58,6 +72,7 @@ async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
       now: () => new Date("2026-05-29T00:00:00.000Z"),
       idFactory: () => String(id++).padStart(3, "0"),
       commandRunner: options.commandRunner,
+      referenceResolver: async () => options.referencePacket ?? emptyReferencePacket(),
     },
   )) {
     events.push(event);
@@ -91,6 +106,7 @@ async function collectRuntimeEvents(adapter: {
       env: options.env ?? {},
       now: () => new Date("2026-06-01T00:00:00.000Z"),
       idFactory: () => String(id++).padStart(3, "0"),
+      referenceResolver: async () => emptyReferencePacket(),
     },
   )) {
     events.push(event);
@@ -155,7 +171,40 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.match(context.systemPrompt, /presentation events/i);
   assert.match(context.systemPrompt, /Obsidian/);
   assert.match(context.systemPrompt, /do not print JSON, XML, AgentEvent tags/i);
+  assert.match(context.systemPrompt, /No matching Workspace references were resolved/i);
   assert.doesNotMatch(context.systemPrompt, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+});
+
+test("runtime context keeps reference paths internal while exposing safe excerpts", () => {
+  const referencePacket: WorkspaceReferencePacket = {
+    resolvedAt: "2026-06-01T00:00:00.000Z",
+    coverage: "matched",
+    rootsRead: [],
+    references: [{
+      handle: "ricky-calder-source-match",
+      title: "Ricky Calder Source Match",
+      sourceType: "librarian-report",
+      sourcePath: "/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+      pathSummary: "librarian-reports/ricky-calder-source-match.md",
+      excerpt: "Matched Ricky Calder call archive candidates with transcript availability.",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      confidence: "high",
+      score: 80,
+      matchedTerms: ["ricky", "calder"],
+    }],
+    guidance: ["Use only these resolved Workspace references for memory-backed claims."],
+    userFacingSummary: "1 Workspace reference resolved.",
+    internalSummary: "references=1; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+  };
+  const context = buildWorkspaceRuntimeContext({
+    prompt: "Update Ricky handover",
+    title: "Ricky handover",
+  }, { provider: "mastra", referencePacket });
+
+  assert.match(context.systemPrompt, /Ricky Calder Source Match/);
+  assert.match(context.systemPrompt, /Matched Ricky Calder call archive candidates/);
+  assert.doesNotMatch(context.systemPrompt, /\/Users\/atlasai/);
+  assert.match(context.internalSummary, /\/Users\/atlasai/);
 });
 
 test("Rhys-ready starter task is first and carries a handover title", () => {

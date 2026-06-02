@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import type { AgentEvent, Artifact, Task, TaskStep } from "./workspace-demo-events";
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
+import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
 
@@ -24,6 +25,7 @@ export interface WorkspaceLocalRuntimeContext {
   now?: () => Date;
   idFactory?: () => string;
   commandRunner?: TerminalCommandRunner;
+  referenceResolver?: WorkspaceReferenceResolver;
 }
 
 export interface WorkspaceLocalRuntimeAdapter {
@@ -53,6 +55,7 @@ export interface TerminalCommandResult {
 }
 
 export type TerminalCommandRunner = (request: TerminalCommandRequest) => Promise<TerminalCommandResult>;
+export type WorkspaceReferenceResolver = (input: WorkspaceLocalRuntimeInput) => Promise<WorkspaceReferencePacket>;
 
 interface AdapterEventContext {
   workspaceId: string;
@@ -109,8 +112,10 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     const env = ctx.env ?? process.env;
     const cwd = ctx.cwd ?? env.PWD ?? ".";
     const selection = await selectLocalRunner({ cwd, env, options: this.options });
+    const referencePacket = await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
     const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, {
       provider: selection.mode === "mock" ? "mock" : "local-codex",
+      referencePacket,
     });
     steps[0] = { ...steps[0], status: "complete", summary: selection.reason };
     steps[1] = { ...steps[1], status: "running" };
@@ -215,6 +220,17 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       task: buildTask(eventCtx.taskId, taskTitle, steps),
     };
   }
+}
+
+async function resolveRuntimeReferences(input: WorkspaceLocalRuntimeInput): Promise<WorkspaceReferencePacket> {
+  const { resolveWorkspaceReferences } = await import("./workspace-reference-resolver.ts");
+  return resolveWorkspaceReferences({
+    prompt: input.prompt,
+    title: input.title,
+    workspaceId: workspaceDemoRuntimeIds.workspaceId,
+    project: "Undeniable",
+    room: "workspace-demo",
+  });
 }
 
 export function validateLocalRuntimeInput(input: WorkspaceLocalRuntimeInput): WorkspaceLocalRuntimeInput {

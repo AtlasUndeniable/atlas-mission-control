@@ -51,7 +51,8 @@ const STREAM_CHUNK_SIZE = 28;
 export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
   async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
     const checkedInput = validateLocalRuntimeInput(input);
-    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, { provider: "mastra" });
+    const referencePacket = await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
+    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, { provider: "mastra", referencePacket });
     const eventCtx = createEventContext(ctx, "run_mastra");
     const messageId = `${eventCtx.runId}_assistant`;
     const steps: TaskStep[] = [
@@ -206,6 +207,17 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       yield taskComplete(eventCtx, checkedInput.title ?? "Run Mastra AI SDK workspace task", steps);
     }
   }
+}
+
+async function resolveRuntimeReferences(input: WorkspaceLocalRuntimeInput) {
+  const { resolveWorkspaceReferences } = await import("./workspace-reference-resolver.ts");
+  return resolveWorkspaceReferences({
+    prompt: input.prompt,
+    title: input.title,
+    workspaceId: "workspace_undeniable_demo",
+    project: "Undeniable",
+    room: "workspace-demo",
+  });
 }
 
 async function resolveMastraDependencies(env: NodeJS.ProcessEnv): Promise<MastraDependencyCheck> {
