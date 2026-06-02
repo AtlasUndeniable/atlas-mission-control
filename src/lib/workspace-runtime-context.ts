@@ -1,4 +1,9 @@
 import type { WorkspaceLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
+import {
+  formatWorkspaceAgentCognitionForPrompt,
+  workspaceAgentCognition,
+  type WorkspaceAgentCognitionPacket,
+} from "./workspace-agent-cognition.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceRuntimeContextProvider = "mock" | "local-codex" | "mastra";
@@ -25,6 +30,7 @@ export interface WorkspaceRuntimeContextPacket {
     handle: string;
     pathSummary: string;
   }>;
+  agentCognition: WorkspaceAgentCognitionPacket;
   workspaceReferences: WorkspaceReferencePacket;
   provider: WorkspaceRuntimeContextProvider;
   internalSummary: string;
@@ -99,6 +105,7 @@ export function buildWorkspaceRuntimeContext(
     "user_role=rhys_owner",
     `provider=${options.provider}`,
     `librarian_handles=${librarianHandles}`,
+    `cognition=${workspaceAgentCognition.id}`,
     referencePacket.internalSummary,
   ].join("; ");
 
@@ -114,6 +121,9 @@ export function buildWorkspaceRuntimeContext(
     "",
     "Runtime boundaries:",
     ...PROHIBITED_BEHAVIORS.map((rule) => `- ${rule}`),
+    "",
+    "Atlas cognition:",
+    ...formatWorkspaceAgentCognitionForPrompt(workspaceAgentCognition),
     "",
     "Librarian context:",
     ...LIBRARIAN_REFERENCES.map((reference) => `- ${reference.handle}: ${reference.pathSummary}`),
@@ -155,6 +165,7 @@ export function buildWorkspaceRuntimeContext(
     eventVisibilityRules: [...EVENT_VISIBILITY_RULES],
     prohibitedBehaviors: [...PROHIBITED_BEHAVIORS],
     librarianReferences: LIBRARIAN_REFERENCES.map((reference) => ({ ...reference })),
+    agentCognition: workspaceAgentCognition,
     workspaceReferences: referencePacket,
     provider: options.provider,
     internalSummary,

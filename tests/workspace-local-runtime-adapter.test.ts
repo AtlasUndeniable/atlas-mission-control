@@ -24,6 +24,11 @@ import {
   createWorkspaceRuntimeAdapter,
   resolveWorkspaceRuntimeProvider,
 } from "../src/lib/workspace-runtime-provider.ts";
+import {
+  formatWorkspaceAgentCognitionForPrompt,
+  removeLeadingAssistantProcessPromise,
+  workspaceAgentCognition,
+} from "../src/lib/workspace-agent-cognition.ts";
 import { buildWorkspaceRuntimeContext } from "../src/lib/workspace-runtime-context.ts";
 import {
   createEmptyWorkspaceReferencePacket,
@@ -192,6 +197,7 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.equal(context.user.role, "rhys_owner");
   assert.equal(context.user.view, "owner");
   assert.equal(context.provider, "local-codex");
+  assert.equal(context.agentCognition.id, "atlas_workspace_cognition_v1");
   assert.ok(context.eventVisibilityRules.some((rule) => rule.includes("visibility=presentation")));
   assert.ok(context.eventVisibilityRules.some((rule) => rule.includes("visibility=internal")));
   assert.ok(context.prohibitedBehaviors.some((rule) => rule.includes("Slack")));
@@ -205,6 +211,9 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.equal(context.librarianReferences.every((reference) => reference.pathSummary.length < 140), true);
   assert.match(context.internalSummary, /librarian_handles=/);
   assert.match(context.systemPrompt, /Rhys owner view/);
+  assert.match(context.systemPrompt, /Atlas cognition/);
+  assert.match(context.systemPrompt, /senior chief of staff/i);
+  assert.match(context.systemPrompt, /executive operating-system surface/i);
   assert.match(context.systemPrompt, /presentation events/i);
   assert.match(context.systemPrompt, /Obsidian/);
   assert.match(context.systemPrompt, /do not print JSON, XML, AgentEvent tags/i);
@@ -215,6 +224,57 @@ test("workspace runtime context carries Atlas visibility and execution boundarie
   assert.match(context.systemPrompt, /short acknowledgement, concise draft summary/i);
   assert.match(context.systemPrompt, /Do not narrate process repeatedly/i);
   assert.doesNotMatch(context.systemPrompt, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+});
+
+test("workspace cognition packet keeps Atlas specific and compact", () => {
+  const promptLines = formatWorkspaceAgentCognitionForPrompt(workspaceAgentCognition);
+  const promptText = promptLines.join("\n");
+
+  assert.equal(workspaceAgentCognition.sourceHandles.includes("SOUL"), true);
+  assert.equal(workspaceAgentCognition.sourceHandles.includes("COGNITION"), true);
+  assert.ok(promptText.length < 5_000);
+  assert.match(promptText, /not a generic chatbot/i);
+  assert.match(promptText, /operating partner/i);
+  assert.match(promptText, /Rhys as owner and operator/i);
+  assert.match(promptText, /Start with the business answer or draft/i);
+  assert.match(promptText, /produce it and mark assumptions/i);
+  assert.match(promptText, /produce a structured scaffold/i);
+});
+
+test("workspace cognition sanitizer removes leading assistant process promises", () => {
+  const cleaned = removeLeadingAssistantProcessPromise(
+    "I'll create the updated handover document using the available workspace context. Based on the current references, here is the draft.",
+  );
+  const cleanedReferencePreamble = removeLeadingAssistantProcessPromise(
+    "I can see references to Ricky Calder materials in the Workspace. However, here is the usable scaffold.",
+  );
+
+  assert.equal(cleaned, "Based on the current references, here is the draft.");
+  assert.equal(cleanedReferencePreamble, "However, here is the usable scaffold.");
+});
+
+test("workspace cognition forbids fake retrieval and unsupported export claims", () => {
+  const promptText = formatWorkspaceAgentCognitionForPrompt(workspaceAgentCognition).join("\n");
+
+  assert.match(promptText, /Only claim Workspace memory/i);
+  assert.match(promptText, /thin call or trend coverage/i);
+  assert.match(promptText, /Do not claim fake search/i);
+  assert.match(promptText, /fake transcript review/i);
+  assert.match(promptText, /Do not claim PDF, DOCX, export packages/i);
+  assert.match(promptText, /Local Markdown draft artifacts are the only generated artifact format currently wired/i);
+});
+
+test("runtime context includes cognition guidance for useful first-pass drafts", () => {
+  const context = buildWorkspaceRuntimeContext({
+    prompt: "Can you create the updated Ricky Calder pay structure handover doc?",
+    title: "Ricky handover",
+  }, { provider: "mastra" });
+
+  assert.match(context.internalSummary, /cognition=atlas_workspace_cognition_v1/);
+  assert.match(context.systemPrompt, /When a first-pass draft is possible, produce it and mark assumptions/i);
+  assert.match(context.systemPrompt, /Ask a clarifying question only when missing information would materially change the answer/i);
+  assert.match(context.systemPrompt, /do not ask whether to make a template/i);
+  assert.match(context.systemPrompt, /Do not use generic discovery questions/i);
 });
 
 test("runtime context keeps reference paths internal while exposing safe excerpts", () => {
@@ -299,9 +359,9 @@ test("Mastra presentation sanitizer removes event envelope narration", () => {
     "```",
   ].join("\n"));
 
-  assert.match(cleaned, /Ricky handover/);
   assert.match(cleaned, /clearer bands and a pyramid/);
   assert.match(cleaned, /\[Workspace internal path\]/);
+  assert.doesNotMatch(cleaned, /^I['’]?ll help/i);
   assert.doesNotMatch(cleaned, /AgentEvent|task\.step|visibility|provider|anthropic|internal context|\/Users\/atlasai|\.openclaw\/workspace/);
 });
 

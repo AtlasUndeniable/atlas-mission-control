@@ -8,6 +8,7 @@ import type {
 } from "./workspace-local-runtime-adapter.ts";
 import { validateLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
+import { removeLeadingAssistantProcessPromise } from "./workspace-agent-cognition.ts";
 import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 import {
   maybeWriteWorkspaceDraftArtifact,
@@ -296,7 +297,7 @@ function assertModuleLoaded(moduleValue: unknown, packageName: string): void {
 }
 
 export function sanitizeMastraPresentationText(text: string): string {
-  return text
+  const cleaned = text
     .replace(/<AgentEvent\b(?=[^>]*visibility=["']internal["'])[^>]*>[\s\S]*?<\/AgentEvent>/gi, "")
     .replace(/<task\.step\b[^>]*>[\s\S]*?<\/task\.step>/gi, "")
     .replace(/<\/?(?:AgentEvent|message\.delta|message\.complete|task\.step|task\.complete)\b[^>]*>/gi, "")
@@ -304,6 +305,7 @@ export function sanitizeMastraPresentationText(text: string): string {
     .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  return removeLeadingAssistantProcessPromise(cleaned);
 }
 
 function readErrorMessage(error: unknown): string {

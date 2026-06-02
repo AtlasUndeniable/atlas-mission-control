@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { removeLeadingAssistantProcessPromise } from "./workspace-agent-cognition.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import type { AgentEvent, Task, TaskStep } from "./workspace-demo-events";
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
@@ -595,8 +596,9 @@ function normalizePresentationText(text: string): string {
   const cleaned = text
     .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
     .trim();
-  if (!cleaned) return "Local adapter completed without presentation output.";
-  return cleaned.length > 6_000 ? `${cleaned.slice(0, 6_000)}\n\n[Output truncated for the demo thread.]` : cleaned;
+  const disciplined = removeLeadingAssistantProcessPromise(cleaned);
+  if (!disciplined) return "Local adapter completed without presentation output.";
+  return disciplined.length > 6_000 ? `${disciplined.slice(0, 6_000)}\n\n[Output truncated for the demo thread.]` : disciplined;
 }
 
 function limitText(text: string): string {
