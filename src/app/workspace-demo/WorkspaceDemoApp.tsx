@@ -509,17 +509,51 @@ function ChatThread({
 }
 
 function Sidebar({ runState }: { runState: RunState }) {
+  const navTabs = ["Tasks", "Library", "Plugins", "Scheduled"] as const;
+  const projects = ["Ricky coach hire", "L2 audit review", "Content planning", "Training / Knowledge"] as const;
+  const tasks = [
+    { title: "Ricky coach hire pay model", icon: runState === "running" ? <IconSpinner /> : <IconDocument /> },
+    { title: "L2 audit review", icon: <IconDocument /> },
+    { title: "Content plan", icon: <IconDocument /> },
+    { title: "Monday board draft", icon: <IconList /> },
+    { title: "Training notes", icon: <IconFolder /> },
+  ] as const;
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandMark} /><span className={styles.brandName}>Atlas</span><span className={styles.brandSub}>for Undeniable</span></div>
       <button className={styles.newTask} type="button"><span className={styles.newTaskPlus}>+</span> New task</button>
-      <div className={styles.sectionHeader}><span>Workspace</span></div>
+      <nav className={styles.navMini} aria-label="Workspace navigation">
+        {navTabs.map((tab) => (
+          <button
+            aria-label={tab === "Tasks" ? "Tasks" : `${tab} coming next`}
+            className={tab === "Tasks" ? styles.navMiniActive : undefined}
+            disabled={tab !== "Tasks"}
+            key={tab}
+            title={tab === "Tasks" ? "Tasks" : `${tab} coming next`}
+            type="button"
+          >
+            {tab}
+          </button>
+        ))}
+      </nav>
+      <div className={styles.sectionHeader}><span>Projects</span></div>
       <ul className={styles.sidebarList}>
-        <li className={styles.sidebarActive}>{runState === "running" ? <IconSpinner /> : <IconDocument />}<span className={styles.sidebarTitle}>Ricky coach hire pay model</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>L2 audit review</span></li>
-        <li><IconDocument /><span className={styles.sidebarTitle}>Content plan</span></li>
-        <li><IconList /><span className={styles.sidebarTitle}>Monday board</span></li>
-        <li><IconFolder /><span className={styles.sidebarTitle}>Training notes</span></li>
+        {projects.map((project, index) => (
+          <li className={index === 0 ? styles.sidebarActive : undefined} key={project}>
+            <IconFolder />
+            <span className={styles.sidebarTitle}>{project}</span>
+          </li>
+        ))}
+      </ul>
+      <div className={styles.sectionHeader}><span>All Tasks</span></div>
+      <ul className={styles.sidebarList}>
+        {tasks.map((task, index) => (
+          <li className={index === 0 ? styles.sidebarActive : undefined} key={task.title}>
+            {task.icon}
+            <span className={styles.sidebarTitle}>{task.title}</span>
+          </li>
+        ))}
       </ul>
       <div className={styles.sidebarSpacer} />
       <div className={styles.userRow}><span className={styles.avatar}>R</span><span className={styles.userMeta}><span className={styles.userName}>Rhys</span><span className={styles.userSub}>Undeniable</span></span><span className={styles.userChevron}><IconChevronDown size={13} /></span></div>
