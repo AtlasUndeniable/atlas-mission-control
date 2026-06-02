@@ -257,6 +257,8 @@ test("pdf request saves real local PDF artifact with markdown source kept intern
     assert.match(markdown, /Delivery: local draft only; no external send performed/);
     const pdf = await readFile(result.metadata.pdfPath, "utf8");
     assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
+    assert.match(pdf, /Atlas for Undeniable/);
+    assert.match(pdf, /Undeniable OS/);
     assert.ok((await stat(result.metadata.pdfPath)).size > 500);
     assert.doesNotMatch(result.artifact.subtitle, /not wired/i);
 

@@ -3,6 +3,9 @@ import type { AgentEvent, WorkspaceEventSource } from "./workspace-demo-events";
 export interface LocalWorkspaceEventSourceInput {
   prompt: string;
   title?: string;
+  project?: string;
+  room?: string;
+  sessionId?: string;
 }
 
 export interface LocalWorkspaceEventSourceOptions {

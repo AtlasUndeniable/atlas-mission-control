@@ -73,6 +73,34 @@ interface ThreadState {
   errorMessage: string | null;
 }
 
+interface WorkspaceProjectOption {
+  id: string;
+  title: string;
+}
+
+interface WorkspaceSessionMetadata {
+  id: string;
+  title: string;
+  project: string;
+  room: string;
+  createdAt: string;
+  updatedAt: string;
+  selectedArtifactId: string | null;
+}
+
+interface WorkspaceHydratedThread {
+  messages: Message[];
+  artifacts: Artifact[];
+  steps: TaskStep[];
+  task: Task | null;
+  tasks: Task[];
+}
+
+interface WorkspaceSessionSnapshot {
+  metadata: WorkspaceSessionMetadata;
+  thread: WorkspaceHydratedThread;
+}
+
 const initialThreadState: ThreadState = {
   messages: [],
   artifacts: [],
@@ -83,16 +111,46 @@ const initialThreadState: ThreadState = {
   errorMessage: null,
 };
 
-interface StoredWorkspaceThread {
-  threadState: ThreadState;
-  runState: Exclude<RunState, "running">;
-  activeTaskTitle: string;
-}
-
-const THREAD_STORAGE_KEY = "atlas.workspace.activeThread.v1";
+const WORKSPACE_ROOM = "workspace-demo";
+const DEFAULT_PROJECT_ID = "undeniable-os";
+const WORKSPACE_PROJECTS: WorkspaceProjectOption[] = [
+  { id: "undeniable-os", title: "Undeniable OS" },
+  { id: "ricky-coach-hire", title: "Ricky coach hire" },
+  { id: "l2-audit-review", title: "L2 audit review" },
+  { id: "content-planning", title: "Content planning" },
+  { id: "training-knowledge", title: "Training / Knowledge" },
+];
 
 function titleForPrompt(prompt: string): string {
+  if (/\bricky\b|\bcalder\b/i.test(prompt) && /\bpay|handover|structure\b/i.test(prompt)) {
+    return "Ricky Calder pay structure handover";
+  }
   return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Atlas workspace session";
+}
+
+function initialProjectIdFromLocation(): string {
+  if (typeof window === "undefined") return DEFAULT_PROJECT_ID;
+  const queryProject = new URLSearchParams(window.location.search).get("project");
+  return WORKSPACE_PROJECTS.some((project) => project.id === queryProject) ? queryProject ?? DEFAULT_PROJECT_ID : DEFAULT_PROJECT_ID;
+}
+
+function createBrowserSessionId(): string {
+  const random = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now()}${Math.random().toString(16).slice(2)}`;
+  return `session_${random.slice(0, 18)}`;
+}
+
+function threadStateFromHydratedThread(thread: WorkspaceHydratedThread): ThreadState {
+  return {
+    messages: Array.isArray(thread.messages) ? thread.messages : [],
+    artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
+    steps: Array.isArray(thread.steps) ? thread.steps : [],
+    task: thread.task ?? null,
+    tasks: Array.isArray(thread.tasks) ? thread.tasks : [],
+    internalEvents: [],
+    errorMessage: null,
+  };
 }
 
 function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
@@ -163,38 +221,6 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
   }
 
   return state;
-}
-
-function safeStoredThread(value: string | null): StoredWorkspaceThread | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Partial<StoredWorkspaceThread>;
-    if (!parsed.threadState || typeof parsed.threadState !== "object") return null;
-    const thread = parsed.threadState as Partial<ThreadState>;
-    if (!Array.isArray(thread.messages) || !Array.isArray(thread.artifacts) || !Array.isArray(thread.internalEvents)) return null;
-    return {
-      threadState: {
-        messages: thread.messages,
-        artifacts: thread.artifacts,
-        steps: Array.isArray(thread.steps) ? thread.steps : [],
-        task: thread.task ?? null,
-        tasks: Array.isArray(thread.tasks) ? thread.tasks : thread.task ? [thread.task] : [],
-        internalEvents: thread.internalEvents,
-        errorMessage: typeof thread.errorMessage === "string" ? thread.errorMessage : null,
-      },
-      runState: parsed.runState === "complete" ? "complete" : "idle",
-      activeTaskTitle: typeof parsed.activeTaskTitle === "string" && parsed.activeTaskTitle.trim()
-        ? parsed.activeTaskTitle
-        : "New session",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function readStoredWorkspaceThread(): StoredWorkspaceThread | null {
-  if (typeof window === "undefined") return null;
-  return safeStoredThread(window.sessionStorage.getItem(THREAD_STORAGE_KEY));
 }
 
 function readLatestReferencePacket(events: AgentEvent[]): ReferenceInspectorPacket | null {
@@ -443,6 +469,15 @@ function TaskEmptyPanel() {
     <section className={styles.emptyState}>
       <p className={styles.emptyKicker}>No local task thread yet.</p>
       <p className={styles.emptyNote}>Send a prompt to start a browser-session task. Nothing is persisted until Supabase is connected.</p>
+    </section>
+  );
+}
+
+function LoadingSessionPanel() {
+  return (
+    <section className={styles.emptyState}>
+      <p className={styles.emptyKicker}>Loading local session...</p>
+      <p className={styles.emptyNote}>Checking saved Workspace events for this project.</p>
     </section>
   );
 }
@@ -810,22 +845,28 @@ function ChatThread({
 function Sidebar({
   runState,
   panel,
+  projects,
+  selectedProjectId,
   tasks,
   artifacts,
   selectedTaskId,
   onNewTask,
   onOpenArtifact,
   onPanelChange,
+  onSelectProject,
   onSelectTask,
 }: {
   runState: RunState;
   panel: WorkspacePanel;
+  projects: WorkspaceProjectOption[];
+  selectedProjectId: string;
   tasks: Task[];
   artifacts: Artifact[];
   selectedTaskId: string | null;
   onNewTask: () => void;
   onOpenArtifact: (artifact: Artifact) => void;
   onPanelChange: (panel: WorkspacePanel) => void;
+  onSelectProject: (projectId: string) => void;
   onSelectTask: (taskId: string) => void;
 }) {
   const visibleTasks = [...tasks].reverse();
@@ -836,7 +877,6 @@ function Sidebar({
     { id: "plugins", label: "Plugins" },
     { id: "scheduled", label: "Scheduled" },
   ] as const;
-  const projects = ["Ricky coach hire", "L2 audit review", "Content planning", "Training / Knowledge"] as const;
 
   return (
     <aside className={styles.sidebar}>
@@ -858,10 +898,12 @@ function Sidebar({
       </nav>
       <div className={styles.sectionHeader}><span>Projects</span></div>
       <ul className={styles.sidebarList}>
-        {projects.map((project, index) => (
-          <li className={index === 0 ? styles.sidebarActive : undefined} key={project}>
-            <IconFolder />
-            <span className={styles.sidebarTitle}>{project}</span>
+        {projects.map((project) => (
+          <li className={selectedProjectId === project.id ? styles.sidebarActive : undefined} key={project.id}>
+            <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectProject(project.id)}>
+              <IconFolder />
+              <span className={styles.sidebarTitle}>{project.title}</span>
+            </button>
           </li>
         ))}
       </ul>
@@ -990,13 +1032,15 @@ function Inspector({
 }
 
 export default function WorkspaceDemoApp() {
-  const [storedThread] = useState<StoredWorkspaceThread | null>(() => readStoredWorkspaceThread());
-  const [threadState, setThreadState] = useState<ThreadState>(() => storedThread?.threadState ?? initialThreadState);
-  const [runState, setRunState] = useState<RunState>(() => storedThread?.runState ?? "idle");
+  const [threadState, setThreadState] = useState<ThreadState>(initialThreadState);
+  const [runState, setRunState] = useState<RunState>("idle");
   const [prompt, setPrompt] = useState("");
-  const [activeTaskTitle, setActiveTaskTitle] = useState(() => storedThread?.activeTaskTitle ?? "New session");
+  const [activeTaskTitle, setActiveTaskTitle] = useState("New local session");
   const [activePanel, setActivePanel] = useState<WorkspacePanel>("tasks");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => storedThread?.threadState.tasks.at(-1)?.id ?? null);
+  const [selectedProjectId, setSelectedProjectId] = useState(() => initialProjectIdFromLocation());
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -1013,15 +1057,45 @@ export default function WorkspaceDemoApp() {
   }, []);
 
   useEffect(() => {
-    if (runState === "running") return;
-    const hasThread = threadState.messages.length > 0 || threadState.artifacts.length > 0 || threadState.tasks.length > 0;
-    if (!hasThread) return;
-    sessionStorage.setItem(THREAD_STORAGE_KEY, JSON.stringify({
-      threadState,
-      runState: "complete",
-      activeTaskTitle,
-    } satisfies StoredWorkspaceThread));
-  }, [activeTaskTitle, runState, threadState]);
+    const controller = new AbortController();
+    const hydrate = async () => {
+      setHydrating(true);
+      try {
+        const query = new URLSearchParams({ project: selectedProjectId, room: WORKSPACE_ROOM });
+        const response = await fetch(`/api/workspace-demo/sessions?${query.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const body = await response.json() as { ok?: boolean; session?: WorkspaceSessionSnapshot | null };
+        if (!response.ok || !body.ok || !body.session) {
+          setThreadState(initialThreadState);
+          setRunState("idle");
+          setActiveSessionId(null);
+          setActiveTaskTitle("New local session");
+          setSelectedTaskId(null);
+          return;
+        }
+        const nextThread = threadStateFromHydratedThread(body.session.thread);
+        setThreadState(nextThread);
+        setRunState("complete");
+        setActiveSessionId(body.session.metadata.id);
+        setActiveTaskTitle(body.session.metadata.title);
+        setSelectedTaskId(nextThread.tasks.at(-1)?.id ?? null);
+      } catch {
+        if (!controller.signal.aborted) {
+          setThreadState(initialThreadState);
+          setRunState("idle");
+          setActiveSessionId(null);
+          setActiveTaskTitle("New local session");
+          setSelectedTaskId(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) setHydrating(false);
+      }
+    };
+    void hydrate();
+    return () => controller.abort();
+  }, [selectedProjectId]);
 
   const subscribeToSource = (source: LocalWorkspaceEventSource) => {
     unsubscribeRef.current?.();
@@ -1037,6 +1111,8 @@ export default function WorkspaceDemoApp() {
     const activePrompt = nextPrompt?.trim() || prompt.trim();
     if (!activePrompt) return;
     const activeTitle = titleForPrompt(activePrompt);
+    const sessionId = activeSessionId ?? createBrowserSessionId();
+    setActiveSessionId(sessionId);
     setActiveTaskTitle(activeTitle);
     setActivePanel("tasks");
     setSelectedTaskId(null);
@@ -1049,6 +1125,9 @@ export default function WorkspaceDemoApp() {
       input: {
         prompt: activePrompt,
         title: activeTitle,
+        project: selectedProjectId,
+        room: WORKSPACE_ROOM,
+        sessionId,
       },
     });
     sourceRef.current = source;
@@ -1061,18 +1140,34 @@ export default function WorkspaceDemoApp() {
     unsubscribeRef.current = null;
     sourceRef.current?.reset();
     sourceRef.current = null;
-    sessionStorage.removeItem(THREAD_STORAGE_KEY);
     setThreadState(initialThreadState);
     setRunState("idle");
     setPrompt("");
     setActiveTaskTitle("New local session");
     setActivePanel("tasks");
+    setActiveSessionId(createBrowserSessionId());
     setSelectedTaskId(null);
     setArtifactPreview({ status: "closed" });
   };
 
+  const persistSelectedArtifact = (artifactId: string | null) => {
+    if (!activeSessionId) return;
+    void fetch("/api/workspace-demo/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "selectArtifact",
+        sessionId: activeSessionId,
+        project: selectedProjectId,
+        room: WORKSPACE_ROOM,
+        selectedArtifactId: artifactId,
+      }),
+    });
+  };
+
   const openArtifactPreview = async (artifact: Artifact) => {
     setArtifactPreview({ status: "loading", artifact });
+    persistSelectedArtifact(artifact.id);
     try {
       const response = await fetch(`/api/workspace-demo/artifacts/${encodeURIComponent(artifact.id)}`, {
         cache: "no-store",
@@ -1092,12 +1187,29 @@ export default function WorkspaceDemoApp() {
     }
   };
 
+  const closeArtifactPreview = () => {
+    setArtifactPreview({ status: "closed" });
+    persistSelectedArtifact(null);
+  };
+
   const selectTask = (taskId: string) => {
     setActivePanel("tasks");
     setSelectedTaskId(taskId);
   };
 
-  const taskTitle = activeTaskTitle;
+  const selectProject = (projectId: string) => {
+    if (projectId === selectedProjectId) return;
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    sourceRef.current?.reset();
+    sourceRef.current = null;
+    setPrompt("");
+    setArtifactPreview({ status: "closed" });
+    setActivePanel("tasks");
+    setSelectedProjectId(projectId);
+  };
+
+  const taskTitle = hydrating ? "Loading local session..." : activeTaskTitle;
   const hasThreadData = threadState.messages.length > 0 || threadState.artifacts.length > 0 || threadState.tasks.length > 0 || Boolean(threadState.errorMessage);
 
   return (
@@ -1105,12 +1217,15 @@ export default function WorkspaceDemoApp() {
       <Sidebar
         runState={runState}
         panel={activePanel}
+        projects={WORKSPACE_PROJECTS}
+        selectedProjectId={selectedProjectId}
         tasks={threadState.tasks}
         artifacts={threadState.artifacts}
         selectedTaskId={selectedTaskId}
         onNewTask={startNewTask}
         onOpenArtifact={openArtifactPreview}
         onPanelChange={setActivePanel}
+        onSelectProject={selectProject}
         onSelectTask={selectTask}
       />
       <section className={styles.canvas}>
@@ -1124,6 +1239,8 @@ export default function WorkspaceDemoApp() {
         </header>
         {activePanel !== "tasks" ? (
           <WorkspacePanelView panel={activePanel} />
+        ) : hydrating ? (
+          <LoadingSessionPanel />
         ) : runState === "idle" ? (
           <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
         ) : hasThreadData ? (
@@ -1140,7 +1257,7 @@ export default function WorkspaceDemoApp() {
           <TaskEmptyPanel />
         )}
       </section>
-      <ArtifactPreviewPanel state={artifactPreview} onClose={() => setArtifactPreview({ status: "closed" })} />
+      <ArtifactPreviewPanel state={artifactPreview} onClose={closeArtifactPreview} />
     </main>
   );
 }

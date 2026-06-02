@@ -489,6 +489,9 @@ function renderWorkspaceDraftPdf({
 
 function markdownToPdfLines(markdown: string, title: string, createdAt: string): string[] {
   const source = [
+    "Atlas for Undeniable",
+    "Undeniable OS",
+    "",
     title,
     `Created: ${createdAt}`,
     "",

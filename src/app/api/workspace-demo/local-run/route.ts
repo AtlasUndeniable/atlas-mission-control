@@ -5,6 +5,12 @@ import {
   type WorkspaceLocalRuntimeInput,
 } from "@/lib/workspace-local-runtime-adapter";
 import {
+  appendWorkspaceLocalSessionEvent,
+  createWorkspaceLocalSessionId,
+  DEFAULT_WORKSPACE_PROJECT,
+  DEFAULT_WORKSPACE_ROOM,
+} from "@/lib/workspace-local-sessions";
+import {
   createWorkspaceRuntimeAdapter,
   resolveWorkspaceRuntimeProvider,
 } from "@/lib/workspace-runtime-provider";
@@ -12,12 +18,21 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function parseInput(body: unknown): WorkspaceLocalRuntimeInput {
+interface WorkspaceLocalRunRequest extends WorkspaceLocalRuntimeInput {
+  project: string;
+  room: string;
+  sessionId: string;
+}
+
+function parseInput(body: unknown): WorkspaceLocalRunRequest {
   if (!body || typeof body !== "object") throw new Error("Request body must be a JSON object.");
   const record = body as Record<string, unknown>;
   return {
     prompt: typeof record.prompt === "string" ? record.prompt : "",
     title: typeof record.title === "string" ? record.title : undefined,
+    project: typeof record.project === "string" && record.project.trim() ? record.project : DEFAULT_WORKSPACE_PROJECT,
+    room: typeof record.room === "string" && record.room.trim() ? record.room : DEFAULT_WORKSPACE_ROOM,
+    sessionId: typeof record.sessionId === "string" && record.sessionId.trim() ? record.sessionId : createWorkspaceLocalSessionId(),
   };
 }
 
@@ -36,7 +51,7 @@ function errorEvent(message: string) {
 }
 
 export async function POST(request: Request) {
-  let input: WorkspaceLocalRuntimeInput;
+  let input: WorkspaceLocalRunRequest;
   try {
     input = parseInput(await request.json());
   } catch (error) {
@@ -60,6 +75,13 @@ export async function POST(request: Request) {
           workspaceId: workspaceDemoRuntimeIds.workspaceId,
           taskId: workspaceDemoRuntimeIds.taskId,
         })) {
+          await appendWorkspaceLocalSessionEvent({
+            sessionId: input.sessionId,
+            project: input.project,
+            room: input.room,
+            title: input.title ?? "Workspace session",
+            event,
+          });
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         }
       } catch (error) {
