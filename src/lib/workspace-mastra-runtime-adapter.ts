@@ -9,6 +9,11 @@ import type {
 import { validateLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import { removeLeadingAssistantProcessPromise } from "./workspace-agent-cognition.ts";
+import {
+  createWorkspaceAgentToolEvents,
+  prepareWorkspaceAgentToolExecutions,
+  runtimeReferencePacketFromToolExecutions,
+} from "./workspace-agent-tools.ts";
 import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 import {
   maybeWriteWorkspaceDraftArtifact,
@@ -58,9 +63,23 @@ const STREAM_CHUNK_SIZE = 28;
 export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
   async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
     const checkedInput = validateLocalRuntimeInput(input);
-    const referencePacket = await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
-    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, { provider: "mastra", referencePacket });
     const eventCtx = createEventContext(ctx, "run_mastra");
+    const toolExecutions = await prepareWorkspaceAgentToolExecutions(checkedInput, {
+      now: eventCtx.now,
+      referenceResolver: (toolInput) => {
+        if (ctx.referenceResolver) {
+          return ctx.referenceResolver({ prompt: toolInput.prompt, title: checkedInput.title });
+        }
+        return resolveRuntimeReferences({ prompt: toolInput.prompt, title: checkedInput.title });
+      },
+    });
+    const referencePacket = runtimeReferencePacketFromToolExecutions(toolExecutions)
+      ?? await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
+    const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, {
+      provider: "mastra",
+      referencePacket,
+      agentTools: toolExecutions,
+    });
     const messageId = `${eventCtx.runId}_assistant`;
     const steps: TaskStep[] = [
       { id: "step_prepare_mastra_runtime", title: "Prepare Mastra runtime", status: "running" },
@@ -74,6 +93,11 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
     const env = ctx.env ?? process.env;
     const dependencyCheck = await resolveMastraDependencies(env);
 
+    for (const execution of toolExecutions) {
+      const [callEvent, resultEvent] = createWorkspaceAgentToolEvents(eventCtx, execution);
+      yield callEvent;
+      yield resultEvent;
+    }
     yield referenceInspectorEvent(eventCtx, referencePacket);
 
     yield {

@@ -4,6 +4,10 @@ import {
   workspaceAgentCognition,
   type WorkspaceAgentCognitionPacket,
 } from "./workspace-agent-cognition.ts";
+import {
+  formatWorkspaceAgentToolOutputsForPrompt,
+  type WorkspaceAgentToolExecution,
+} from "./workspace-agent-tools.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceRuntimeContextProvider = "mock" | "local-codex" | "mastra";
@@ -32,6 +36,7 @@ export interface WorkspaceRuntimeContextPacket {
   }>;
   agentCognition: WorkspaceAgentCognitionPacket;
   workspaceReferences: WorkspaceReferencePacket;
+  agentTools: WorkspaceAgentToolExecution[];
   provider: WorkspaceRuntimeContextProvider;
   internalSummary: string;
   systemPrompt: string;
@@ -80,7 +85,11 @@ const LIBRARIAN_REFERENCES = [
 
 export function buildWorkspaceRuntimeContext(
   input: WorkspaceLocalRuntimeInput,
-  options: { provider: WorkspaceRuntimeContextProvider; referencePacket?: WorkspaceReferencePacket },
+  options: {
+    provider: WorkspaceRuntimeContextProvider;
+    referencePacket?: WorkspaceReferencePacket;
+    agentTools?: WorkspaceAgentToolExecution[];
+  },
 ): WorkspaceRuntimeContextPacket {
   const taskTitle = input.title?.trim() || "Workspace runtime task";
   const prompt = input.prompt.trim();
@@ -98,6 +107,8 @@ export function buildWorkspaceRuntimeContext(
     internalSummary: "references=none",
   };
   const librarianHandles = LIBRARIAN_REFERENCES.map((reference) => reference.handle).join(",");
+  const agentTools = options.agentTools ?? [];
+  const agentToolSummary = agentTools.map((execution) => `${execution.toolName}:${execution.output.coverage}`).join(",");
   const internalSummary = [
     `workspace=${WORKSPACE_ID}`,
     `project=${PROJECT}`,
@@ -105,6 +116,7 @@ export function buildWorkspaceRuntimeContext(
     "user_role=rhys_owner",
     `provider=${options.provider}`,
     `librarian_handles=${librarianHandles}`,
+    agentToolSummary ? `agent_tools=${agentToolSummary}` : "agent_tools=none",
     `cognition=${workspaceAgentCognition.id}`,
     referencePacket.internalSummary,
   ].join("; ");
@@ -131,6 +143,9 @@ export function buildWorkspaceRuntimeContext(
     "Resolved Workspace references:",
     ...formatWorkspaceReferencesForPrompt(referencePacket),
     "",
+    "Read-only agent tool results:",
+    ...formatWorkspaceAgentToolOutputsForPrompt(agentTools),
+    "",
     "Use presentation events for user-facing output. Keep internal diagnostics internal.",
     "Reference Librarian and Obsidian material by handle or path summary only.",
     "Raw local source paths are internal diagnostics; do not print local filesystem paths in the assistant response.",
@@ -142,6 +157,7 @@ export function buildWorkspaceRuntimeContext(
       : referencePacket.coverage === "thin"
         ? "Only limited Workspace references were resolved. Say that coverage is limited, treat memory-dependent conclusions as provisional, and ask for scope or confirmation where needed."
       : "You may say you are using available Workspace references, but only for the resolved references listed above.",
+    "Capability labels: say \"Using Workspace references\" only when a read-only tool or reference packet returned results. Say \"Limited references available\" when tool or reference coverage is thin. Do not print raw tool JSON.",
     ...referencePacket.guidance.map((rule) => `Reference rule: ${rule}`),
     `Task title: ${taskTitle}`,
   ].join("\n");
@@ -167,6 +183,7 @@ export function buildWorkspaceRuntimeContext(
     librarianReferences: LIBRARIAN_REFERENCES.map((reference) => ({ ...reference })),
     agentCognition: workspaceAgentCognition,
     workspaceReferences: referencePacket,
+    agentTools,
     provider: options.provider,
     internalSummary,
     systemPrompt,

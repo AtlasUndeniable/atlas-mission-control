@@ -5,6 +5,11 @@ import { basename, delimiter, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { removeLeadingAssistantProcessPromise } from "./workspace-agent-cognition.ts";
+import {
+  createWorkspaceAgentToolEvents,
+  prepareWorkspaceAgentToolExecutions,
+  runtimeReferencePacketFromToolExecutions,
+} from "./workspace-agent-tools.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import type { AgentEvent, Task, TaskStep } from "./workspace-demo-events";
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
@@ -119,15 +124,31 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     const env = ctx.env ?? process.env;
     const cwd = ctx.cwd ?? env.PWD ?? ".";
     const selection = await selectLocalRunner({ cwd, env, options: this.options });
-    const referencePacket = await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
+    const toolExecutions = await prepareWorkspaceAgentToolExecutions(checkedInput, {
+      now: eventCtx.now,
+      referenceResolver: (toolInput) => {
+        if (ctx.referenceResolver) {
+          return ctx.referenceResolver({ prompt: toolInput.prompt, title: checkedInput.title });
+        }
+        return resolveRuntimeReferences({ prompt: toolInput.prompt, title: checkedInput.title });
+      },
+    });
+    const referencePacket = runtimeReferencePacketFromToolExecutions(toolExecutions)
+      ?? await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
     const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, {
       provider: selection.mode === "mock" ? "mock" : "local-codex",
       referencePacket,
+      agentTools: toolExecutions,
     });
     steps[0] = { ...steps[0], status: "complete", summary: selection.reason };
     steps[1] = { ...steps[1], status: "running" };
     yield taskStep(eventCtx, steps[0]);
     yield taskStep(eventCtx, steps[1]);
+    for (const execution of toolExecutions) {
+      const [callEvent, resultEvent] = createWorkspaceAgentToolEvents(eventCtx, execution);
+      yield callEvent;
+      yield resultEvent;
+    }
     yield referenceInspectorEvent(eventCtx, referencePacket);
 
     const output = selection.available && selection.command
@@ -516,8 +537,15 @@ function buildMockOutput(
   reason: string,
   runtimeContext = buildWorkspaceRuntimeContext(input, { provider: "mock" }),
 ): LocalAdapterOutput {
+  const referenceLine = runtimeContext.workspaceReferences.coverage === "matched"
+    ? "Using Workspace references resolved for this prompt."
+    : runtimeContext.workspaceReferences.coverage === "thin"
+      ? "Limited references available; treat memory-dependent points as provisional."
+      : "No matching Workspace references were available for this prompt.";
   const presentationText = [
     "Local adapter V0 is running in safe mock mode.",
+    "",
+    referenceLine,
     "",
     `I received the workspace task: **${input.prompt}**`,
     "",
