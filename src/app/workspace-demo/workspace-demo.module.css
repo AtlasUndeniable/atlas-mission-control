@@ -71,6 +71,7 @@
 .msgAgent::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; background: var(--accent); border-radius: 2px; opacity: .72; }
 .msgAgent p { margin: 0 0 12px; line-height: 1.65; }
 .msgAgent strong { font-weight: 600; }
+.referenceCoverageLine { width: fit-content; max-width: 100%; margin: 0 0 10px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-3); background: rgba(255,255,255,.025); font-size: 11px; line-height: 1.4; }
 .streamingCaret { display: inline-block; width: 2px; height: 16px; margin-left: 3px; vertical-align: -2px; background: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .artifactCard { width: 100%; min-width: 0; margin: 14px 0; padding: 14px 16px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 10px; display: flex; align-items: center; gap: 14px; text-align: left; }
@@ -110,8 +111,29 @@
 .inspector { position: relative; z-index: 20; display: grid; justify-items: end; gap: 8px; flex-shrink: 0; }
 .inspectorButton { color: var(--text-3); background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 999px; padding: 7px 10px; font-size: 12px; }
 .inspectorButton:hover { color: var(--text-1); border-color: var(--border-strong); }
-.inspectorPanel { position: absolute; right: 0; top: calc(100% + 8px); width: min(360px, calc(100vw - 28px)); max-height: 260px; overflow: auto; padding: 10px; background: var(--bg-elev-1); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.36); }
+.inspectorPanel { position: absolute; right: 0; top: calc(100% + 8px); width: min(420px, calc(100vw - 28px)); max-height: min(520px, calc(100vh - 70px)); overflow: auto; padding: 10px; background: var(--bg-elev-1); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.36); }
 .inspectorPanel p { margin: 0; color: var(--text-3); }
+.referencePanel { min-width: 0; padding: 0 0 10px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.referencePanelHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-1); font-size: 12px; font-weight: 600; }
+.referenceCoveragePill { flex-shrink: 0; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; line-height: 1.4; text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--border-strong); color: var(--text-3); }
+.referenceCoverage_matched { color: #bfe7cf; border-color: rgba(127,209,162,.42); background: rgba(127,209,162,.1); }
+.referenceCoverage_thin { color: #e8bd6c; border-color: rgba(232,189,108,.42); background: rgba(232,189,108,.1); }
+.referenceCoverage_none { color: var(--text-3); background: rgba(255,255,255,.025); }
+.referenceRoots { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.referenceRoot { min-width: 0; display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 6px; background: rgba(255,255,255,.028); color: var(--text-3); font-size: 10.5px; overflow-wrap: anywhere; }
+.rootPresent, .rootMissing { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+.rootPresent { background: var(--success); }
+.rootMissing { background: var(--text-4); }
+.referenceList { display: grid; gap: 7px; margin-top: 9px; }
+.referenceItem { min-width: 0; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.018); }
+.referenceItemTop { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.referenceTitle { min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.referenceConfidence { flex-shrink: 0; color: var(--text-4); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+.referenceHandle { color: var(--text-4); font-size: 11px; overflow-wrap: anywhere; }
+.referenceMeta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--text-3); font-size: 10.5px; }
+.referenceTerms { display: flex; flex-wrap: wrap; gap: 4px; }
+.referenceTerms span { max-width: 100%; border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; color: var(--text-3); font-size: 10px; overflow-wrap: anywhere; }
+.referencePanelEmpty { margin-top: 8px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .inspectorEvent { display: grid; gap: 4px; padding: 7px 0; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
 .inspectorEvent:last-child { border-bottom: 0; }
 .inspectorEvent span, .inspectorEvent small { min-width: 0; }

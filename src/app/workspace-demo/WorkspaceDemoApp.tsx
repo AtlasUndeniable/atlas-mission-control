@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
@@ -17,6 +17,27 @@ import { LocalWorkspaceEventSource } from "@/lib/workspace-local-event-source";
 import styles from "./workspace-demo.module.css";
 
 type RunState = "idle" | "running" | "complete";
+type ReferenceCoverage = "matched" | "thin" | "none";
+
+interface ReferenceInspectorPacket {
+  resolvedAt: string;
+  coverage: ReferenceCoverage;
+  rootsRead: Array<{
+    key: string;
+    present: boolean;
+    pathSummary: string;
+  }>;
+  references: Array<{
+    handle: string;
+    title: string;
+    sourceType: string;
+    pathSummary: string;
+    freshness?: string;
+    confidence: string;
+    matchedTerms: string[];
+  }>;
+  userFacingSummary: string;
+}
 
 interface ThreadState {
   messages: Message[];
@@ -90,6 +111,47 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
   }
 
   return state;
+}
+
+function readLatestReferencePacket(events: AgentEvent[]): ReferenceInspectorPacket | null {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.kind !== "tool.result" || event.toolName !== "workspace.references") continue;
+    try {
+      const parsed = JSON.parse(event.resultSummary) as Partial<ReferenceInspectorPacket>;
+      if (
+        parsed &&
+        (parsed.coverage === "matched" || parsed.coverage === "thin" || parsed.coverage === "none") &&
+        Array.isArray(parsed.rootsRead) &&
+        Array.isArray(parsed.references)
+      ) {
+        return {
+          resolvedAt: typeof parsed.resolvedAt === "string" ? parsed.resolvedAt : "",
+          coverage: parsed.coverage,
+          rootsRead: parsed.rootsRead.map((root) => ({
+            key: typeof root.key === "string" ? root.key : "unknown",
+            present: Boolean(root.present),
+            pathSummary: typeof root.pathSummary === "string" ? root.pathSummary : "unknown",
+          })),
+          references: parsed.references.map((reference) => ({
+            handle: typeof reference.handle === "string" ? reference.handle : "unknown",
+            title: typeof reference.title === "string" ? reference.title : "Untitled reference",
+            sourceType: typeof reference.sourceType === "string" ? reference.sourceType : "unknown",
+            pathSummary: typeof reference.pathSummary === "string" ? reference.pathSummary : "unknown",
+            ...(typeof reference.freshness === "string" ? { freshness: reference.freshness } : {}),
+            confidence: typeof reference.confidence === "string" ? reference.confidence : "unknown",
+            matchedTerms: Array.isArray(reference.matchedTerms)
+              ? reference.matchedTerms.filter((term): term is string => typeof term === "string")
+              : [],
+          })),
+          userFacingSummary: typeof parsed.userFacingSummary === "string" ? parsed.userFacingSummary : "",
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function IconDocument() {
@@ -305,7 +367,25 @@ function TaskChip({ task, steps }: { task: Task | null; steps: TaskStep[] }) {
   );
 }
 
-function ChatThread({ state, runState }: { state: ThreadState; runState: RunState }) {
+function ReferenceCoverageLine({ packet }: { packet: ReferenceInspectorPacket | null }) {
+  if (packet?.coverage === "matched") {
+    return <div className={styles.referenceCoverageLine}>Using Workspace references</div>;
+  }
+  if (packet?.coverage === "thin") {
+    return <div className={styles.referenceCoverageLine}>Limited references available</div>;
+  }
+  return null;
+}
+
+function ChatThread({
+  state,
+  runState,
+  referencePacket,
+}: {
+  state: ThreadState;
+  runState: RunState;
+  referencePacket: ReferenceInspectorPacket | null;
+}) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -320,6 +400,7 @@ function ChatThread({ state, runState }: { state: ThreadState; runState: RunStat
             <div key={message.id} className={styles.msgUser}>{message.content}</div>
           ) : (
             <div key={message.id} className={styles.msgAgent}>
+              <ReferenceCoverageLine packet={referencePacket} />
               <MarkdownLite content={message.content} streaming={!message.complete && runState === "running"} />
               {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}
               <TaskChip task={state.task} steps={state.steps} />
@@ -360,9 +441,65 @@ function Sidebar({ runState }: { runState: RunState }) {
   );
 }
 
-function Inspector({ events }: { events: AgentEvent[] }) {
+function ReferenceInspectorPanel({ packet }: { packet: ReferenceInspectorPacket | null }) {
+  if (!packet) {
+    return <div className={styles.referencePanelEmpty}>No reference packet for this run yet.</div>;
+  }
+
+  return (
+    <section className={styles.referencePanel} aria-label="Workspace reference coverage">
+      <div className={styles.referencePanelHeader}>
+        <span>References</span>
+        <span className={`${styles.referenceCoveragePill} ${styles[`referenceCoverage_${packet.coverage}`]}`}>
+          {packet.coverage}
+        </span>
+      </div>
+      <div className={styles.referenceRoots}>
+        {packet.rootsRead.map((root) => (
+          <span className={styles.referenceRoot} key={root.key}>
+            <span className={root.present ? styles.rootPresent : styles.rootMissing} />
+            {root.key}
+          </span>
+        ))}
+      </div>
+      {packet.references.length ? (
+        <div className={styles.referenceList}>
+          {packet.references.map((reference) => (
+            <div className={styles.referenceItem} key={reference.handle}>
+              <div className={styles.referenceItemTop}>
+                <span className={styles.referenceTitle}>{reference.title}</span>
+                <span className={styles.referenceConfidence}>{reference.confidence}</span>
+              </div>
+              <div className={styles.referenceHandle}>{reference.handle}</div>
+              <div className={styles.referenceMeta}>
+                <span>{reference.sourceType}</span>
+                {reference.freshness ? <span>{reference.freshness}</span> : null}
+              </div>
+              {reference.matchedTerms.length ? (
+                <div className={styles.referenceTerms}>
+                  {reference.matchedTerms.map((term) => <span key={term}>{term}</span>)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.referencePanelEmpty}>{packet.userFacingSummary}</div>
+      )}
+    </section>
+  );
+}
+
+function Inspector({
+  events,
+  referencePacket,
+}: {
+  events: AgentEvent[];
+  referencePacket: ReferenceInspectorPacket | null;
+}) {
   const [open, setOpen] = useState(false);
   const eventDetail = (event: AgentEvent) => {
+    if (event.kind === "tool.result" && event.toolName === "workspace.references") return "Safe reference packet captured.";
     if (event.kind === "tool.call") return event.inputSummary;
     if (event.kind === "tool.result") return event.resultSummary;
     if (event.kind === "error") return event.message;
@@ -375,6 +512,7 @@ function Inspector({ events }: { events: AgentEvent[] }) {
       </button>
       {open ? (
         <div className={styles.inspectorPanel}>
+          <ReferenceInspectorPanel packet={referencePacket} />
           {events.length === 0 ? <p>No internal events yet.</p> : events.map((event) => (
             <div className={styles.inspectorEvent} key={event.id}>
               <span>
@@ -396,6 +534,10 @@ export default function WorkspaceDemoApp() {
   const [prompt, setPrompt] = useState(demoUserPrompt);
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const referencePacket = useMemo(
+    () => readLatestReferencePacket(threadState.internalEvents),
+    [threadState.internalEvents],
+  );
 
   useEffect(() => {
     return () => {
@@ -444,11 +586,11 @@ export default function WorkspaceDemoApp() {
           <div className={styles.topSpacer} />
           <button className={styles.iconButton} type="button" aria-label="Share"><IconShare /></button>
           <button className={styles.iconButton} type="button" aria-label="More"><IconMore /></button>
-          <Inspector events={threadState.internalEvents} />
+          <Inspector events={threadState.internalEvents} referencePacket={referencePacket} />
         </header>
         {runState === "idle"
           ? <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
-          : <><ChatThread state={threadState} runState={runState} /><Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} /></>}
+          : <><ChatThread state={threadState} runState={runState} referencePacket={referencePacket} /><Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} /></>}
       </section>
     </main>
   );

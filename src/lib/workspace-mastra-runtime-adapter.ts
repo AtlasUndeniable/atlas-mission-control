@@ -8,6 +8,7 @@ import type {
 } from "./workspace-local-runtime-adapter.ts";
 import { validateLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
+import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -66,6 +67,8 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
 
     const env = ctx.env ?? process.env;
     const dependencyCheck = await resolveMastraDependencies(env);
+
+    yield referenceInspectorEvent(eventCtx, referencePacket);
 
     yield {
       ...baseEvent(eventCtx),
@@ -339,6 +342,18 @@ function messageComplete(
     messageId,
     role,
     content,
+  };
+}
+
+function referenceInspectorEvent(ctx: AdapterEventContext, packet: WorkspaceReferencePacket): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_internal"),
+    kind: "tool.result",
+    visibility: "internal",
+    toolName: "workspace.references",
+    label: "Workspace references resolved",
+    resultSummary: JSON.stringify(createWorkspaceReferenceInspectorPacket(packet)),
   };
 }
 

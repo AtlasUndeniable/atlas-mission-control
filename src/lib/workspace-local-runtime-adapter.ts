@@ -8,6 +8,7 @@ import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import type { AgentEvent, Artifact, Task, TaskStep } from "./workspace-demo-events";
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
+import { createWorkspaceReferenceInspectorPacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
 
@@ -121,6 +122,7 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     steps[1] = { ...steps[1], status: "running" };
     yield taskStep(eventCtx, steps[0]);
     yield taskStep(eventCtx, steps[1]);
+    yield referenceInspectorEvent(eventCtx, referencePacket);
 
     const output = selection.available && selection.command
       ? await runApprovedCommand({
@@ -392,6 +394,18 @@ function messageComplete(
     messageId,
     role,
     content,
+  };
+}
+
+function referenceInspectorEvent(ctx: AdapterEventContext, packet: WorkspaceReferencePacket): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_internal"),
+    kind: "tool.result",
+    visibility: "internal",
+    toolName: "workspace.references",
+    label: "Workspace references resolved",
+    resultSummary: JSON.stringify(createWorkspaceReferenceInspectorPacket(packet)),
   };
 }
 

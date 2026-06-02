@@ -103,6 +103,7 @@ export function buildWorkspaceRuntimeContext(
     `Project: ${PROJECT}`,
     `Room: ${ROOM}`,
     "User view: Rhys owner view. Be direct, concise, and operationally useful.",
+    referenceCoverageInstruction(referencePacket),
     "",
     "Event contract:",
     ...EVENT_VISIBILITY_RULES.map((rule) => `- ${rule}`),
@@ -121,6 +122,8 @@ export function buildWorkspaceRuntimeContext(
     "Raw local source paths are internal diagnostics; do not print local filesystem paths in the assistant response.",
     referencePacket.coverage === "none"
       ? "No matching Workspace references were resolved. Do not claim memory search; mark missing facts as needing confirmation."
+      : referencePacket.coverage === "thin"
+        ? "Only limited Workspace references were resolved. Say that coverage is limited, treat memory-dependent conclusions as provisional, and ask for scope or confirmation where needed."
       : "You may say you are using available Workspace references, but only for the resolved references listed above.",
     ...referencePacket.guidance.map((rule) => `Reference rule: ${rule}`),
     `Task title: ${taskTitle}`,
@@ -164,4 +167,14 @@ function formatWorkspaceReferencesForPrompt(referencePacket: WorkspaceReferenceP
     reference.freshness ? `freshness=${reference.freshness}` : null,
     reference.excerpt ? `excerpt=${reference.excerpt}` : null,
   ].filter(Boolean).join("; "));
+}
+
+function referenceCoverageInstruction(referencePacket: WorkspaceReferencePacket): string {
+  if (referencePacket.coverage === "matched") {
+    return "Reference coverage: MATCHED. You may mention using available Workspace references for the listed references only.";
+  }
+  if (referencePacket.coverage === "thin") {
+    return "Reference coverage: THIN. Your first assistant sentence must say limited Workspace references are available. Treat trends and memory-dependent conclusions as provisional, not confirmed recall.";
+  }
+  return "Reference coverage: NONE. Do not claim memory retrieval; answer from the prompt and mark missing facts as needing confirmation.";
 }

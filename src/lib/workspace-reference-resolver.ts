@@ -50,6 +50,30 @@ export interface WorkspaceReferencePacket {
   internalSummary: string;
 }
 
+export interface WorkspaceReferenceInspectorRoot {
+  key: string;
+  present: boolean;
+  pathSummary: string;
+}
+
+export interface WorkspaceReferenceInspectorReference {
+  handle: string;
+  title: string;
+  sourceType: WorkspaceReferenceSourceType;
+  pathSummary: string;
+  freshness?: string;
+  confidence: WorkspaceReferenceConfidence;
+  matchedTerms: string[];
+}
+
+export interface WorkspaceReferenceInspectorPacket {
+  resolvedAt: string;
+  coverage: WorkspaceReferenceCoverage;
+  rootsRead: WorkspaceReferenceInspectorRoot[];
+  references: WorkspaceReferenceInspectorReference[];
+  userFacingSummary: string;
+}
+
 export interface WorkspaceReferenceResolverOptions {
   contextPacksRoot?: string;
   reportsRoot?: string;
@@ -149,6 +173,30 @@ export function createEmptyWorkspaceReferencePacket(
     guidance: missingReferenceGuidance(input),
     userFacingSummary: "No matching Workspace references were resolved for this prompt.",
     internalSummary: "references=none",
+  };
+}
+
+export function createWorkspaceReferenceInspectorPacket(
+  packet: WorkspaceReferencePacket,
+): WorkspaceReferenceInspectorPacket {
+  return {
+    resolvedAt: packet.resolvedAt,
+    coverage: packet.coverage,
+    rootsRead: packet.rootsRead.map((root) => ({
+      key: root.key,
+      present: root.present,
+      pathSummary: pathSummary(root.path),
+    })),
+    references: packet.references.map((reference) => ({
+      handle: reference.handle,
+      title: reference.title,
+      sourceType: reference.sourceType,
+      pathSummary: reference.pathSummary,
+      ...(reference.freshness ? { freshness: reference.freshness } : {}),
+      confidence: reference.confidence,
+      matchedTerms: reference.matchedTerms,
+    })),
+    userFacingSummary: packet.userFacingSummary,
   };
 }
 

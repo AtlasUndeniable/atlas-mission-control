@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  createWorkspaceReferenceInspectorPacket,
   resolveWorkspaceReferences,
   type WorkspaceReferenceResolverOptions,
 } from "../src/lib/workspace-reference-resolver.ts";
@@ -69,6 +70,12 @@ test("Ricky Calder prompt resolves compact matching reference handles", async ()
     assert.equal(packet.references.every((reference) => reference.excerpt.length <= 420), true);
     assert.equal(packet.references.every((reference) => !reference.excerpt.includes("/Users/atlasai")), true);
     assert.match(packet.internalSummary, /paths=/);
+
+    const inspectorPacket = createWorkspaceReferenceInspectorPacket(packet);
+    assert.equal(inspectorPacket.coverage, "matched");
+    assert.ok(inspectorPacket.rootsRead.some((root) => root.key === "librarian-reports"));
+    assert.equal(JSON.stringify(inspectorPacket).includes("/Users/atlasai"), false);
+    assert.ok(inspectorPacket.references.some((reference) => reference.handle.includes("ricky-calder-source-match")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

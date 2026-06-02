@@ -45,6 +45,33 @@ function emptyReferencePacket(): WorkspaceReferencePacket {
   }, { now: () => new Date("2026-06-01T00:00:00.000Z") });
 }
 
+function matchedReferencePacket(): WorkspaceReferencePacket {
+  return {
+    resolvedAt: "2026-06-01T00:00:00.000Z",
+    coverage: "matched",
+    rootsRead: [{
+      key: "librarian-reports",
+      path: "/Users/atlasai/.openclaw/workspace/tools/librarian-reports",
+      present: true,
+    }],
+    references: [{
+      handle: "ricky-calder-source-match",
+      title: "Ricky Calder Source Match",
+      sourceType: "librarian-report",
+      sourcePath: "/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+      pathSummary: "librarian-reports/ricky-calder-source-match.md",
+      excerpt: "Matched Ricky Calder coach hire material with pay model handover notes.",
+      freshness: "generated 2026-06-01",
+      confidence: "high",
+      score: 80,
+      matchedTerms: ["ricky", "calder", "pay"],
+    }],
+    guidance: ["Use only these resolved Workspace references for memory-backed claims."],
+    userFacingSummary: "1 Workspace reference resolved.",
+    internalSummary: "references=1; coverage=matched; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+  };
+}
+
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   env?: NodeJS.ProcessEnv;
   referencePacket?: WorkspaceReferencePacket;
@@ -207,6 +234,36 @@ test("runtime context keeps reference paths internal while exposing safe excerpt
   assert.match(context.internalSummary, /\/Users\/atlasai/);
 });
 
+test("runtime context labels thin references as provisional", () => {
+  const referencePacket: WorkspaceReferencePacket = {
+    resolvedAt: "2026-06-01T00:00:00.000Z",
+    coverage: "thin",
+    rootsRead: [],
+    references: [{
+      handle: "context-pack-user-rhys",
+      title: "Context Pack User Rhys",
+      sourceType: "librarian-context-pack",
+      sourcePath: "/Users/atlasai/.openclaw/workspace/tools/librarian-context-packs/context-pack-user-rhys.md",
+      pathSummary: "librarian-context-packs/context-pack-user-rhys.md",
+      excerpt: "Thin owner context mentions calls but does not include full transcript trends.",
+      confidence: "low",
+      score: 10,
+      matchedTerms: ["calls"],
+    }],
+    guidance: ["Resolved references are thin; produce a useful draft from the prompt."],
+    userFacingSummary: "1 Workspace reference resolved (thin).",
+    internalSummary: "references=1; coverage=thin; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-context-packs/context-pack-user-rhys.md",
+  };
+  const context = buildWorkspaceRuntimeContext({
+    prompt: "What are the top 5 trends from my recent calls?",
+    title: "Recent calls trends",
+  }, { provider: "mastra", referencePacket });
+
+  assert.match(context.systemPrompt, /coverage is limited/i);
+  assert.match(context.systemPrompt, /provisional/i);
+  assert.match(context.systemPrompt, /confirmation/i);
+});
+
 test("Rhys-ready starter task is first and carries a handover title", () => {
   assert.equal(demoStarterPrompts[0], demoRhysReadyStarterPrompt);
   assert.equal(
@@ -260,6 +317,33 @@ test("internal command details are internal only and presentation stream exclude
   assert.equal(internalEvents.every((event) => event.visibility === "internal"), true);
   assert.doesNotMatch(presentationText, /ATLAS_WORKSPACE_DEMO_LOCAL_RUNNER/);
   assert.doesNotMatch(presentationText, /codex exec|claude -p/);
+});
+
+test("runtime emits safe reference packet for Inspector without presentation path leakage", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+    referencePacket: matchedReferencePacket(),
+  });
+  const referenceEvent = events.find((event) =>
+    event.kind === "tool.result" && event.toolName === "workspace.references"
+  );
+  assert.equal(referenceEvent?.kind, "tool.result");
+  assert.equal(referenceEvent?.visibility, "internal");
+  assert.equal(referenceEvent?.label, "Workspace references resolved");
+  const inspectorPacket = JSON.parse(referenceEvent?.resultSummary ?? "{}") as {
+    coverage?: string;
+    references?: Array<{ handle?: string; confidence?: string; matchedTerms?: string[] }>;
+  };
+  assert.equal(inspectorPacket.coverage, "matched");
+  assert.equal(inspectorPacket.references?.[0]?.handle, "ricky-calder-source-match");
+  assert.equal(inspectorPacket.references?.[0]?.confidence, "high");
+  assert.deepEqual(inspectorPacket.references?.[0]?.matchedTerms, ["ricky", "calder", "pay"]);
+  assert.doesNotMatch(referenceEvent?.resultSummary ?? "", /\/Users\/atlasai/);
+
+  const presentationText = events
+    .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+    .map((event) => event.delta)
+    .join("");
+  assert.doesNotMatch(presentationText, /\/Users\/atlasai|workspace\.references|librarian-reports/);
 });
 
 test("approved CLI path uses injected runner only when explicitly selected", async () => {
