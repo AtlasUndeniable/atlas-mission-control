@@ -19,6 +19,24 @@ import styles from "./workspace-demo.module.css";
 type RunState = "idle" | "running" | "complete";
 type ReferenceCoverage = "matched" | "thin" | "none";
 
+interface ArtifactPreview {
+  id: string;
+  title: string;
+  type: "markdown";
+  createdAt: string;
+  taskTitle: string;
+  runtimeProvider: string;
+  requestedFormat: string;
+  markdown: string;
+}
+
+type ArtifactPreviewState =
+  | { status: "closed" }
+  | { status: "loading"; artifact: Artifact }
+  | { status: "ready"; artifact: Artifact; preview: ArtifactPreview }
+  | { status: "missing"; artifact: Artifact }
+  | { status: "error"; artifact: Artifact; message: string };
+
 interface ReferenceInspectorPacket {
   resolvedAt: string;
   coverage: ReferenceCoverage;
@@ -343,27 +361,81 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   }).flat();
 }
 
+type MarkdownSection =
+  | { type: "heading"; depth: number; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "paragraph"; text: string };
+
+function parseMarkdownSections(content: string): MarkdownSection[] {
+  const sections: MarkdownSection[] = [];
+  let paragraph: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    sections.push({ type: "paragraph", text: paragraph.join("\n").trim() });
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    sections.push({ type: "list", ordered: list.ordered, items: list.items });
+    list = null;
+  };
+
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      sections.push({ type: "heading", depth: heading[1].length, text: heading[2] });
+      continue;
+    }
+
+    const listItem = line.trim().match(/^([-*]|\d+[.)])\s+(.+)$/);
+    if (listItem) {
+      flushParagraph();
+      const ordered = /^\d/.test(listItem[1]);
+      if (!list || list.ordered !== ordered) {
+        flushList();
+        list = { ordered, items: [] };
+      }
+      list.items.push(listItem[2]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+  return sections;
+}
+
 function MarkdownLite({ content, streaming }: { content: string; streaming: boolean }) {
-  const blocks = content.split(/\n{2,}/).filter(Boolean);
+  const sections = parseMarkdownSections(content);
   return (
     <>
-      {blocks.map((block, index) => {
-        const key = `${block.slice(0, 20)}-${index}`;
-        const heading = block.match(/^(#{1,4})\s+(.+)$/);
-        if (heading) {
-          const HeadingTag = heading[1].length <= 2 ? "h3" : "h4";
-          return <HeadingTag key={key}>{renderInlineMarkdown(heading[2])}</HeadingTag>;
+      {sections.map((section, index) => {
+        const key = `${section.type}-${index}`;
+        if (section.type === "heading") {
+          const HeadingTag = section.depth <= 2 ? "h3" : "h4";
+          return <HeadingTag key={key}>{renderInlineMarkdown(section.text)}</HeadingTag>;
         }
 
-        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
-        const isList = lines.length > 1 && lines.every((line) => /^[-*]\s+/.test(line) || /^\d+[.)]\s+/.test(line) || /^[-*]\s+\[[ xX]\]\s+/.test(line));
-        if (isList) {
-          const ordered = lines.every((line) => /^\d+[.)]\s+/.test(line));
-          const ListTag = ordered ? "ol" : "ul";
+        if (section.type === "list") {
+          const ListTag = section.ordered ? "ol" : "ul";
           return (
             <ListTag key={key} className={styles.markdownList}>
-              {lines.map((line, lineIndex) => {
-                const checklist = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+              {section.items.map((item, lineIndex) => {
+                const checklist = item.match(/^\[([ xX])\]\s+(.+)$/);
                 if (checklist) {
                   return (
                     <li key={lineIndex} className={styles.checkItem}>
@@ -372,13 +444,13 @@ function MarkdownLite({ content, streaming }: { content: string; streaming: bool
                     </li>
                   );
                 }
-                return <li key={lineIndex}>{renderInlineMarkdown(line.replace(/^[-*]\s+|^\d+[.)]\s+/, ""))}</li>;
+                return <li key={lineIndex}>{renderInlineMarkdown(item)}</li>;
               })}
             </ListTag>
           );
         }
 
-        return <p key={key}>{renderInlineMarkdown(block)}</p>;
+        return <p key={key}>{renderInlineMarkdown(section.text)}</p>;
       })}
       {streaming ? <span className={styles.streamingCaret} aria-hidden="true" /> : null}
     </>
@@ -394,9 +466,9 @@ function ThinkingIndicator() {
   );
 }
 
-function ArtifactCard({ artifact }: { artifact: Artifact }) {
+function ArtifactCard({ artifact, onOpen }: { artifact: Artifact; onOpen: (artifact: Artifact) => void }) {
   return (
-    <div className={styles.artifactCard}>
+    <button className={styles.artifactCard} type="button" onClick={() => onOpen(artifact)} aria-label={`Open ${artifact.title}`}>
       <span className={styles.artifactIcon}><IconDocument /></span>
       <span className={styles.artifactBody}>
         <span className={styles.artifactTitle}>{artifact.title}</span>
@@ -404,10 +476,98 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
       </span>
       <span className={styles.artifactState}>
         <span>Markdown draft saved</span>
-        <small>Preview coming next</small>
+        <small>Open preview</small>
       </span>
+    </button>
+  );
+}
+
+function ArtifactPreviewPanel({
+  state,
+  onClose,
+}: {
+  state: ArtifactPreviewState;
+  onClose: () => void;
+}) {
+  if (state.status === "closed") return null;
+
+  const title = state.status === "ready" ? state.preview.title : state.artifact.title;
+  const type = state.status === "ready" ? state.preview.type : state.artifact.type;
+  const createdAt = state.status === "ready" ? formatArtifactCreatedAt(state.preview.createdAt) : null;
+  const previewMarkdown = state.status === "ready" ? artifactPreviewDisplayMarkdown(state.preview.markdown) : "";
+  const canUseMarkdown = previewMarkdown.trim().length > 0;
+
+  const downloadMarkdown = () => {
+    if (state.status !== "ready") return;
+    const blob = new Blob([previewMarkdown], { type: "text/markdown;charset=utf-8" });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = `${slugifyFilename(state.preview.title)}.md`;
+    link.click();
+    URL.revokeObjectURL(href);
+  };
+
+  return (
+    <div className={styles.previewBackdrop} role="presentation" onClick={onClose}>
+      <section className={styles.previewPanel} role="dialog" aria-modal="true" aria-label={`${title} preview`} onClick={(event) => event.stopPropagation()}>
+        <header className={styles.previewHeader}>
+          <span className={styles.previewKicker}>Artifact preview</span>
+          <button className={styles.previewClose} type="button" onClick={onClose} aria-label="Close artifact preview">Close</button>
+          <h2>{title}</h2>
+          <div className={styles.previewMeta}>
+            <span>{type}</span>
+            {createdAt ? <span>{createdAt}</span> : null}
+          </div>
+        </header>
+        <div className={styles.previewActions}>
+          <button type="button" onClick={downloadMarkdown} disabled={!canUseMarkdown}>Download markdown</button>
+        </div>
+        <div className={styles.previewBody}>
+          {state.status === "loading" ? (
+            <p className={styles.previewEmpty}>Loading markdown draft...</p>
+          ) : state.status === "missing" ? (
+            <p className={styles.previewEmpty}>This draft is no longer available locally.</p>
+          ) : state.status === "error" ? (
+            <p className={styles.previewEmpty}>{state.message}</p>
+          ) : (
+            <div className={styles.previewMarkdown}>
+              <MarkdownLite content={previewMarkdown} streaming={false} />
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
+}
+
+function formatArtifactCreatedAt(value: string): string | null {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function slugifyFilename(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "workspace-draft";
+}
+
+function artifactPreviewDisplayMarkdown(markdown: string): string {
+  const draftMarker = "\n## Draft\n";
+  const markerIndex = markdown.indexOf(draftMarker);
+  const draft = markerIndex >= 0 ? markdown.slice(markerIndex + draftMarker.length) : markdown;
+  return draft
+    .replace(/```(?:markdown|md)?\s*/gi, "")
+    .replace(/```/g, "")
+    .replace(/^Runtime provider:.*$/gmi, "")
+    .replace(/^I(?:'ll| will)\s+(?:update|create|draft|build|generate|prepare|revise|refine)\s+.+?(?:\n\n|\n)/i, "")
+    .replace(/^I'm\s+(?:going to\s+)?(?:update|creating|drafting|building|generating|preparing|revising|refining)\s+.+?(?:\n\n|\n)/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function TaskChip({ task, steps }: { task: Task | null; steps: TaskStep[] }) {
@@ -457,10 +617,12 @@ function ChatThread({
   state,
   runState,
   referencePacket,
+  onOpenArtifact,
 }: {
   state: ThreadState;
   runState: RunState;
   referencePacket: ReferenceInspectorPacket | null;
+  onOpenArtifact: (artifact: Artifact) => void;
 }) {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
@@ -497,7 +659,7 @@ function ChatThread({
             <div key={message.id} className={styles.msgAgent}>
               <ReferenceCoverageLine packet={referencePacket} />
               <MarkdownLite content={message.content} streaming={!message.complete && runState === "running"} />
-              {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}
+              {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}
               <TaskChip task={state.task} steps={state.steps} />
             </div>
           )
@@ -653,6 +815,7 @@ export default function WorkspaceDemoApp() {
   const [runState, setRunState] = useState<RunState>("idle");
   const [prompt, setPrompt] = useState(demoUserPrompt);
   const [activeTaskTitle, setActiveTaskTitle] = useState("New session");
+  const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const referencePacket = useMemo(
@@ -696,6 +859,27 @@ export default function WorkspaceDemoApp() {
     source.start();
   };
 
+  const openArtifactPreview = async (artifact: Artifact) => {
+    setArtifactPreview({ status: "loading", artifact });
+    try {
+      const response = await fetch(`/api/workspace-demo/artifacts/${encodeURIComponent(artifact.id)}`, {
+        cache: "no-store",
+      });
+      if (response.status === 404) {
+        setArtifactPreview({ status: "missing", artifact });
+        return;
+      }
+      const body = await response.json() as { ok?: boolean; artifact?: ArtifactPreview; error?: string };
+      if (!response.ok || !body.ok || !body.artifact) {
+        setArtifactPreview({ status: "error", artifact, message: body.error || "Artifact preview failed." });
+        return;
+      }
+      setArtifactPreview({ status: "ready", artifact, preview: body.artifact });
+    } catch {
+      setArtifactPreview({ status: "error", artifact, message: "Artifact preview failed." });
+    }
+  };
+
   const taskTitle = runState === "idle" ? "New session" : activeTaskTitle;
 
   return (
@@ -712,8 +896,19 @@ export default function WorkspaceDemoApp() {
         </header>
         {runState === "idle"
           ? <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
-          : <><ChatThread state={threadState} runState={runState} referencePacket={referencePacket} /><Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} /></>}
+          : (
+            <>
+              <ChatThread
+                state={threadState}
+                runState={runState}
+                referencePacket={referencePacket}
+                onOpenArtifact={openArtifactPreview}
+              />
+              <Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} />
+            </>
+          )}
       </section>
+      <ArtifactPreviewPanel state={artifactPreview} onClose={() => setArtifactPreview({ status: "closed" })} />
     </main>
   );
 }

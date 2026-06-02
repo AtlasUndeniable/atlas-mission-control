@@ -10,7 +10,9 @@ import { tmpdir } from "node:os";
 
 import {
   detectWorkspaceDraftArtifactIntent,
+  isSafeWorkspaceDraftArtifactId,
   maybeWriteWorkspaceDraftArtifact,
+  readWorkspaceDraftArtifactPreview,
   shouldCreateWorkspaceDraftArtifact,
   summarizeWorkspaceDraftArtifactForChat,
 } from "../src/lib/workspace-draft-artifacts.ts";
@@ -96,7 +98,7 @@ test("draft artifact writer saves markdown and metadata under caller root", asyn
     assert.equal(metadataJson.userFacingName, "Ricky pay structure handover draft");
     const chatSummary = summarizeWorkspaceDraftArtifactForChat(result);
     assert.match(chatSummary, /Markdown draft saved/);
-    assert.match(chatSummary, /Full draft body is in the artifact card/);
+    assert.match(chatSummary, /Open the artifact card to preview the full draft/);
     assert.doesNotMatch(chatSummary, /## Ricky pay model/);
     const processSummary = summarizeWorkspaceDraftArtifactForChat({
       ...result,
@@ -107,6 +109,41 @@ test("draft artifact writer saves markdown and metadata under caller root", asyn
     });
     assert.match(processSummary, /Ricky pay model/);
     assert.doesNotMatch(processSummary, /I'll update/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("draft artifact preview reads only safe markdown artifact ids", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-preview-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Can you create the Ricky pay structure handover doc?",
+      content: "## Ricky pay model\n\nUse clearer bands.",
+      taskTitle: "Ricky pay structure handover",
+      runtimeProvider: "mastra",
+      runId: "run_preview_test",
+      taskId: "task_preview_test",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+    assert.ok(result);
+
+    const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
+    assert.ok(preview);
+    assert.equal(preview.id, result.metadata.id);
+    assert.equal(preview.type, "markdown");
+    assert.match(preview.title, /Ricky pay structure handover draft/);
+    assert.match(preview.markdown, /## Draft/);
+    assert.doesNotMatch(JSON.stringify(preview), /localPath|metadataPath|\/Users\/atlasai|workspace-demo-artifacts/);
+
+    assert.equal(await readWorkspaceDraftArtifactPreview("artifact_demo_missing", { root }), null);
+    assert.equal(isSafeWorkspaceDraftArtifactId(result.metadata.id), true);
+    assert.equal(isSafeWorkspaceDraftArtifactId("../secrets"), false);
+    await assert.rejects(
+      () => readWorkspaceDraftArtifactPreview("../secrets", { root }),
+      /Unsafe artifact id/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 
 import type { Artifact } from "./workspace-demo-events.ts";
 
@@ -39,6 +39,17 @@ export interface WorkspaceDraftArtifactResult {
 }
 
 export const WORKSPACE_DEMO_ARTIFACT_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-artifacts";
+
+export interface WorkspaceDraftArtifactPreview {
+  id: string;
+  title: string;
+  type: "markdown";
+  createdAt: string;
+  taskTitle: string;
+  runtimeProvider: WorkspaceDraftArtifactProvider;
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat;
+  markdown: string;
+}
 
 export type WorkspaceDraftArtifactRequestedFormat =
   | "document"
@@ -161,9 +172,48 @@ export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArt
     `**${result.artifact.title}**`,
     "",
     preview ? `- Draft focus: ${preview}` : "- Draft focus: Ready for review in the artifact card.",
-    "- Full draft body is in the artifact card. Preview panel comes next.",
+    "- Open the artifact card to preview the full draft.",
     "- Next: review the confirmation fields before this becomes a real export.",
   ].join("\n");
+}
+
+export async function readWorkspaceDraftArtifactPreview(
+  id: string,
+  options: { root?: string } = {},
+): Promise<WorkspaceDraftArtifactPreview | null> {
+  if (!isSafeWorkspaceDraftArtifactId(id)) {
+    throw new Error("Unsafe artifact id.");
+  }
+
+  const root = options.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
+  const markdownPath = safeWorkspaceDraftArtifactPath(root, `${id}.md`);
+  const metadataPath = safeWorkspaceDraftArtifactPath(root, `${id}.metadata.json`);
+  try {
+    const [markdown, metadataText] = await Promise.all([
+      readFile(markdownPath, "utf8"),
+      readFile(metadataPath, "utf8"),
+    ]);
+    const metadata = parseWorkspaceDraftArtifactMetadata(metadataText, id);
+    return {
+      id: metadata.id,
+      title: metadata.userFacingName || metadata.title,
+      type: metadata.type,
+      createdAt: metadata.createdAt,
+      taskTitle: metadata.taskTitle,
+      runtimeProvider: metadata.runtimeProvider,
+      requestedFormat: metadata.requestedFormat,
+      markdown,
+    };
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function isSafeWorkspaceDraftArtifactId(id: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(id);
 }
 
 function cleanArtifactPreview(value: string): string {
@@ -178,6 +228,47 @@ function cleanArtifactPreview(value: string): string {
     .replace(/^I'm\s+(?:going to\s+)?(?:update|creating|drafting|building|generating|preparing)\s+/i, "")
     .replace(/\s+(?:Update|Draft|Document)$/i, "")
     .trim();
+}
+
+function safeWorkspaceDraftArtifactPath(root: string, filename: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedPath = resolve(resolvedRoot, filename);
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {
+    throw new Error("Artifact path escaped controlled root.");
+  }
+  return resolvedPath;
+}
+
+function parseWorkspaceDraftArtifactMetadata(value: string, expectedId: string): WorkspaceDraftArtifactMetadata {
+  const parsed = JSON.parse(value) as Partial<WorkspaceDraftArtifactMetadata>;
+  if (!parsed || typeof parsed !== "object") throw new Error("Artifact metadata is invalid.");
+  if (parsed.id !== expectedId) throw new Error("Artifact metadata id mismatch.");
+  if (parsed.type !== "markdown") throw new Error("Only markdown draft artifacts can be previewed.");
+  if (typeof parsed.title !== "string" || typeof parsed.createdAt !== "string" || typeof parsed.taskTitle !== "string") {
+    throw new Error("Artifact metadata is incomplete.");
+  }
+  if (parsed.runtimeProvider !== "mock" && parsed.runtimeProvider !== "local-codex" && parsed.runtimeProvider !== "mastra") {
+    throw new Error("Artifact runtime provider is invalid.");
+  }
+  if (!isWorkspaceDraftArtifactRequestedFormat(parsed.requestedFormat)) {
+    throw new Error("Artifact requested format is invalid.");
+  }
+  return parsed as WorkspaceDraftArtifactMetadata;
+}
+
+function isWorkspaceDraftArtifactRequestedFormat(value: unknown): value is WorkspaceDraftArtifactRequestedFormat {
+  return (
+    value === "document" ||
+    value === "markdown" ||
+    value === "pdf" ||
+    value === "docx" ||
+    value === "report" ||
+    value === "handover" ||
+    value === "deck" ||
+    value === "export" ||
+    value === "file" ||
+    value === "deliverable"
+  );
 }
 
 function createIntent(
