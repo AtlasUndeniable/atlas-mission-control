@@ -5,7 +5,6 @@ import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
   demoStarterPrompts,
-  demoUserPrompt,
   demoWorkspace,
   type AgentEvent,
   type Artifact,
@@ -18,6 +17,7 @@ import styles from "./workspace-demo.module.css";
 
 type RunState = "idle" | "running" | "complete";
 type ReferenceCoverage = "matched" | "thin" | "none";
+type WorkspacePanel = "tasks" | "library" | "plugins" | "scheduled";
 
 interface ArtifactPreview {
   id: string;
@@ -70,6 +70,7 @@ interface ThreadState {
   task: Task | null;
   tasks: Task[];
   internalEvents: AgentEvent[];
+  errorMessage: string | null;
 }
 
 const initialThreadState: ThreadState = {
@@ -79,6 +80,7 @@ const initialThreadState: ThreadState = {
   task: null,
   tasks: [],
   internalEvents: [],
+  errorMessage: null,
 };
 
 interface StoredWorkspaceThread {
@@ -94,6 +96,14 @@ function titleForPrompt(prompt: string): string {
 }
 
 function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
+  if (event.kind === "error") {
+    return {
+      ...state,
+      internalEvents: event.visibility === "internal" ? [...state.internalEvents, event] : state.internalEvents,
+      errorMessage: event.message || "Atlas could not finish that run.",
+    };
+  }
+
   if (event.visibility === "internal") {
     return { ...state, internalEvents: [...state.internalEvents, event] };
   }
@@ -170,6 +180,7 @@ function safeStoredThread(value: string | null): StoredWorkspaceThread | null {
         task: thread.task ?? null,
         tasks: Array.isArray(thread.tasks) ? thread.tasks : thread.task ? [thread.task] : [],
         internalEvents: thread.internalEvents,
+        errorMessage: typeof thread.errorMessage === "string" ? thread.errorMessage : null,
       },
       runState: parsed.runState === "complete" ? "complete" : "idle",
       activeTaskTitle: typeof parsed.activeTaskTitle === "string" && parsed.activeTaskTitle.trim()
@@ -323,9 +334,10 @@ function Composer({
   onStart: (nextPrompt?: string) => void;
 }) {
   const isRunning = runState === "running";
+  const canSubmit = !isRunning && prompt.trim().length > 0;
   const enterSubmitRef = useRef(false);
   const handleSubmit = () => {
-    if (!isRunning) onStart(prompt);
+    if (canSubmit) onStart(prompt);
   };
   const handleEnterSubmit = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const isEnter = event.key === "Enter" || event.code === "Enter" || event.keyCode === 13;
@@ -337,7 +349,7 @@ function Composer({
   return (
     <div className={styles.composerWrap}>
       <div className={styles.composer}>
-        <button className={styles.composerIcon} type="button" aria-label="Attach file"><IconPlus /></button>
+        <button className={styles.composerIcon} type="button" aria-label="Attach file coming soon" title="File upload is not connected yet" disabled><IconPlus /></button>
         <textarea
           className={styles.composerInput}
           value={prompt}
@@ -357,10 +369,10 @@ function Composer({
             handleEnterSubmit(event);
           }}
         />
-        <button className={styles.composerIcon} type="button" aria-label="Voice input">
+        <button className={styles.composerIcon} type="button" aria-label="Voice input coming soon" title="Voice input is not connected yet" disabled>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v4" /></svg>
         </button>
-        <button className={styles.composerSend} type="button" onClick={handleSubmit} disabled={isRunning} aria-label="Send message">
+        <button className={styles.composerSend} type="button" onClick={handleSubmit} disabled={!canSubmit} aria-label="Send message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
         </button>
       </div>
@@ -380,7 +392,7 @@ function EmptyState({
 }) {
   return (
     <section className={styles.emptyState}>
-      <p className={styles.emptyKicker}>What do you want to do?</p>
+      <p className={styles.emptyKicker}>What should we move forward today?</p>
       <Composer prompt={prompt} runState="idle" onPromptChange={onPromptChange} onStart={onStart} />
       <div className={styles.starterChips}>
         {demoStarterPrompts.map((prompt) => (
@@ -397,6 +409,40 @@ function EmptyState({
           </button>
         ))}
       </div>
+    </section>
+  );
+}
+
+function WorkspacePanelView({ panel }: { panel: Exclude<WorkspacePanel, "tasks"> }) {
+  const panelCopy: Record<Exclude<WorkspacePanel, "tasks">, { title: string; body: string }> = {
+    library: {
+      title: "Library is coming next",
+      body: "Saved Workspace references and artifact history will live here once persistence is connected. For now, only the current browser session is available.",
+    },
+    plugins: {
+      title: "Plugins are not connected yet",
+      body: "Runtime tools are available internally where the agent supports them. User-managed plugin controls are intentionally dormant in this alpha.",
+    },
+    scheduled: {
+      title: "Scheduled work is not connected yet",
+      body: "This view will show queued and recurring Workspace tasks after persistence and scheduling are wired. Nothing is being scheduled from this screen today.",
+    },
+  };
+  const copy = panelCopy[panel];
+  return (
+    <section className={styles.workspacePanel}>
+      <div className={styles.panelKicker}>Workspace</div>
+      <h1>{copy.title}</h1>
+      <p>{copy.body}</p>
+    </section>
+  );
+}
+
+function TaskEmptyPanel() {
+  return (
+    <section className={styles.emptyState}>
+      <p className={styles.emptyKicker}>No local task thread yet.</p>
+      <p className={styles.emptyNote}>Send a prompt to start a browser-session task. Nothing is persisted until Supabase is connected.</p>
     </section>
   );
 }
@@ -683,6 +729,16 @@ function ReferenceCoverageLine({ packet }: { packet: ReferenceInspectorPacket | 
   return null;
 }
 
+function ErrorNotice({ message }: { message: string }) {
+  return (
+    <div className={styles.errorNotice} role="status">
+      <strong>Atlas could not finish that run.</strong>
+      <span>{message}</span>
+      <small>The session is still safe to continue. Try a shorter prompt or start a new local session.</small>
+    </div>
+  );
+}
+
 function ChatThread({
   state,
   runState,
@@ -743,22 +799,41 @@ function ChatThread({
         {taskCards.map((task) => (
           <TaskChip key={task.id} task={task} steps={task.steps} />
         ))}
+        {state.errorMessage ? <ErrorNotice message={state.errorMessage} /> : null}
         {runState === "running" && !hasAssistantMessage ? <ThinkingIndicator /> : null}
       </div>
     </section>
   );
 }
 
-function Sidebar({ runState, onNewTask }: { runState: RunState; onNewTask: () => void }) {
-  const navTabs = ["Tasks", "Library", "Plugins", "Scheduled"] as const;
-  const projects = ["Ricky coach hire", "L2 audit review", "Content planning", "Training / Knowledge"] as const;
-  const tasks = [
-    { title: "Ricky coach hire pay model", icon: runState === "running" ? <IconSpinner /> : <IconDocument /> },
-    { title: "L2 audit review", icon: <IconDocument /> },
-    { title: "Content plan", icon: <IconDocument /> },
-    { title: "Monday board draft", icon: <IconList /> },
-    { title: "Training notes", icon: <IconFolder /> },
+function Sidebar({
+  runState,
+  panel,
+  tasks,
+  artifacts,
+  selectedTaskId,
+  onNewTask,
+  onOpenArtifact,
+  onPanelChange,
+  onSelectTask,
+}: {
+  runState: RunState;
+  panel: WorkspacePanel;
+  tasks: Task[];
+  artifacts: Artifact[];
+  selectedTaskId: string | null;
+  onNewTask: () => void;
+  onOpenArtifact: (artifact: Artifact) => void;
+  onPanelChange: (panel: WorkspacePanel) => void;
+  onSelectTask: (taskId: string) => void;
+}) {
+  const navTabs = [
+    { id: "tasks", label: "Tasks" },
+    { id: "library", label: "Library" },
+    { id: "plugins", label: "Plugins" },
+    { id: "scheduled", label: "Scheduled" },
   ] as const;
+  const projects = ["Ricky coach hire", "L2 audit review", "Content planning", "Training / Knowledge"] as const;
 
   return (
     <aside className={styles.sidebar}>
@@ -767,14 +842,14 @@ function Sidebar({ runState, onNewTask }: { runState: RunState; onNewTask: () =>
       <nav className={styles.navMini} aria-label="Workspace navigation">
         {navTabs.map((tab) => (
           <button
-            aria-label={tab === "Tasks" ? "Tasks" : `${tab} coming next`}
-            className={tab === "Tasks" ? styles.navMiniActive : undefined}
-            disabled={tab !== "Tasks"}
-            key={tab}
-            title={tab === "Tasks" ? "Tasks" : `${tab} coming next`}
+            aria-label={tab.id === "tasks" ? "Active tasks" : `${tab.label} coming next`}
+            className={panel === tab.id ? styles.navMiniActive : undefined}
+            key={tab.id}
+            onClick={() => onPanelChange(tab.id)}
+            title={tab.id === "tasks" ? "Active tasks" : `${tab.label} coming next`}
             type="button"
           >
-            {tab}
+            {tab.label}
           </button>
         ))}
       </nav>
@@ -787,14 +862,36 @@ function Sidebar({ runState, onNewTask }: { runState: RunState; onNewTask: () =>
           </li>
         ))}
       </ul>
-      <div className={styles.sectionHeader}><span>All Tasks</span></div>
+      <div className={styles.sectionHeader}><span>Current Session</span></div>
       <ul className={styles.sidebarList}>
-        {tasks.map((task, index) => (
-          <li className={index === 0 ? styles.sidebarActive : undefined} key={task.title}>
-            {task.icon}
-            <span className={styles.sidebarTitle}>{task.title}</span>
+        {runState === "running" && tasks.length === 0 ? (
+          <li className={styles.sidebarMuted}>
+            <IconSpinner />
+            <span className={styles.sidebarTitle}>Running local task</span>
+          </li>
+        ) : null}
+        {tasks.map((task) => (
+          <li className={selectedTaskId === task.id ? styles.sidebarActive : undefined} key={task.id}>
+            <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectTask(task.id)}>
+              {task.status === "running" ? <IconSpinner /> : <IconDocument />}
+              <span className={styles.sidebarTitle}>{task.title}</span>
+            </button>
           </li>
         ))}
+        {artifacts.map((artifact) => (
+          <li key={artifact.id}>
+            <button className={styles.sidebarItemButton} type="button" onClick={() => onOpenArtifact(artifact)}>
+              <IconFolder />
+              <span className={styles.sidebarTitle}>{artifact.title}</span>
+            </button>
+          </li>
+        ))}
+        {runState !== "running" && tasks.length === 0 && artifacts.length === 0 ? (
+          <li className={styles.sidebarMuted}>
+            <IconList />
+            <span className={styles.sidebarTitle}>No local tasks yet</span>
+          </li>
+        ) : null}
       </ul>
       <div className={styles.sidebarSpacer} />
       <div className={styles.userRow}><span className={styles.avatar}>R</span><span className={styles.userMeta}><span className={styles.userName}>Rhys</span><span className={styles.userSub}>Undeniable</span></span><span className={styles.userChevron}><IconChevronDown size={13} /></span></div>
@@ -893,8 +990,10 @@ export default function WorkspaceDemoApp() {
   const [storedThread] = useState<StoredWorkspaceThread | null>(() => readStoredWorkspaceThread());
   const [threadState, setThreadState] = useState<ThreadState>(() => storedThread?.threadState ?? initialThreadState);
   const [runState, setRunState] = useState<RunState>(() => storedThread?.runState ?? "idle");
-  const [prompt, setPrompt] = useState(demoUserPrompt);
+  const [prompt, setPrompt] = useState("");
   const [activeTaskTitle, setActiveTaskTitle] = useState(() => storedThread?.activeTaskTitle ?? "New session");
+  const [activePanel, setActivePanel] = useState<WorkspacePanel>("tasks");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => storedThread?.threadState.tasks.at(-1)?.id ?? null);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -925,18 +1024,22 @@ export default function WorkspaceDemoApp() {
     unsubscribeRef.current?.();
     unsubscribeRef.current = source.subscribe((event) => {
       setThreadState((state) => reduceEvent(state, event));
-      if (event.kind === "task.complete" || event.kind === "error") setRunState(event.kind === "error" ? "complete" : "complete");
+      if (event.kind === "task.complete") setSelectedTaskId(`${event.runId}:${event.task.id}`);
+      if (event.kind === "task.complete" || event.kind === "error") setRunState("complete");
     });
   };
 
   const startReplay = (nextPrompt?: string) => {
     if (runState === "running") return;
-    const activePrompt = nextPrompt?.trim() || prompt.trim() || demoUserPrompt;
+    const activePrompt = nextPrompt?.trim() || prompt.trim();
+    if (!activePrompt) return;
     const activeTitle = titleForPrompt(activePrompt);
     setActiveTaskTitle(activeTitle);
+    setActivePanel("tasks");
+    setSelectedTaskId(null);
     setPrompt("");
     sourceRef.current?.reset();
-    setThreadState((state) => ({ ...state, steps: [], task: null }));
+    setThreadState((state) => ({ ...state, steps: [], task: null, errorMessage: null }));
     setRunState("running");
     const source = new LocalWorkspaceEventSource({
       endpoint: "/api/workspace-demo/local-run",
@@ -958,8 +1061,10 @@ export default function WorkspaceDemoApp() {
     sessionStorage.removeItem(THREAD_STORAGE_KEY);
     setThreadState(initialThreadState);
     setRunState("idle");
-    setPrompt(demoUserPrompt);
-    setActiveTaskTitle("New session");
+    setPrompt("");
+    setActiveTaskTitle("New local session");
+    setActivePanel("tasks");
+    setSelectedTaskId(null);
     setArtifactPreview({ status: "closed" });
   };
 
@@ -984,33 +1089,53 @@ export default function WorkspaceDemoApp() {
     }
   };
 
-  const taskTitle = runState === "idle" ? "New session" : activeTaskTitle;
+  const selectTask = (taskId: string) => {
+    setActivePanel("tasks");
+    setSelectedTaskId(taskId);
+  };
+
+  const taskTitle = activeTaskTitle;
+  const hasThreadData = threadState.messages.length > 0 || threadState.artifacts.length > 0 || threadState.tasks.length > 0 || Boolean(threadState.errorMessage);
 
   return (
     <main className={styles.app}>
-      <Sidebar runState={runState} onNewTask={startNewTask} />
+      <Sidebar
+        runState={runState}
+        panel={activePanel}
+        tasks={threadState.tasks}
+        artifacts={threadState.artifacts}
+        selectedTaskId={selectedTaskId}
+        onNewTask={startNewTask}
+        onOpenArtifact={openArtifactPreview}
+        onPanelChange={setActivePanel}
+        onSelectTask={selectTask}
+      />
       <section className={styles.canvas}>
         <header className={styles.topbar}>
           <div className={styles.taskTitle}>{taskTitle}</div>
-          <button className={styles.modelChip} type="button">{demoWorkspace.title} <IconChevronDown size={12} /></button>
+          <span className={styles.modelChip} title="Runtime selection is configured server-side for this alpha">{demoWorkspace.title}</span>
           <div className={styles.topSpacer} />
-          <button className={styles.iconButton} type="button" aria-label="Share"><IconShare /></button>
-          <button className={styles.iconButton} type="button" aria-label="More"><IconMore /></button>
+          <button className={styles.iconButton} type="button" aria-label="Share coming soon" title="Sharing is not connected yet" disabled><IconShare /></button>
+          <button className={styles.iconButton} type="button" aria-label="More actions coming soon" title="More actions are not connected yet" disabled><IconMore /></button>
           <Inspector events={threadState.internalEvents} referencePacket={referencePacket} />
         </header>
-        {runState === "idle"
-          ? <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
-          : (
-            <>
-              <ChatThread
-                state={threadState}
-                runState={runState}
-                referencePacket={referencePacket}
-                onOpenArtifact={openArtifactPreview}
-              />
-              <Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} />
-            </>
-          )}
+        {activePanel !== "tasks" ? (
+          <WorkspacePanelView panel={activePanel} />
+        ) : runState === "idle" ? (
+          <EmptyState prompt={prompt} onPromptChange={setPrompt} onStart={startReplay} />
+        ) : hasThreadData ? (
+          <>
+            <ChatThread
+              state={threadState}
+              runState={runState}
+              referencePacket={referencePacket}
+              onOpenArtifact={openArtifactPreview}
+            />
+            <Composer prompt={prompt} runState={runState} onPromptChange={setPrompt} onStart={startReplay} />
+          </>
+        ) : (
+          <TaskEmptyPanel />
+        )}
       </section>
       <ArtifactPreviewPanel state={artifactPreview} onClose={() => setArtifactPreview({ status: "closed" })} />
     </main>
