@@ -12,7 +12,7 @@ export type AgentEventKind =
 
 export type MessageRole = "user" | "assistant";
 export type TaskStepStatus = "pending" | "running" | "complete" | "error";
-export type ArtifactType = "document" | "spreadsheet" | "audit" | "brief" | "playbook";
+export type ArtifactType = "document" | "spreadsheet" | "audit" | "brief" | "playbook" | "markdown";
 export type WorkspaceTaskStatus = "idle" | "running" | "complete" | "error";
 
 interface BaseAgentEvent {

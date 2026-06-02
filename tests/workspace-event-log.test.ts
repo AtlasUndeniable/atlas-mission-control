@@ -67,11 +67,11 @@ const replayEvents: AgentEvent[] = [
     kind: "artifact.created",
     visibility: "presentation",
     artifact: {
-      id: "artifact_home_services_ai_report",
-      type: "document",
-      title: "Competitive Intelligence Report",
-      subtitle: "Atlas / markdown + pdf",
-      preview: "A field report on positioning and pricing.",
+      id: "artifact_ricky_handover_draft",
+      type: "markdown",
+      title: "Ricky pay structure handover draft",
+      subtitle: "Atlas / mastra / markdown draft",
+      preview: "A local markdown handover draft.",
     },
   },
   {

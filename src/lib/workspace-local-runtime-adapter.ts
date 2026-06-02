@@ -5,10 +5,14 @@ import { basename, delimiter, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
-import type { AgentEvent, Artifact, Task, TaskStep } from "./workspace-demo-events";
+import type { AgentEvent, Task, TaskStep } from "./workspace-demo-events";
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 import { createWorkspaceReferenceInspectorPacket } from "./workspace-reference-resolver.ts";
+import {
+  maybeWriteWorkspaceDraftArtifact,
+  type WorkspaceDraftArtifactResult,
+} from "./workspace-draft-artifacts.ts";
 
 export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
 
@@ -27,6 +31,7 @@ export interface WorkspaceLocalRuntimeContext {
   idFactory?: () => string;
   commandRunner?: TerminalCommandRunner;
   referenceResolver?: WorkspaceReferenceResolver;
+  draftArtifactRoot?: string;
 }
 
 export interface WorkspaceLocalRuntimeAdapter {
@@ -79,7 +84,6 @@ interface LocalAdapterOutput {
   presentationText: string;
   presentationSummary: string;
   internalSummary: string;
-  artifact: Artifact | null;
   usedFallback: boolean;
   error: string | null;
 }
@@ -196,13 +200,27 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
 
     yield messageComplete(eventCtx, assistantMessageId, "assistant", output.presentationText);
 
-    if (output.artifact) {
+    const draftArtifact = !output.error
+      ? await maybeWriteWorkspaceDraftArtifact({
+        prompt: checkedInput.prompt,
+        content: output.presentationText,
+        taskTitle,
+        runtimeProvider: selection.mode === "mock" ? "mock" : "local-codex",
+        runId: eventCtx.runId,
+        taskId: eventCtx.taskId,
+        now: eventCtx.now,
+        root: ctx.draftArtifactRoot,
+      })
+      : null;
+
+    if (draftArtifact) {
+      yield draftArtifactInspectorEvent(eventCtx, draftArtifact);
       yield {
         ...baseEvent(eventCtx),
         id: eventCtx.nextId("evt_artifact"),
         kind: "artifact.created",
         visibility: "presentation",
-        artifact: output.artifact,
+        artifact: draftArtifact.artifact,
       };
     }
 
@@ -409,6 +427,18 @@ function referenceInspectorEvent(ctx: AdapterEventContext, packet: WorkspaceRefe
   };
 }
 
+function draftArtifactInspectorEvent(ctx: AdapterEventContext, draftArtifact: WorkspaceDraftArtifactResult): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_internal"),
+    kind: "tool.result",
+    visibility: "internal",
+    toolName: "workspace.artifacts",
+    label: "Local draft artifact saved",
+    resultSummary: JSON.stringify(draftArtifact.metadata),
+  };
+}
+
 function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
   return {
     ...baseEvent(ctx),
@@ -473,7 +503,6 @@ async function runApprovedCommand({
       result.stderr ? `stderr=${limitText(result.stderr)}` : "stderr=<empty>",
       runtimeContext.internalSummary,
     ].join("; "),
-    artifact: buildArtifact(input, presentationText, selection.mode),
     usedFallback: false,
     error: null,
   };
@@ -502,7 +531,6 @@ function buildMockOutput(
     presentationText,
     presentationSummary: "Safe mock local runner produced presentation output.",
     internalSummary: `${reason}; ${runtimeContext.internalSummary}`,
-    artifact: buildArtifact(input, presentationText, "mock"),
     usedFallback: true,
     error: null,
   };
@@ -524,19 +552,8 @@ function buildBlockedOutput(
     presentationText,
     presentationSummary: `Real local ${selection.mode} runner failed closed.`,
     internalSummary: options.internalSummary ?? selection.reason,
-    artifact: null,
     usedFallback: false,
     error: options.error ?? selection.reason,
-  };
-}
-
-function buildArtifact(input: WorkspaceLocalRuntimeInput, content: string, source: WorkspaceLocalRuntimeMode): Artifact {
-  return {
-    id: `artifact_local_${source}_${slugify(input.title ?? input.prompt)}`,
-    type: "brief",
-    title: input.title ?? "Local Adapter Result",
-    subtitle: `Atlas / local ${source} runner / presentation summary`,
-    preview: content.replace(/\s+/g, " ").slice(0, 160),
   };
 }
 
@@ -582,10 +599,6 @@ function normalizePresentationText(text: string): string {
 
 function limitText(text: string): string {
   return text.length > 12_000 ? text.slice(0, 12_000) : text;
-}
-
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "result";
 }
 
 function pause(ms: number): Promise<void> {

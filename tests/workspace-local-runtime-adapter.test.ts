@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -75,6 +75,7 @@ function matchedReferencePacket(): WorkspaceReferencePacket {
 async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
   env?: NodeJS.ProcessEnv;
   referencePacket?: WorkspaceReferencePacket;
+  draftArtifactRoot?: string;
   commandRunner?: (request: TerminalCommandRequest) => Promise<{
     ok: boolean;
     stdout: string;
@@ -85,24 +86,30 @@ async function collectEvents(adapter: TerminalLocalRuntimeAdapter, options: {
 } = {}): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   let id = 0;
-  for await (const event of adapter.runTask(
-    {
-      prompt: "Draft a local summary for the workspace demo",
-      title: "Workspace local demo",
-    },
-    {
-      workspaceId: workspaceDemoRuntimeIds.workspaceId,
-      taskId: workspaceDemoRuntimeIds.taskId,
-      runId: "run_test",
-      cwd: "/tmp",
-      env: options.env ?? {},
-      now: () => new Date("2026-05-29T00:00:00.000Z"),
-      idFactory: () => String(id++).padStart(3, "0"),
-      commandRunner: options.commandRunner,
-      referenceResolver: async () => options.referencePacket ?? emptyReferencePacket(),
-    },
-  )) {
-    events.push(event);
+  const transientRoot = options.draftArtifactRoot ? null : await mkdtemp(join(tmpdir(), "atlas-workspace-draft-events-"));
+  try {
+    for await (const event of adapter.runTask(
+      {
+        prompt: "Draft a local summary for the workspace demo",
+        title: "Workspace local demo",
+      },
+      {
+        workspaceId: workspaceDemoRuntimeIds.workspaceId,
+        taskId: workspaceDemoRuntimeIds.taskId,
+        runId: "run_test",
+        cwd: "/tmp",
+        env: options.env ?? {},
+        now: () => new Date("2026-05-29T00:00:00.000Z"),
+        idFactory: () => String(id++).padStart(3, "0"),
+        commandRunner: options.commandRunner,
+        referenceResolver: async () => options.referencePacket ?? emptyReferencePacket(),
+        draftArtifactRoot: options.draftArtifactRoot ?? transientRoot ?? undefined,
+      },
+    )) {
+      events.push(event);
+    }
+  } finally {
+    if (transientRoot) await rm(transientRoot, { recursive: true, force: true });
   }
   return events;
 }
@@ -299,6 +306,8 @@ test("safe mock adapter streams presentation text and completes the task chip", 
   assert.ok(deltas.length > 3);
   assert.equal(completions.length, 2);
   assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0]?.kind, "artifact.created");
+  assert.equal(artifacts[0]?.artifact.type, "markdown");
   assert.equal(taskComplete?.kind, "task.complete");
   assert.equal(taskComplete?.task.status, "complete");
   assert.equal(taskComplete?.task.completedSteps, taskComplete?.task.totalSteps);
@@ -344,6 +353,45 @@ test("runtime emits safe reference packet for Inspector without presentation pat
     .map((event) => event.delta)
     .join("");
   assert.doesNotMatch(presentationText, /\/Users\/atlasai|workspace\.references|librarian-reports/);
+});
+
+test("local draft artifact writes markdown and keeps path metadata internal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-demo-artifacts-"));
+  try {
+    const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+      draftArtifactRoot: root,
+    });
+    const artifactEvent = events.find((event) => event.kind === "artifact.created");
+    const metadataEvent = events.find((event) =>
+      event.kind === "tool.result" && event.toolName === "workspace.artifacts"
+    );
+    assert.equal(artifactEvent?.kind, "artifact.created");
+    assert.equal(artifactEvent?.artifact.type, "markdown");
+    assert.match(artifactEvent?.artifact.title ?? "", /Workspace local demo draft/);
+    assert.doesNotMatch(JSON.stringify(artifactEvent), /\/Users\/atlasai|workspace-demo-artifacts/);
+    assert.equal(metadataEvent?.kind, "tool.result");
+    assert.equal(metadataEvent?.visibility, "internal");
+    const metadata = JSON.parse(metadataEvent?.resultSummary ?? "{}") as {
+      localPath?: string;
+      metadataPath?: string;
+      runtimeProvider?: string;
+      type?: string;
+    };
+    assert.equal(metadata.runtimeProvider, "mock");
+    assert.equal(metadata.type, "markdown");
+    assert.match(metadata.localPath ?? "", /atlas-workspace-demo-artifacts-/);
+    const markdown = await readFile(metadata.localPath ?? "", "utf8");
+    assert.match(markdown, /# Workspace local demo/);
+    assert.match(markdown, /Delivery: local draft only; no external send performed/);
+
+    const presentationText = events
+      .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+      .map((event) => event.delta)
+      .join("");
+    assert.doesNotMatch(presentationText, /\/Users\/atlasai|workspace-demo-artifacts/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("approved CLI path uses injected runner only when explicitly selected", async () => {

@@ -9,6 +9,10 @@ import type {
 import { validateLocalRuntimeInput } from "./workspace-local-runtime-adapter.ts";
 import { buildWorkspaceRuntimeContext } from "./workspace-runtime-context.ts";
 import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
+import {
+  maybeWriteWorkspaceDraftArtifact,
+  type WorkspaceDraftArtifactResult,
+} from "./workspace-draft-artifacts.ts";
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -173,6 +177,26 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       steps[2] = { ...steps[2], status: "complete", summary: "Completed the AgentEvent run." };
       yield taskStep(eventCtx, steps[1]);
       yield messageComplete(eventCtx, messageId, "assistant", content);
+      const draftArtifact = await maybeWriteWorkspaceDraftArtifact({
+        prompt: checkedInput.prompt,
+        content,
+        taskTitle: checkedInput.title ?? "Run Mastra AI SDK workspace task",
+        runtimeProvider: "mastra",
+        runId: eventCtx.runId,
+        taskId: eventCtx.taskId,
+        now: eventCtx.now,
+        root: ctx.draftArtifactRoot,
+      });
+      if (draftArtifact) {
+        yield draftArtifactInspectorEvent(eventCtx, draftArtifact);
+        yield {
+          ...baseEvent(eventCtx),
+          id: eventCtx.nextId("evt_artifact"),
+          kind: "artifact.created",
+          visibility: "presentation",
+          artifact: draftArtifact.artifact,
+        };
+      }
       yield taskStep(eventCtx, steps[2]);
       yield taskComplete(eventCtx, checkedInput.title ?? "Run Mastra AI SDK workspace task", steps);
     } catch (error) {
@@ -354,6 +378,18 @@ function referenceInspectorEvent(ctx: AdapterEventContext, packet: WorkspaceRefe
     toolName: "workspace.references",
     label: "Workspace references resolved",
     resultSummary: JSON.stringify(createWorkspaceReferenceInspectorPacket(packet)),
+  };
+}
+
+function draftArtifactInspectorEvent(ctx: AdapterEventContext, draftArtifact: WorkspaceDraftArtifactResult): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_internal"),
+    kind: "tool.result",
+    visibility: "internal",
+    toolName: "workspace.artifacts",
+    label: "Local draft artifact saved",
+    resultSummary: JSON.stringify(draftArtifact.metadata),
   };
 }
 
