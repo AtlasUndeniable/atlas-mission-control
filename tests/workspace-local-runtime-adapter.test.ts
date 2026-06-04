@@ -73,7 +73,7 @@ function matchedReferencePacket(): WorkspaceReferencePacket {
     }],
     guidance: ["Use only these resolved Workspace references for memory-backed claims."],
     userFacingSummary: "1 Workspace reference resolved.",
-    internalSummary: "references=1; coverage=matched; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+    internalSummary: "references=1; coverage=matched; path_summaries=librarian-reports/ricky-calder-source-match.md",
   };
 }
 
@@ -299,7 +299,7 @@ test("runtime context keeps reference paths internal while exposing safe excerpt
     }],
     guidance: ["Use only these resolved Workspace references for memory-backed claims."],
     userFacingSummary: "1 Workspace reference resolved.",
-    internalSummary: "references=1; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-reports/ricky-calder-source-match.md",
+    internalSummary: "references=1; path_summaries=librarian-reports/ricky-calder-source-match.md",
   };
   const context = buildWorkspaceRuntimeContext({
     prompt: "Update Ricky handover",
@@ -309,7 +309,8 @@ test("runtime context keeps reference paths internal while exposing safe excerpt
   assert.match(context.systemPrompt, /Ricky Calder Source Match/);
   assert.match(context.systemPrompt, /Matched Ricky Calder call archive candidates/);
   assert.doesNotMatch(context.systemPrompt, /\/Users\/atlasai/);
-  assert.match(context.internalSummary, /\/Users\/atlasai/);
+  assert.match(context.internalSummary, /path_summaries=librarian-reports\/ricky-calder-source-match\.md/);
+  assert.doesNotMatch(context.internalSummary, /\/Users\/atlasai|\.openclaw/);
 });
 
 test("runtime context labels thin references as provisional", () => {
@@ -330,7 +331,7 @@ test("runtime context labels thin references as provisional", () => {
     }],
     guidance: ["Resolved references are thin; produce a useful draft from the prompt."],
     userFacingSummary: "1 Workspace reference resolved (thin).",
-    internalSummary: "references=1; coverage=thin; paths=/Users/atlasai/.openclaw/workspace/tools/librarian-context-packs/context-pack-user-rhys.md",
+    internalSummary: "references=1; coverage=thin; path_summaries=librarian-context-packs/context-pack-user-rhys.md",
   };
   const context = buildWorkspaceRuntimeContext({
     prompt: "What are the top 5 trends from my recent calls?",

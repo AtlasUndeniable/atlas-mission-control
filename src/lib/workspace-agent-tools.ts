@@ -202,6 +202,10 @@ const REFERENCE_SOURCE_ROOTS = [
   "librarian-context-packs",
   "librarian-reports",
   "librarian-review-queue",
+  "call-transcripts",
+  "call-archives",
+  "knowledge-topic-indexes",
+  "project-docs",
   "workspace-state",
 ];
 
@@ -564,17 +568,27 @@ async function executeSummarizeCalls(
     limit: input.limit,
   }, options);
   const callReferences = packet.references
-    .filter((reference) => /\b(call|calls|transcript|fireflies|conversation)\b/i.test([
-      reference.title,
-      reference.excerpt,
-      reference.matchedTerms.join(" "),
-    ].join(" ")))
+    .filter(isCallContentReference)
     .slice(0, input.limit ?? DEFAULT_LIMIT)
     .map(safeReference);
-  const coverage: WorkspaceAgentToolCoverage = callReferences.length === 0 ? "none" : "thin";
-  const limitation = coverage === "none"
-    ? "No usable call references were available; do not claim recent-call recall."
-    : "Limited call/context references available; summarize only these snippets and mark conclusions as provisional.";
+  const systemReferences = packet.references.filter((reference) => reference.sourceType === "system-memory-maintenance");
+  const coverage: WorkspaceAgentToolCoverage = callReferences.length === 0
+    ? packet.references.length ? "thin" : "none"
+    : callReferences.some((reference) => reference.confidence === "high") ? "matched" : "thin";
+  const limitation = callReferences.length === 0
+    ? [
+      systemReferences.length
+        ? `Found: ${systemReferences.length} system memory-maintenance reference${systemReferences.length === 1 ? "" : "s"}, but no call transcript or call-summary handles.`
+        : "Found: no usable call transcript or call-summary references.",
+      "Missing: call transcript/call-summary content for the requested period.",
+      "Best next search: call-transcripts and call-archives for today's or recent Fireflies notes.",
+    ].join(" ")
+    : [
+      `Found: ${callReferences.length} call transcript/summary reference${callReferences.length === 1 ? "" : "s"}.`,
+      systemReferences.length ? `Also found: ${systemReferences.length} system memory-maintenance reference${systemReferences.length === 1 ? "" : "s"}; treat as ingestion/graph health, not call content.` : "",
+      "Missing: any source type not listed in the resolved handles.",
+      "Best next search: narrow by client/date if more detail is needed.",
+    ].filter(Boolean).join(" ");
 
   return {
     toolName: "summarize_calls",
@@ -704,6 +718,10 @@ function safeReference(reference: WorkspaceReferencePacket["references"][number]
     score: reference.score,
     matchedTerms: reference.matchedTerms.map((term) => safeText(term, 40)).slice(0, 8),
   };
+}
+
+function isCallContentReference(reference: WorkspaceReferencePacket["references"][number]): boolean {
+  return reference.sourceType === "call-transcript" || reference.sourceType === "call-summary";
 }
 
 function stripArtifactScore(artifact: ScoredArtifact): WorkspaceAgentSafeArtifact {

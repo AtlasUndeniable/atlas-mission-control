@@ -30,6 +30,10 @@ async function fixtureRoots(): Promise<{
   const contextPacksRoot = join(root, "librarian-context-packs");
   const reportsRoot = join(root, "librarian-reports");
   const reviewQueueRoot = join(root, "librarian-review-queue");
+  const callTranscriptsRoot = join(root, "fireflies");
+  const callArchivesRoot = join(root, "call-archives");
+  const knowledgeTopicsRoot = join(root, "knowledge-topics");
+  const projectDocsRoot = join(root, "project-docs");
   const stateCurrentPath = join(root, "state-current.md");
   const artifactControlRoot = join(root, "artifact-control");
   const artifactMetadataRoot = join(root, "archives");
@@ -39,6 +43,10 @@ async function fixtureRoots(): Promise<{
     mkdir(contextPacksRoot, { recursive: true }),
     mkdir(reportsRoot, { recursive: true }),
     mkdir(reviewQueueRoot, { recursive: true }),
+    mkdir(callTranscriptsRoot, { recursive: true }),
+    mkdir(callArchivesRoot, { recursive: true }),
+    mkdir(knowledgeTopicsRoot, { recursive: true }),
+    mkdir(projectDocsRoot, { recursive: true }),
     mkdir(artifactControlRoot, { recursive: true }),
     mkdir(artifactMetadataRoot, { recursive: true }),
     mkdir(artifactExportRoot, { recursive: true }),
@@ -50,6 +58,10 @@ async function fixtureRoots(): Promise<{
       contextPacksRoot,
       reportsRoot,
       reviewQueueRoot,
+      callTranscriptsRoot,
+      callArchivesRoot,
+      knowledgeTopicsRoot,
+      projectDocsRoot,
       stateCurrentPath,
       now: () => new Date("2026-06-02T00:00:00.000Z"),
     },
@@ -155,10 +167,14 @@ test("find_artifact returns safe workspace-demo artifact handles without mutatin
 test("summarize_calls reports thin coverage honestly when call references are limited", async () => {
   const fixtures = await fixtureRoots();
   try {
-    await writeFile(join(fixtures.referenceOptions.reportsRoot!, "daily-delta-2026-06-01.md"), [
-      "# Daily Delta 2026-06-01",
-      "Recent calls trend toward clearer handovers and tighter pricing language.",
-      "Only summary notes are available here; full transcript coverage was not run.",
+    await writeFile(join(fixtures.referenceOptions.callTranscriptsRoot!, "2026-06-03-Corey-Batson-x-Rhys.md"), [
+      "# Corey Batson x Rhys",
+      "Delivery model tradeoff, Loom-heavy fulfilment, pricing restructure, and hiring another coach.",
+    ].join("\n"));
+    await writeFile(join(fixtures.referenceOptions.reportsRoot!, "memory-maintenance-2026-06-03.md"), [
+      "# Atlas Memory Maintenance Report",
+      "new notes sample includes memory/PARA/Resources/fireflies/2026-06-03-Corey-Batson-x-Rhys.",
+      "This is graph maintenance, not transcript content.",
     ].join("\n"));
 
     const execution = await executeWorkspaceAgentTool("summarize_calls", {
@@ -168,10 +184,38 @@ test("summarize_calls reports thin coverage honestly when call references are li
     }, { referenceOptions: fixtures.referenceOptions });
 
     assert.equal(execution.output.tool, "summarize_calls");
-    assert.equal(execution.output.coverage, "thin");
-    assert.match(execution.output.limitation, /Limited call\/context references/i);
+    assert.equal(execution.output.coverage, "matched");
+    assert.match(execution.output.limitation, /Found:/i);
+    assert.match(execution.output.limitation, /Missing:/i);
+    assert.match(execution.output.limitation, /Best next search:/i);
     assert.ok(execution.output.trends.length >= 1);
+    assert.equal(execution.output.callReferences[0]?.sourceType, "call-transcript");
     assert.doesNotMatch(JSON.stringify(execution.output), /full transcript recall|\/Users\/atlasai|atlas-workspace-agent-tools/);
+  } finally {
+    await rm(fixtures.root, { recursive: true, force: true });
+  }
+});
+
+test("summarize_calls does not treat memory maintenance as call content", async () => {
+  const fixtures = await fixtureRoots();
+  try {
+    await writeFile(join(fixtures.referenceOptions.reportsRoot!, "memory-maintenance-2026-06-03.md"), [
+      "# Atlas Memory Maintenance Report",
+      "Broken links changed after recent call transcript ingestion.",
+      "No transcript excerpts are included in this system maintenance report.",
+    ].join("\n"));
+
+    const execution = await executeWorkspaceAgentTool("summarize_calls", {
+      query: "What are some topics from today's calls?",
+      project: "Undeniable",
+      room: "workspace-demo",
+    }, { referenceOptions: fixtures.referenceOptions });
+
+    assert.equal(execution.output.coverage, "thin");
+    assert.deepEqual(execution.output.callReferences, []);
+    assert.match(execution.output.limitation, /system memory-maintenance/i);
+    assert.match(execution.output.limitation, /Missing: call transcript\/call-summary content/i);
+    assert.doesNotMatch(JSON.stringify(execution.output), /\/Users\/atlasai|atlas-workspace-agent-tools/);
   } finally {
     await rm(fixtures.root, { recursive: true, force: true });
   }
@@ -238,4 +282,3 @@ test("prompt planner runs expected read-only tools without creating artifact int
     await rm(fixtures.root, { recursive: true, force: true });
   }
 });
-

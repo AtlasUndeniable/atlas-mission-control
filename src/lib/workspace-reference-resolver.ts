@@ -3,9 +3,14 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 export type WorkspaceReferenceSourceType =
+  | "call-summary"
+  | "call-transcript"
+  | "knowledge-index"
   | "librarian-context-pack"
   | "librarian-report"
   | "librarian-review-queue"
+  | "project-doc"
+  | "system-memory-maintenance"
   | "workspace-state"
   | "artifact-metadata";
 
@@ -78,6 +83,10 @@ export interface WorkspaceReferenceResolverOptions {
   contextPacksRoot?: string;
   reportsRoot?: string;
   reviewQueueRoot?: string;
+  callTranscriptsRoot?: string;
+  callArchivesRoot?: string;
+  knowledgeTopicsRoot?: string;
+  projectDocsRoot?: string;
   stateCurrentPath?: string;
   maxReferences?: number;
   maxCandidateReads?: number;
@@ -135,6 +144,7 @@ const MEMORY_INTENT_TERMS = new Set([
   "calls",
   "client",
   "current",
+  "fireflies",
   "handover",
   "hire",
   "memory",
@@ -145,7 +155,12 @@ const MEMORY_INTENT_TERMS = new Set([
   "report",
   "ricky",
   "source",
+  "summaries",
+  "summary",
+  "today",
+  "topics",
   "transcript",
+  "transcripts",
   "trends",
   "workspace",
 ]);
@@ -158,6 +173,10 @@ const MAX_CANDIDATE_READS = 32;
 export const WORKSPACE_REFERENCE_CONTEXT_PACKS_ROOT = "/Users/atlasai/.openclaw/workspace/tools/librarian-context-packs";
 export const WORKSPACE_REFERENCE_REPORTS_ROOT = "/Users/atlasai/.openclaw/workspace/tools/librarian-reports";
 export const WORKSPACE_REFERENCE_REVIEW_QUEUE_ROOT = "/Users/atlasai/.openclaw/workspace/tools/librarian-review-queue";
+export const WORKSPACE_REFERENCE_CALL_TRANSCRIPTS_ROOT = "/Users/atlasai/.openclaw/workspace/memory/PARA/Resources/fireflies";
+export const WORKSPACE_REFERENCE_CALL_ARCHIVES_ROOT = "/Users/atlasai/.openclaw/workspace/memory/PARA/Archives/undeniable-os/call-archives";
+export const WORKSPACE_REFERENCE_KNOWLEDGE_TOPICS_ROOT = "/Users/atlasai/.openclaw/workspace/knowledge/topics";
+export const WORKSPACE_REFERENCE_PROJECT_DOCS_ROOT = "/Users/atlasai/.openclaw/workspace/memory/PARA/Projects";
 export const WORKSPACE_REFERENCE_STATE_CURRENT_FILE = "/Users/atlasai/.openclaw/workspace/state/state-current.md";
 
 export function createEmptyWorkspaceReferencePacket(
@@ -208,15 +227,20 @@ export async function resolveWorkspaceReferences(
   const roots = sourceRoots(options);
   const rootsRead = roots.map((root) => ({ key: root.key, path: root.path, present: existsSync(root.path) }));
   const terms = tokenize([input.prompt, input.title].filter(Boolean).join(" "));
+  const callIntent = promptLooksCallReferenceDependent(terms);
 
   if (terms.length === 0 || !promptLooksReferenceDependent(terms)) {
     return createEmptyWorkspaceReferencePacket(input, { now, rootsRead });
   }
 
   const candidates = await collectCandidatePaths(roots, terms);
-  const selectedPaths = candidates
+  const sortedCandidates = candidates
     .sort((a, b) => b.filenameScore - a.filenameScore || b.path.localeCompare(a.path))
-    .slice(0, options.maxCandidateReads ?? MAX_CANDIDATE_READS);
+  const selectedPaths = selectRoutedCandidatePaths(
+    sortedCandidates,
+    options.maxCandidateReads ?? MAX_CANDIDATE_READS,
+    callIntent,
+  );
 
   const scored: ScoredReference[] = [];
   for (const candidate of selectedPaths) {
@@ -225,27 +249,17 @@ export async function resolveWorkspaceReferences(
   }
 
   const maxReferences = options.maxReferences ?? MAX_REFERENCES;
-  const references = dedupeScoredReferences(scored)
-    .sort((a, b) => b.score - a.score || dateValue(b.updatedAt) - dateValue(a.updatedAt))
-    .slice(0, maxReferences)
+  const sortedReferences = dedupeScoredReferences(scored)
+    .sort((a, b) => b.score - a.score || dateValue(b.updatedAt) - dateValue(a.updatedAt));
+  const references = selectRoutedReferences(sortedReferences, maxReferences, callIntent)
     .map(toResolvedReference);
 
   if (references.length === 0) {
     return createEmptyWorkspaceReferencePacket(input, { now, rootsRead });
   }
 
-  const coverage = references.some((reference) => reference.confidence === "high")
-    ? "matched"
-    : "thin";
-  const guidance = coverage === "matched"
-    ? [
-      "Use only these resolved Workspace references for memory-backed claims.",
-      "Do not claim broader search across calls, Slack, files, transcripts, or the vault.",
-    ]
-    : [
-      "Resolved references are thin; produce a useful draft from the prompt.",
-      "Mark facts that need confirmation instead of implying unavailable retrieval.",
-    ];
+  const coverage = referenceCoverageFor(references, callIntent);
+  const guidance = referenceGuidanceFor(references, coverage, callIntent);
 
   return {
     resolvedAt: now().toISOString(),
@@ -253,12 +267,12 @@ export async function resolveWorkspaceReferences(
     rootsRead,
     references,
     guidance,
-    userFacingSummary: `${references.length} Workspace reference${references.length === 1 ? "" : "s"} resolved (${coverage}).`,
+    userFacingSummary: userFacingReferenceSummary(references, coverage, callIntent),
     internalSummary: [
       `references=${references.length}`,
       `coverage=${coverage}`,
       `handles=${references.map((reference) => reference.handle).join(",")}`,
-      `paths=${references.map((reference) => reference.sourcePath).join(",")}`,
+      `path_summaries=${references.map((reference) => reference.pathSummary).join(",")}`,
     ].join("; "),
   };
 }
@@ -279,6 +293,32 @@ function sourceRoots(options: WorkspaceReferenceResolverOptions) {
       key: "librarian-review-queue",
       path: options.reviewQueueRoot ?? WORKSPACE_REFERENCE_REVIEW_QUEUE_ROOT,
       sourceType: "librarian-review-queue" as const,
+    },
+    {
+      key: "call-transcripts",
+      path: options.callTranscriptsRoot ?? WORKSPACE_REFERENCE_CALL_TRANSCRIPTS_ROOT,
+      sourceType: "call-transcript" as const,
+    },
+    {
+      key: "call-archives",
+      path: options.callArchivesRoot ?? WORKSPACE_REFERENCE_CALL_ARCHIVES_ROOT,
+      sourceType: "call-summary" as const,
+      recursive: true,
+      maxDepth: 4,
+    },
+    {
+      key: "knowledge-topic-indexes",
+      path: options.knowledgeTopicsRoot ?? WORKSPACE_REFERENCE_KNOWLEDGE_TOPICS_ROOT,
+      sourceType: "knowledge-index" as const,
+      recursive: true,
+      maxDepth: 2,
+    },
+    {
+      key: "project-docs",
+      path: options.projectDocsRoot ?? WORKSPACE_REFERENCE_PROJECT_DOCS_ROOT,
+      sourceType: "project-doc" as const,
+      recursive: true,
+      maxDepth: 3,
     },
     {
       key: "workspace-state",
@@ -307,43 +347,80 @@ async function collectCandidatePaths(
       continue;
     }
 
-    let entries: Array<{ isFile: () => boolean; name: string }>;
-    try {
-      entries = await readdir(root.path, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const paths = root.recursive
+      ? await collectRecursiveReferenceFiles(root.path, root.maxDepth ?? 3)
+      : await collectDirectReferenceFiles(root.path);
 
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const path = join(root.path, entry.name);
+    for (const path of paths) {
       if (!allowedReferenceFile(path)) continue;
       const filenameScore = scoreFilename(path, terms, root.key);
-      if (filenameScore <= 0 && !alwaysConsider(path, root.key)) continue;
+      if (filenameScore <= 0 && !alwaysConsider(path, root.key, terms)) continue;
       candidates.push({
         path,
         sourceType: sourceTypeForPath(path, root.sourceType),
         sourceKey: root.key,
         filenameScore,
-        matchedTerms: matchedTerms(entry.name, terms),
+        matchedTerms: matchedTerms(basename(path), terms),
       });
     }
   }
   return candidates;
 }
 
+async function collectDirectReferenceFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => join(root, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+async function collectRecursiveReferenceFiles(root: string, maxDepth: number): Promise<string[]> {
+  const files: string[] = [];
+  const visit = async (dir: string, depth: number) => {
+    if (depth > maxDepth) return;
+    let entries: Array<{ isDirectory: () => boolean; isFile: () => boolean; name: string }>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isFile()) {
+        files.push(path);
+      } else if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+        await visit(path, depth + 1);
+      }
+    }
+  };
+  await visit(root, 0);
+  return files;
+}
+
 function allowedReferenceFile(path: string): boolean {
   return [".json", ".jsonl", ".md"].includes(extname(path).toLowerCase());
 }
 
-function alwaysConsider(path: string, sourceKey: string): boolean {
+function alwaysConsider(path: string, sourceKey: string, terms: string[]): boolean {
   const name = basename(path).toLowerCase();
   if (sourceKey === "librarian-context-packs") return name.startsWith("context-pack");
+  if (promptLooksCallReferenceDependent(terms)) {
+    if (sourceKey === "call-transcripts") return /^\d{4}-\d{2}-\d{2}|^call-\d{4}-\d{2}-\d{2}/.test(name);
+    if (sourceKey === "call-archives") return /call|transcript|overview|summary|sources|metadata/.test(name);
+    if (sourceKey === "knowledge-topic-indexes") return /call-transcripts|fireflies|transcript/.test(name);
+  }
   return /^(daily-delta|memory-maintenance|memory-repair-plan|artifact-hygiene|review-queue|ingestion-hygiene|index-queue)/.test(name);
 }
 
 function sourceTypeForPath(path: string, fallback: WorkspaceReferenceSourceType): WorkspaceReferenceSourceType {
   const name = basename(path).toLowerCase();
+  if (path.includes("/memory/PARA/Resources/fireflies/")) return "call-transcript";
+  if (path.includes("/call-archives/")) return "call-summary";
+  if (path.includes("/knowledge/topics/")) return "knowledge-index";
+  if (path.includes("/memory/PARA/Projects/")) return "project-doc";
+  if (/^(daily-delta|memory-maintenance|memory-repair-plan)/.test(name)) return "system-memory-maintenance";
   if (name.includes("artifact-hygiene") || name.includes("metadata")) return "artifact-metadata";
   if (name.startsWith("review-queue") || name.startsWith("index-queue") || name.startsWith("ingestion-queue")) {
     return "librarian-review-queue";
@@ -359,8 +436,12 @@ async function readAndScoreReference(candidate: CandidatePath, terms: string[]):
     const summary = summarizeReferenceContent(candidate.path, raw, terms);
     const searchable = `${candidate.path} ${summary.title} ${summary.searchText} ${summary.excerpt}`;
     const contentScore = scoreTextForTerms(searchable, terms);
-    const score = candidate.filenameScore + contentScore + recencyBoost(info.mtimeMs);
-    const termsMatched = [...new Set([...candidate.matchedTerms, ...matchedTerms(searchable, terms)])];
+    const score = candidate.filenameScore + contentScore + recencyBoost(info.mtimeMs) + routeScore(candidate, terms, searchable);
+    const termsMatched = [...new Set([
+      ...candidate.matchedTerms,
+      ...matchedTerms(searchable, terms),
+      ...sourceMatchedTerms(candidate.sourceType, terms, searchable),
+    ])];
     if (termsMatched.length === 0) return null;
     if (score < 8) return null;
 
@@ -387,6 +468,10 @@ function promptLooksReferenceDependent(terms: string[]): boolean {
   return terms.some((term) => MEMORY_INTENT_TERMS.has(term));
 }
 
+function promptLooksCallReferenceDependent(terms: string[]): boolean {
+  return terms.some((term) => ["call", "calls", "conversation", "fireflies", "today", "transcript", "transcripts"].includes(term));
+}
+
 function dedupeScoredReferences(references: ScoredReference[]): ScoredReference[] {
   const byHandle = new Map<string, ScoredReference>();
   for (const reference of references) {
@@ -394,6 +479,22 @@ function dedupeScoredReferences(references: ScoredReference[]): ScoredReference[
     if (!existing || reference.score > existing.score) byHandle.set(reference.handle, reference);
   }
   return [...byHandle.values()];
+}
+
+function selectRoutedCandidatePaths(
+  candidates: CandidatePath[],
+  maxCandidateReads: number,
+  callIntent: boolean,
+): CandidatePath[] {
+  const selected = candidates.slice(0, maxCandidateReads);
+  if (!callIntent || selected.some((candidate) => candidate.sourceType === "system-memory-maintenance")) {
+    return selected;
+  }
+  const maintenanceCandidate = candidates.find((candidate) => candidate.sourceType === "system-memory-maintenance");
+  if (!maintenanceCandidate) return selected;
+  if (selected.length < maxCandidateReads) return [...selected, maintenanceCandidate];
+  if (selected.length <= 1) return selected;
+  return [...selected.slice(0, maxCandidateReads - 1), maintenanceCandidate];
 }
 
 function toResolvedReference(reference: ScoredReference): WorkspaceResolvedReference {
@@ -410,6 +511,22 @@ function toResolvedReference(reference: ScoredReference): WorkspaceResolvedRefer
     score: reference.score,
     matchedTerms: reference.matchedTerms,
   };
+}
+
+function selectRoutedReferences(
+  references: ScoredReference[],
+  maxReferences: number,
+  callIntent: boolean,
+): ScoredReference[] {
+  const selected = references.slice(0, maxReferences);
+  if (!callIntent || selected.some((reference) => reference.sourceType === "system-memory-maintenance")) {
+    return selected;
+  }
+  const maintenanceReference = references.find((reference) => reference.sourceType === "system-memory-maintenance");
+  if (!maintenanceReference) return selected;
+  if (selected.length < maxReferences) return [...selected, maintenanceReference];
+  if (selected.length <= 1) return selected;
+  return [...selected.slice(0, maxReferences - 1), maintenanceReference];
 }
 
 function summarizeReferenceContent(path: string, raw: string, terms: string[]): {
@@ -559,8 +676,122 @@ function scoreFilename(path: string, terms: string[], sourceKey: string): number
   const name = basename(path).toLowerCase();
   let score = scoreTextForTerms(name, terms) * 2;
   if (sourceKey === "librarian-context-packs" && name.includes("rhys")) score += 4;
+  if (promptLooksCallReferenceDependent(terms)) {
+    if (sourceKey === "call-transcripts") score += 20;
+    if (sourceKey === "call-archives") score += 18;
+    if (sourceKey === "knowledge-topic-indexes" && /call-transcripts|fireflies|transcript/.test(name)) score += 12;
+    if (/^\d{4}-\d{2}-\d{2}|^call-\d{4}-\d{2}-\d{2}/.test(name)) score += 6;
+    score += recentFilenameDateBoost(name, terms);
+  }
   if (/daily-delta|artifact-hygiene|memory-maintenance|review-queue/.test(name)) score += 2;
   return score;
+}
+
+function recentFilenameDateBoost(name: string, terms: string[]): number {
+  if (!terms.some((term) => ["today", "recent", "memory", "calls", "call", "transcripts"].includes(term))) return 0;
+  const match = name.match(/(?:^|call-)(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return 0;
+  const fileDay = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (Number.isNaN(fileDay.getTime())) return 0;
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const ageDays = Math.floor((today.getTime() - fileDay.getTime()) / 86_400_000);
+  if (ageDays < 0) return 0;
+  if (ageDays === 0) return 90;
+  if (ageDays <= 2) return 80;
+  if (ageDays <= 7) return 60;
+  if (ageDays <= 30) return 24;
+  return 0;
+}
+
+function routeScore(candidate: CandidatePath, terms: string[], searchable: string): number {
+  if (!promptLooksCallReferenceDependent(terms)) return 0;
+  if (candidate.sourceType === "call-transcript") return 35;
+  if (candidate.sourceType === "call-summary") return 30;
+  if (candidate.sourceType === "knowledge-index") return 8;
+  if (candidate.sourceType === "system-memory-maintenance") {
+    return /\bnew notes|fireflies|call transcripts?|memory graph|broken links|orphan/i.test(searchable) ? 4 : -8;
+  }
+  return 0;
+}
+
+function sourceMatchedTerms(
+  sourceType: WorkspaceReferenceSourceType,
+  terms: string[],
+  searchable: string,
+): string[] {
+  if (!promptLooksCallReferenceDependent(terms)) return [];
+  if (sourceType === "call-transcript") return terms.filter((term) => ["call", "calls", "today", "recent", "memory", "transcript", "transcripts"].includes(term));
+  if (sourceType === "call-summary") return terms.filter((term) => ["call", "calls", "today", "recent", "memory", "summary", "summaries", "transcript", "transcripts"].includes(term));
+  if (sourceType === "knowledge-index" && /\bcall|transcript|fireflies/i.test(searchable)) {
+    return terms.filter((term) => ["call", "calls", "today", "recent", "memory", "transcript", "transcripts"].includes(term));
+  }
+  if (sourceType === "system-memory-maintenance" && /\bcall|transcript|fireflies/i.test(searchable)) {
+    return terms.filter((term) => ["call", "calls", "today", "recent", "memory", "transcript", "transcripts"].includes(term));
+  }
+  return [];
+}
+
+function referenceCoverageFor(
+  references: WorkspaceResolvedReference[],
+  callIntent: boolean,
+): WorkspaceReferenceCoverage {
+  if (!callIntent) {
+    return references.some((reference) => reference.confidence === "high") ? "matched" : "thin";
+  }
+  const hasCallContent = references.some(isCallContentReference);
+  if (!hasCallContent) return "thin";
+  return references.some((reference) => isCallContentReference(reference) && reference.confidence === "high") ? "matched" : "thin";
+}
+
+function referenceGuidanceFor(
+  references: WorkspaceResolvedReference[],
+  coverage: WorkspaceReferenceCoverage,
+  callIntent: boolean,
+): string[] {
+  const base = coverage === "matched"
+    ? [
+      "Use only these resolved Workspace references for memory-backed claims.",
+      "Do not claim broader search across calls, Slack, files, transcripts, or the vault.",
+    ]
+    : [
+      "Resolved references are thin; produce a useful draft from the prompt.",
+      "Mark facts that need confirmation instead of implying unavailable retrieval.",
+    ];
+  if (!callIntent) return base;
+  const hasCallContent = references.some(isCallContentReference);
+  return [
+    ...base,
+    "For call, transcript, or recent-memory questions, answer with short sections: Found, Missing, Best next search.",
+    "Treat system-memory-maintenance references as graph/ingestion health only, not as call transcript content.",
+    hasCallContent
+      ? "Call transcript or call-summary handles were found; summarize only the listed excerpts."
+      : "No call transcript or call-summary handles were resolved; say call-content coverage is missing or limited.",
+  ];
+}
+
+function userFacingReferenceSummary(
+  references: WorkspaceResolvedReference[],
+  coverage: WorkspaceReferenceCoverage,
+  callIntent: boolean,
+): string {
+  if (!callIntent) {
+    return `${references.length} Workspace reference${references.length === 1 ? "" : "s"} resolved (${coverage}).`;
+  }
+  const callCount = references.filter(isCallContentReference).length;
+  const maintenanceCount = references.filter((reference) => reference.sourceType === "system-memory-maintenance").length;
+  const indexCount = references.filter((reference) => reference.sourceType === "knowledge-index").length;
+  const found = [
+    callCount ? `${callCount} call transcript/summary reference${callCount === 1 ? "" : "s"}` : null,
+    indexCount ? `${indexCount} topic index reference${indexCount === 1 ? "" : "s"}` : null,
+    maintenanceCount ? `${maintenanceCount} system memory-maintenance reference${maintenanceCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join("; ") || "no call-content references";
+  const missing = callCount ? "none obvious from resolved sources" : "call transcript or call-summary content";
+  return `Found: ${found}. Missing: ${missing}. Best next search: call-transcripts and call-archives for today's or recent Fireflies notes. Coverage: ${coverage}.`;
+}
+
+function isCallContentReference(reference: Pick<WorkspaceResolvedReference, "sourceType">): boolean {
+  return reference.sourceType === "call-transcript" || reference.sourceType === "call-summary";
 }
 
 function recencyBoost(mtimeMs: number): number {
@@ -588,6 +819,10 @@ function titleFromPath(path: string): string {
 
 function pathSummary(path: string): string {
   const name = basename(path);
+  if (path.includes("/memory/PARA/Resources/fireflies/")) return `call-transcripts/${name}`;
+  if (path.includes("/call-archives/")) return `call-archives/${name}`;
+  if (path.includes("/knowledge/topics/")) return `knowledge-topics/${name}`;
+  if (path.includes("/memory/PARA/Projects/")) return `project-docs/${name}`;
   if (path.includes("/librarian-context-packs/")) return `librarian-context-packs/${name}`;
   if (path.includes("/librarian-reports/")) return `librarian-reports/${name}`;
   if (path.includes("/librarian-review-queue/")) return `librarian-review-queue/${name}`;
