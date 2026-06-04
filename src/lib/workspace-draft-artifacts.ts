@@ -87,7 +87,7 @@ export function shouldCreateWorkspaceDraftArtifact(input: Pick<WorkspaceDraftArt
 export function detectWorkspaceDraftArtifactIntent(
   input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">,
 ): WorkspaceDraftArtifactIntent {
-  const text = `${input.prompt} ${input.taskTitle ?? ""}`.toLowerCase();
+  const text = input.prompt.toLowerCase();
   if (hasExplicitPdfArtifactIntent(text)) {
     return createIntent("pdf", "PDF export requested.");
   }

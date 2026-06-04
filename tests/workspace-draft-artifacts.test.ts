@@ -27,6 +27,10 @@ test("draft artifact intent is explicit deliverable only", () => {
     taskTitle: "Recent call trends",
   }), false);
   assert.equal(shouldCreateWorkspaceDraftArtifact({
+    prompt: "With available knowledge, what are some topics from today's calls or recent memory?",
+    taskTitle: "Ricky Calder pay structure handover",
+  }), false);
+  assert.equal(shouldCreateWorkspaceDraftArtifact({
     prompt: "Give me 10 ideas for next week.",
     taskTitle: "Ideas",
   }), false);
