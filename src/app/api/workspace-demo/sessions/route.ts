@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKSPACE_ROOM,
   getLatestWorkspaceLocalSession,
   hydrateWorkspaceLocalSession,
+  listWorkspaceLocalArtifacts,
   listWorkspaceLocalSessions,
   updateWorkspaceLocalSessionSelection,
 } from "@/lib/workspace-local-sessions";
@@ -23,11 +24,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const scope = sessionScopeFromUrl(url);
   const sessionId = url.searchParams.get("sessionId");
-  const [snapshot, sessions] = await Promise.all([
+  const [snapshot, sessions, artifacts] = await Promise.all([
     sessionId
       ? hydrateWorkspaceLocalSession({ ...scope, sessionId })
       : getLatestWorkspaceLocalSession(scope),
     listWorkspaceLocalSessions(scope),
+    listWorkspaceLocalArtifacts(scope),
   ]);
 
   return NextResponse.json({
@@ -35,6 +37,7 @@ export async function GET(request: Request) {
     localOnly: true,
     session: snapshot,
     sessions,
+    artifacts,
   });
 }
 

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
-import type { AgentEvent, Artifact, Message, Task, TaskStep } from "./workspace-demo-events.ts";
+import type { AgentEvent, Artifact, ArtifactType, Message, Task, TaskStep } from "./workspace-demo-events.ts";
 
 export const WORKSPACE_DEMO_SESSION_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-sessions";
 export const DEFAULT_WORKSPACE_ROOM = "workspace-demo";
@@ -32,6 +32,18 @@ export interface WorkspaceLocalSessionThread {
   steps: TaskStep[];
   task: Task | null;
   tasks: Task[];
+}
+
+export interface WorkspaceLocalArtifact {
+  id: string;
+  type: ArtifactType;
+  title: string;
+  subtitle: string;
+  preview: string;
+  createdAt: string;
+  sessionId: string;
+  sessionTitle: string;
+  sessionUpdatedAt: string;
 }
 
 export interface WorkspaceLocalSessionScope {
@@ -129,6 +141,37 @@ export async function getLatestWorkspaceLocalSession(
   const latest = sessions[0];
   if (!latest) return null;
   return hydrateWorkspaceLocalSession({ ...scope, sessionId: latest.id });
+}
+
+export async function listWorkspaceLocalArtifacts(
+  scope: WorkspaceLocalSessionScope & { limit?: number } = {},
+): Promise<WorkspaceLocalArtifact[]> {
+  const sessions = await listWorkspaceLocalSessions(scope);
+  const limit = Number.isFinite(scope.limit) ? Math.max(1, Math.min(Number(scope.limit), 80)) : 40;
+  const artifactById = new Map<string, WorkspaceLocalArtifact>();
+
+  for (const session of sessions) {
+    const snapshot = await hydrateWorkspaceLocalSession({ ...scope, sessionId: session.id });
+    if (!snapshot) continue;
+    for (const event of snapshot.events) {
+      if (event.kind !== "artifact.created") continue;
+      const artifact = normalizeWorkspaceLocalArtifact(event.artifact, {
+        createdAt: event.createdAt,
+        sessionId: snapshot.metadata.id,
+        sessionTitle: snapshot.metadata.title,
+        sessionUpdatedAt: snapshot.metadata.updatedAt,
+      });
+      if (!artifact) continue;
+      const existing = artifactById.get(artifact.id);
+      if (!existing || Date.parse(artifact.createdAt) >= Date.parse(existing.createdAt)) {
+        artifactById.set(artifact.id, artifact);
+      }
+    }
+  }
+
+  return [...artifactById.values()]
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, limit);
 }
 
 export async function hydrateWorkspaceLocalSession(
@@ -284,6 +327,43 @@ function isSafeWorkspaceSessionId(value: string): boolean {
 function assertSafeWorkspaceArtifactId(value: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(value)) throw new Error("Unsafe workspace artifact id.");
   return value;
+}
+
+function normalizeWorkspaceLocalArtifact(
+  artifact: Artifact,
+  context: Pick<WorkspaceLocalArtifact, "createdAt" | "sessionId" | "sessionTitle" | "sessionUpdatedAt">,
+): WorkspaceLocalArtifact | null {
+  if (!artifact || typeof artifact !== "object") return null;
+  if (!isSafeWorkspaceArtifactId(artifact.id) || !isKnownWorkspaceArtifactType(artifact.type)) return null;
+  return {
+    id: artifact.id,
+    type: artifact.type,
+    title: safeDisplayText(artifact.title, "Workspace artifact"),
+    subtitle: safeDisplayText(artifact.subtitle, "Local Workspace artifact"),
+    preview: safeDisplayText(artifact.preview, ""),
+    createdAt: context.createdAt,
+    sessionId: context.sessionId,
+    sessionTitle: safeDisplayText(context.sessionTitle, "Workspace session"),
+    sessionUpdatedAt: context.sessionUpdatedAt,
+  };
+}
+
+function isSafeWorkspaceArtifactId(value: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(value);
+}
+
+function isKnownWorkspaceArtifactType(value: string): value is ArtifactType {
+  return ["document", "spreadsheet", "audit", "brief", "playbook", "markdown", "pdf"].includes(value);
+}
+
+function safeDisplayText(value: string, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const cleaned = value
+    .replace(/\/Users\/atlasai\/\S+/g, "[local artifact]")
+    .replace(/\.openclaw\/\S+/g, "[local artifact]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || fallback;
 }
 
 async function readWorkspaceSessionMetadataFile(path: string): Promise<WorkspaceLocalSessionMetadata | null> {

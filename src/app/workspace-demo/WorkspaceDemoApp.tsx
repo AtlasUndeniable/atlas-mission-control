@@ -90,6 +90,13 @@ interface WorkspaceSessionMetadata {
   selectedArtifactId: string | null;
 }
 
+type WorkspaceLibraryArtifact = Artifact & {
+  createdAt: string;
+  sessionId: string;
+  sessionTitle: string;
+  sessionUpdatedAt: string;
+};
+
 interface WorkspaceHydratedThread {
   messages: Message[];
   artifacts: Artifact[];
@@ -107,6 +114,7 @@ interface WorkspaceSessionsResponse {
   ok?: boolean;
   session?: WorkspaceSessionSnapshot | null;
   sessions?: WorkspaceSessionMetadata[];
+  artifacts?: WorkspaceLibraryArtifact[];
 }
 
 const initialThreadState: ThreadState = {
@@ -447,12 +455,92 @@ function EmptyState({
   );
 }
 
-function WorkspacePanelView({ panel }: { panel: Exclude<WorkspacePanel, "tasks"> }) {
-  const panelCopy: Record<Exclude<WorkspacePanel, "tasks">, { title: string; body: string }> = {
-    library: {
-      title: "Library is coming next",
-      body: "Saved Workspace references and artifact history will live here once persistence is connected. For now, only the current browser session is available.",
-    },
+function LibraryPanel({
+  artifacts,
+  hydrating,
+  onOpenArtifact,
+}: {
+  artifacts: WorkspaceLibraryArtifact[];
+  hydrating: boolean;
+  onOpenArtifact: (artifact: Artifact) => void;
+}) {
+  if (hydrating) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Library</div>
+        <h1>Loading local artifacts...</h1>
+        <p>Checking saved Workspace sessions for this project.</p>
+      </section>
+    );
+  }
+
+  if (artifacts.length === 0) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Library</div>
+        <h1>No local artifacts yet</h1>
+        <p>Artifact cards saved from completed Workspace sessions will appear here. This view is local-only and does not upload or send files.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={styles.libraryPanel}>
+      <div className={styles.libraryHeader}>
+        <div>
+          <div className={styles.panelKicker}>Library</div>
+          <h1>Recent local artifacts</h1>
+        </div>
+        <span>{artifacts.length} saved</span>
+      </div>
+      <div className={styles.libraryList}>
+        {artifacts.map((artifact) => {
+          const createdAt = formatArtifactCreatedAt(artifact.createdAt);
+          return (
+            <button
+              className={styles.libraryArtifact}
+              key={`${artifact.sessionId}:${artifact.id}`}
+              onClick={() => onOpenArtifact(artifact)}
+              type="button"
+            >
+              <span className={styles.artifactIcon}><IconDocument /></span>
+              <span className={styles.artifactBody}>
+                <span className={styles.artifactTitle}>{artifact.title}</span>
+                <span className={styles.artifactMeta}>{artifact.subtitle}</span>
+                <span className={styles.libraryArtifactMeta}>
+                  <span>{artifact.type}</span>
+                  {createdAt ? <span>{createdAt}</span> : null}
+                  <span>{artifact.sessionTitle}</span>
+                </span>
+              </span>
+              <span className={styles.artifactState}>
+                <span>{artifact.type === "pdf" ? "PDF draft saved" : "Markdown draft saved"}</span>
+                <small>{artifact.type === "pdf" ? "Open / Download PDF" : "Open preview"}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function WorkspacePanelView({
+  panel,
+  libraryArtifacts,
+  hydrating,
+  onOpenArtifact,
+}: {
+  panel: Exclude<WorkspacePanel, "tasks">;
+  libraryArtifacts: WorkspaceLibraryArtifact[];
+  hydrating: boolean;
+  onOpenArtifact: (artifact: Artifact) => void;
+}) {
+  if (panel === "library") {
+    return <LibraryPanel artifacts={libraryArtifacts} hydrating={hydrating} onOpenArtifact={onOpenArtifact} />;
+  }
+
+  const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library">, { title: string; body: string }> = {
     plugins: {
       title: "Plugins are not connected yet",
       body: "Runtime tools are available internally where the agent supports them. User-managed plugin controls are intentionally dormant in this alpha.",
@@ -722,6 +810,32 @@ function formatSessionUpdatedAt(value: string): string {
   }).format(date);
 }
 
+function libraryArtifactFromEvent({
+  artifact,
+  createdAt,
+  sessionId,
+  sessionTitle,
+}: {
+  artifact: Artifact;
+  createdAt: string;
+  sessionId: string;
+  sessionTitle: string;
+}): WorkspaceLibraryArtifact {
+  return {
+    ...artifact,
+    createdAt,
+    sessionId,
+    sessionTitle,
+    sessionUpdatedAt: createdAt,
+  };
+}
+
+function upsertLibraryArtifact(artifacts: WorkspaceLibraryArtifact[], next: WorkspaceLibraryArtifact): WorkspaceLibraryArtifact[] {
+  return [next, ...artifacts.filter((artifact) => artifact.id !== next.id)]
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, 40);
+}
+
 function slugifyFilename(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "workspace-draft";
 }
@@ -886,10 +1000,10 @@ function Sidebar({
 }) {
   const visibleSessions = sessions.slice(0, 8);
   const navTabs = [
-    { id: "tasks", label: "Tasks" },
-    { id: "library", label: "Library" },
-    { id: "plugins", label: "Plugins" },
-    { id: "scheduled", label: "Scheduled" },
+    { id: "tasks", label: "Tasks", title: "Active tasks" },
+    { id: "library", label: "Library", title: "Artifact library" },
+    { id: "plugins", label: "Plugins", title: "Plugins coming next" },
+    { id: "scheduled", label: "Scheduled", title: "Scheduled coming next" },
   ] as const;
 
   return (
@@ -899,11 +1013,11 @@ function Sidebar({
       <nav className={styles.navMini} aria-label="Workspace navigation">
         {navTabs.map((tab) => (
           <button
-            aria-label={tab.id === "tasks" ? "Active tasks" : `${tab.label} coming next`}
+            aria-label={tab.title}
             className={panel === tab.id ? styles.navMiniActive : undefined}
             key={tab.id}
             onClick={() => onPanelChange(tab.id)}
-            title={tab.id === "tasks" ? "Active tasks" : `${tab.label} coming next`}
+            title={tab.title}
             type="button"
           >
             {tab.label}
@@ -1049,6 +1163,7 @@ export default function WorkspaceDemoApp() {
   const [selectedProjectId, setSelectedProjectId] = useState(() => initialProjectIdFromLocation());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
+  const [libraryArtifacts, setLibraryArtifacts] = useState<WorkspaceLibraryArtifact[]>([]);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
@@ -1085,6 +1200,7 @@ export default function WorkspaceDemoApp() {
       const body = await response.json() as WorkspaceSessionsResponse;
       if (signal?.aborted) return;
       setSessionList(Array.isArray(body.sessions) ? body.sessions : []);
+      setLibraryArtifacts(Array.isArray(body.artifacts) ? body.artifacts : []);
       if (!response.ok || !body.ok || !body.session) {
         setThreadState(initialThreadState);
         setRunState("idle");
@@ -1101,6 +1217,7 @@ export default function WorkspaceDemoApp() {
     } catch {
       if (!signal?.aborted) {
         setSessionList([]);
+        setLibraryArtifacts([]);
         setThreadState(initialThreadState);
         setRunState("idle");
         setActiveSessionId(null);
@@ -1117,10 +1234,21 @@ export default function WorkspaceDemoApp() {
     return () => controller.abort();
   }, [hydrateProjectSession, selectedProjectId]);
 
-  const subscribeToSource = (source: LocalWorkspaceEventSource) => {
+  const subscribeToSource = (
+    source: LocalWorkspaceEventSource,
+    context?: { sessionId: string; sessionTitle: string },
+  ) => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = source.subscribe((event) => {
       setThreadState((state) => reduceEvent(state, event));
+      if (event.kind === "artifact.created" && context) {
+        setLibraryArtifacts((artifacts) => upsertLibraryArtifact(artifacts, libraryArtifactFromEvent({
+          artifact: event.artifact,
+          createdAt: event.createdAt,
+          sessionId: context.sessionId,
+          sessionTitle: context.sessionTitle,
+        })));
+      }
       if (event.kind === "task.complete" || event.kind === "error") setRunState("complete");
     });
   };
@@ -1164,7 +1292,7 @@ export default function WorkspaceDemoApp() {
       },
     });
     sourceRef.current = source;
-    subscribeToSource(source);
+    subscribeToSource(source, { sessionId, sessionTitle: activeTitle });
     source.start();
   };
 
@@ -1245,6 +1373,7 @@ export default function WorkspaceDemoApp() {
     setPrompt("");
     setArtifactPreview({ status: "closed" });
     setActivePanel("tasks");
+    setLibraryArtifacts([]);
     setSelectedProjectId(projectId);
   };
 
@@ -1275,7 +1404,12 @@ export default function WorkspaceDemoApp() {
           <Inspector events={threadState.internalEvents} referencePacket={referencePacket} />
         </header>
         {activePanel !== "tasks" ? (
-          <WorkspacePanelView panel={activePanel} />
+          <WorkspacePanelView
+            panel={activePanel}
+            libraryArtifacts={libraryArtifacts}
+            hydrating={hydrating}
+            onOpenArtifact={openArtifactPreview}
+          />
         ) : hydrating ? (
           <LoadingSessionPanel />
         ) : runState === "idle" ? (

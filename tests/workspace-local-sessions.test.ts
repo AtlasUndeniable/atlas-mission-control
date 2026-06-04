@@ -9,6 +9,7 @@ import {
   buildWorkspaceLocalSessionThread,
   getLatestWorkspaceLocalSession,
   hydrateWorkspaceLocalSession,
+  listWorkspaceLocalArtifacts,
   listWorkspaceLocalSessions,
   updateWorkspaceLocalSessionSelection,
 } from "../src/lib/workspace-local-sessions.ts";
@@ -182,6 +183,37 @@ test("artifact survives hydration and selected artifact metadata stays safe", as
     assert.equal(metadata?.selectedArtifactId, artifact.id);
     assert.equal(snapshot?.thread.artifacts[0]?.type, "pdf");
     assert.equal(snapshot?.thread.artifacts[0]?.title, "Ricky Calder pay structure handover PDF draft");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local artifact library lists safe project scoped artifacts newest first", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-library-"));
+  try {
+    const olderArtifact: Artifact = {
+      id: "artifact_demo_ricky_markdown",
+      type: "markdown",
+      title: "Ricky markdown draft",
+      subtitle: "Atlas / mock / Markdown draft",
+      preview: "Markdown draft saved.",
+    };
+    const newerArtifact: Artifact = {
+      id: "artifact_demo_ricky_pdf",
+      type: "pdf",
+      title: "Ricky PDF /Users/atlasai/private.pdf",
+      subtitle: "Atlas / mastra / PDF draft",
+      preview: "PDF draft saved in /Users/atlasai/.openclaw/workspace/state.",
+    };
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_old", title: "Older task", event: artifactEvent(1, olderArtifact) });
+    await appendWorkspaceLocalSessionEvent({ root, project: "ricky-coach-hire", room: "workspace-demo", sessionId: "session_other", title: "Other project", event: artifactEvent(2, olderArtifact) });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_new", title: "Newer task", event: artifactEvent(5, newerArtifact) });
+
+    const artifacts = await listWorkspaceLocalArtifacts({ root, project: "undeniable-os", room: "workspace-demo" });
+    assert.deepEqual(artifacts.map((artifact) => artifact.id), ["artifact_demo_ricky_pdf", "artifact_demo_ricky_markdown"]);
+    assert.equal(artifacts[0]?.type, "pdf");
+    assert.equal(artifacts[0]?.sessionTitle, "Newer task");
+    assert.doesNotMatch(JSON.stringify(artifacts), /\/Users\/atlasai|\.openclaw/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
