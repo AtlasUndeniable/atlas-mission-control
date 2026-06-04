@@ -18,7 +18,10 @@ export interface WorkspaceLocalSessionMetadata {
   createdAt: string;
   updatedAt: string;
   eventCount: number;
+  artifactCount: number;
   selectedArtifactId: string | null;
+  archivedAt: string | null;
+  archivedReason: string | null;
 }
 
 export interface WorkspaceLocalSessionSnapshot {
@@ -53,6 +56,11 @@ export interface WorkspaceLocalSessionScope {
   project?: string;
   room?: string;
   root?: string;
+}
+
+export interface WorkspaceLocalSessionListScope extends WorkspaceLocalSessionScope {
+  collapseDuplicateTitles?: boolean;
+  includeArchived?: boolean;
 }
 
 interface WorkspaceLocalSessionStoreFile extends WorkspaceLocalSessionSnapshot {
@@ -96,6 +104,7 @@ export async function appendWorkspaceLocalSessionEvent({
   const existingEvents = existingSnapshot?.events ?? await readWorkspaceSessionEventsFile(eventsPath);
   const nextEvents = [...existingEvents, event];
   const createdAt = existingMetadata?.createdAt ?? event.createdAt;
+  const nextThread = buildWorkspaceLocalSessionThread(nextEvents);
   const metadata: WorkspaceLocalSessionMetadata = {
     id: safeSessionId,
     workspaceId: event.workspaceId,
@@ -105,12 +114,15 @@ export async function appendWorkspaceLocalSessionEvent({
     createdAt,
     updatedAt: event.createdAt,
     eventCount: nextEvents.length,
+    artifactCount: nextThread.artifacts.length,
     selectedArtifactId: existingMetadata?.selectedArtifactId ?? null,
+    archivedAt: existingMetadata?.archivedAt ?? null,
+    archivedReason: existingMetadata?.archivedReason ?? null,
   };
   const snapshot: WorkspaceLocalSessionSnapshot = {
     metadata,
     events: nextEvents,
-    thread: buildWorkspaceLocalSessionThread(nextEvents),
+    thread: nextThread,
   };
 
   await appendFile(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
@@ -120,27 +132,16 @@ export async function appendWorkspaceLocalSessionEvent({
 }
 
 export async function listWorkspaceLocalSessions(
-  scope: WorkspaceLocalSessionScope = {},
+  scope: WorkspaceLocalSessionListScope = {},
 ): Promise<WorkspaceLocalSessionMetadata[]> {
-  const normalized = normalizeWorkspaceSessionScope(scope);
-  const projectDir = workspaceProjectDir(normalized.root, normalized.room, normalized.project);
-  let entries: string[];
-  try {
-    entries = await readdir(projectDir);
-  } catch (error) {
-    if (isNodeErrorCode(error, "ENOENT")) return [];
-    throw error;
-  }
-
-  const snapshots = await Promise.all(
-    entries
-      .filter(isSafeWorkspaceSessionId)
-      .map((sessionId) => hydrateWorkspaceLocalSession({ ...normalized, sessionId })),
-  );
-  return snapshots
-    .filter((snapshot): snapshot is WorkspaceLocalSessionSnapshot => Boolean(snapshot))
+  const snapshots = await readWorkspaceLocalSessionSnapshots(scope);
+  const includeArchived = scope.includeArchived === true;
+  const collapseDuplicateTitles = scope.collapseDuplicateTitles !== false;
+  const sessions = snapshots
     .map((snapshot) => snapshot.metadata)
+    .filter((metadata) => includeArchived || !metadata.archivedAt)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return collapseDuplicateTitles ? newestSessionPerTitle(sessions) : sessions;
 }
 
 export async function getLatestWorkspaceLocalSession(
@@ -152,10 +153,46 @@ export async function getLatestWorkspaceLocalSession(
   return hydrateWorkspaceLocalSession({ ...scope, sessionId: latest.id });
 }
 
+export async function archiveStaleDuplicateWorkspaceLocalSessions(
+  scope: WorkspaceLocalSessionScope = {},
+): Promise<WorkspaceLocalSessionMetadata[]> {
+  const normalized = normalizeWorkspaceSessionScope(scope);
+  const snapshots = await readWorkspaceLocalSessionSnapshots({
+    ...normalized,
+    includeArchived: true,
+    collapseDuplicateTitles: false,
+  });
+  const groups = new Map<string, WorkspaceLocalSessionSnapshot[]>();
+  for (const snapshot of snapshots.filter((item) => !item.metadata.archivedAt)) {
+    const key = duplicateTitleKey(snapshot.metadata.title);
+    groups.set(key, [...(groups.get(key) ?? []), snapshot]);
+  }
+
+  const archived: WorkspaceLocalSessionMetadata[] = [];
+  const archivedAt = new Date().toISOString();
+  for (const group of groups.values()) {
+    const sorted = [...group].sort(compareWorkspaceDuplicateSessionKeepOrder);
+    for (const snapshot of sorted.slice(1)) {
+      const nextMetadata: WorkspaceLocalSessionMetadata = {
+        ...snapshot.metadata,
+        archivedAt,
+        archivedReason: "duplicate-local-test-session",
+      };
+      const nextSnapshot: WorkspaceLocalSessionSnapshot = {
+        ...snapshot,
+        metadata: nextMetadata,
+      };
+      await writeWorkspaceSessionSnapshot(normalized.root, nextSnapshot);
+      archived.push(nextMetadata);
+    }
+  }
+  return archived.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
 export async function listWorkspaceLocalArtifacts(
   scope: WorkspaceLocalSessionScope & { artifactRoot?: string; limit?: number } = {},
 ): Promise<WorkspaceLocalArtifact[]> {
-  const sessions = await listWorkspaceLocalSessions(scope);
+  const sessions = await listWorkspaceLocalSessions({ ...scope, includeArchived: true, collapseDuplicateTitles: false });
   const limit = Number.isFinite(scope.limit) ? Math.max(1, Math.min(Number(scope.limit), 80)) : 40;
   const artifactRoot = scope.artifactRoot ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const artifactById = new Map<string, WorkspaceLocalArtifact>();
@@ -199,10 +236,11 @@ export async function hydrateWorkspaceLocalSession(
   const metadata = await readWorkspaceSessionMetadataFile(workspaceSessionFilePath(dir, "metadata.json"));
   if (!metadata) return null;
   const events = await readWorkspaceSessionEventsFile(workspaceSessionFilePath(dir, "events.jsonl"));
+  const thread = buildWorkspaceLocalSessionThread(events);
   const snapshot: WorkspaceLocalSessionSnapshot = {
-    metadata: { ...metadata, eventCount: events.length },
+    metadata: { ...metadata, eventCount: events.length, artifactCount: thread.artifacts.length },
     events,
-    thread: buildWorkspaceLocalSessionThread(events),
+    thread,
   };
   await writeWorkspaceSessionStoreFile(dir, snapshot);
   return snapshot;
@@ -477,15 +515,75 @@ async function writeWorkspaceSessionStoreFile(dir: string, snapshot: WorkspaceLo
   await writeFile(workspaceSessionFilePath(dir, "session.json"), `${JSON.stringify(store, null, 2)}\n`, "utf8");
 }
 
+async function writeWorkspaceSessionSnapshot(root: string, snapshot: WorkspaceLocalSessionSnapshot): Promise<void> {
+  const dir = workspaceSessionDir(root, snapshot.metadata.room, snapshot.metadata.project, snapshot.metadata.id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    workspaceSessionFilePath(dir, "metadata.json"),
+    `${JSON.stringify(snapshot.metadata, null, 2)}\n`,
+    "utf8",
+  );
+  await writeWorkspaceSessionStoreFile(dir, snapshot);
+}
+
+async function readWorkspaceLocalSessionSnapshots(
+  scope: WorkspaceLocalSessionListScope = {},
+): Promise<WorkspaceLocalSessionSnapshot[]> {
+  const normalized = normalizeWorkspaceSessionScope(scope);
+  const projectDir = workspaceProjectDir(normalized.root, normalized.room, normalized.project);
+  let entries: string[];
+  try {
+    entries = await readdir(projectDir);
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return [];
+    throw error;
+  }
+
+  const snapshots = await Promise.all(entries
+    .filter(isSafeWorkspaceSessionId)
+    .map((sessionId) => hydrateWorkspaceLocalSession({ ...normalized, sessionId })));
+  return snapshots.filter((snapshot): snapshot is WorkspaceLocalSessionSnapshot => Boolean(snapshot));
+}
+
+function newestSessionPerTitle(sessions: WorkspaceLocalSessionMetadata[]): WorkspaceLocalSessionMetadata[] {
+  const byTitle = new Map<string, WorkspaceLocalSessionMetadata>();
+  for (const session of sessions) {
+    const key = duplicateTitleKey(session.title);
+    if (!byTitle.has(key)) byTitle.set(key, session);
+  }
+  return [...byTitle.values()];
+}
+
+function duplicateTitleKey(title: string): string {
+  return title.toLowerCase().replace(/\s+/g, " ").trim() || "workspace session";
+}
+
+function compareWorkspaceDuplicateSessionKeepOrder(
+  a: WorkspaceLocalSessionSnapshot,
+  b: WorkspaceLocalSessionSnapshot,
+): number {
+  const aComplete = isCompleteWorkspaceLocalSession(a);
+  const bComplete = isCompleteWorkspaceLocalSession(b);
+  if (aComplete !== bComplete) return aComplete ? -1 : 1;
+  return Date.parse(b.metadata.updatedAt) - Date.parse(a.metadata.updatedAt);
+}
+
+function isCompleteWorkspaceLocalSession(snapshot: WorkspaceLocalSessionSnapshot): boolean {
+  return snapshot.metadata.artifactCount > 0 ||
+    snapshot.thread.tasks.some((task) => task.status === "complete") ||
+    snapshot.thread.task?.status === "complete";
+}
+
 function parseWorkspaceSessionStoreFile(value: string): WorkspaceLocalSessionSnapshot {
   const parsed = JSON.parse(value) as Partial<WorkspaceLocalSessionStoreFile>;
   if (!parsed || typeof parsed !== "object") throw new Error("Workspace session store is invalid.");
   const metadata = parseWorkspaceSessionMetadata(JSON.stringify(parsed.metadata));
   const events = Array.isArray(parsed.events) ? parsed.events.filter(isHydratableWorkspaceSessionEvent) : [];
+  const thread = buildWorkspaceLocalSessionThread(events);
   return {
-    metadata: { ...metadata, eventCount: events.length },
+    metadata: { ...metadata, eventCount: events.length, artifactCount: thread.artifacts.length },
     events,
-    thread: buildWorkspaceLocalSessionThread(events),
+    thread,
   };
 }
 
@@ -508,7 +606,10 @@ function parseWorkspaceSessionMetadata(value: string): WorkspaceLocalSessionMeta
     createdAt: parsed.createdAt,
     updatedAt: parsed.updatedAt,
     eventCount: Number.isFinite(parsed.eventCount) ? Number(parsed.eventCount) : 0,
+    artifactCount: Number.isFinite(parsed.artifactCount) ? Number(parsed.artifactCount) : 0,
     selectedArtifactId: typeof parsed.selectedArtifactId === "string" ? parsed.selectedArtifactId : null,
+    archivedAt: typeof parsed.archivedAt === "string" ? parsed.archivedAt : null,
+    archivedReason: typeof parsed.archivedReason === "string" ? parsed.archivedReason : null,
   };
 }
 

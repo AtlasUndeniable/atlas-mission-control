@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 import {
   appendWorkspaceLocalSessionEvent,
+  archiveStaleDuplicateWorkspaceLocalSessions,
   buildWorkspaceLocalSessionThread,
   getLatestWorkspaceLocalSession,
   hydrateWorkspaceLocalSession,
@@ -151,6 +152,78 @@ test("local session list returns newest metadata for sidebar hydration", async (
   }
 });
 
+test("archived duplicate local sessions are excluded from default sidebar list", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-archive-"));
+  try {
+    const title = "Ricky Calder pay structure handover";
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_old_dup", title, event: userMessage(1, "Old Ricky request") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_new_dup", title, event: userMessage(10, "New Ricky request") });
+
+    const archived = await archiveStaleDuplicateWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+    assert.deepEqual(archived.map((session) => session.id), ["session_old_dup"]);
+    assert.equal(archived[0]?.archivedReason, "duplicate-local-test-session");
+
+    const defaultSessions = await listWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+    assert.deepEqual(defaultSessions.map((session) => session.id), ["session_new_dup"]);
+
+    const allSessions = await listWorkspaceLocalSessions({
+      root,
+      project: "undeniable-os",
+      room: "workspace-demo",
+      includeArchived: true,
+      collapseDuplicateTitles: false,
+    });
+    assert.deepEqual(allSessions.map((session) => session.id), ["session_new_dup", "session_old_dup"]);
+    assert.ok(allSessions.find((session) => session.id === "session_old_dup")?.archivedAt);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("selected session continuation appends events to the same local session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-continuation-"));
+  try {
+    const title = "Ricky Calder pay structure handover";
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_selected", title, event: userMessage(1, "Create the handover.") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_selected", title, event: assistantMessage(2, "Draft saved.") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_selected", title, event: userMessage(5, "Add a follow-up note.") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_selected", title, event: assistantMessage(6, "Follow-up added.") });
+
+    const snapshot = await hydrateWorkspaceLocalSession({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_selected" });
+    assert.equal(snapshot?.metadata.id, "session_selected");
+    assert.equal(snapshot?.metadata.title, title);
+    assert.equal(snapshot?.metadata.eventCount, 4);
+    assert.equal(snapshot?.thread.messages.length, 4);
+    assert.equal(snapshot?.thread.messages[2]?.content, "Add a follow-up note.");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("duplicate archive keeps the newest complete local session when available", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-archive-complete-"));
+  try {
+    const title = "Ricky Calder pay structure handover";
+    const completeArtifact: Artifact = {
+      id: "artifact_demo_complete_ricky_pdf",
+      type: "pdf",
+      title: "Complete Ricky PDF",
+      subtitle: "Atlas / mastra / PDF draft",
+      preview: "PDF draft saved.",
+    };
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_complete", title, event: artifactEvent(1, completeArtifact) });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_new_incomplete", title, event: userMessage(10, "Started another Ricky request") });
+
+    const archived = await archiveStaleDuplicateWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+    const defaultSessions = await listWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+
+    assert.deepEqual(archived.map((session) => session.id), ["session_new_incomplete"]);
+    assert.deepEqual(defaultSessions.map((session) => session.id), ["session_complete"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("new task creates a separate latest local session", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-new-task-"));
   try {
@@ -229,6 +302,41 @@ test("local artifact library lists safe project scoped artifacts newest first", 
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("local artifact library keeps artifacts from archived sessions accessible", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-archived-library-"));
+  try {
+    const title = "Ricky Calder pay structure handover";
+    const olderArtifact: Artifact = {
+      id: "artifact_demo_archived_ricky_pdf",
+      type: "pdf",
+      title: "Archived Ricky PDF",
+      subtitle: "Atlas / mastra / PDF draft",
+      preview: "PDF draft saved.",
+    };
+    const newerArtifact: Artifact = {
+      id: "artifact_demo_current_ricky_pdf",
+      type: "pdf",
+      title: "Current Ricky PDF",
+      subtitle: "Atlas / mastra / PDF draft",
+      preview: "PDF draft saved.",
+    };
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_old_dup", title, event: artifactEvent(1, olderArtifact) });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_new_dup", title, event: artifactEvent(10, newerArtifact) });
+    await archiveStaleDuplicateWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+
+    const visibleSessions = await listWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+    const artifacts = await listWorkspaceLocalArtifacts({ root, project: "undeniable-os", room: "workspace-demo" });
+
+    assert.deepEqual(visibleSessions.map((session) => session.id), ["session_new_dup"]);
+    assert.deepEqual(artifacts.map((artifact) => artifact.id), [
+      "artifact_demo_current_ricky_pdf",
+      "artifact_demo_archived_ricky_pdf",
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

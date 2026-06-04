@@ -87,7 +87,10 @@ interface WorkspaceSessionMetadata {
   createdAt: string;
   updatedAt: string;
   eventCount: number;
+  artifactCount: number;
   selectedArtifactId: string | null;
+  archivedAt: string | null;
+  archivedReason: string | null;
 }
 
 type WorkspaceLibraryArtifact = Artifact & {
@@ -131,6 +134,7 @@ const initialThreadState: ThreadState = {
 
 const WORKSPACE_ROOM = "workspace-demo";
 const DEFAULT_PROJECT_ID = "undeniable-os";
+const ACTIVE_SESSION_STORAGE_PREFIX = "atlas.workspace.activeSession";
 const WORKSPACE_PROJECTS: WorkspaceProjectOption[] = [
   { id: "undeniable-os", title: "Undeniable OS" },
   { id: "ricky-coach-hire", title: "Ricky coach hire" },
@@ -150,6 +154,26 @@ function initialProjectIdFromLocation(): string {
   if (typeof window === "undefined") return DEFAULT_PROJECT_ID;
   const queryProject = new URLSearchParams(window.location.search).get("project");
   return WORKSPACE_PROJECTS.some((project) => project.id === queryProject) ? queryProject ?? DEFAULT_PROJECT_ID : DEFAULT_PROJECT_ID;
+}
+
+function activeSessionStorageKey(projectId: string): string {
+  return `${ACTIVE_SESSION_STORAGE_PREFIX}:${WORKSPACE_ROOM}:${projectId}`;
+}
+
+function readStoredActiveSessionId(projectId: string): string | null {
+  if (typeof window === "undefined") return null;
+  const value = window.sessionStorage.getItem(activeSessionStorageKey(projectId));
+  return value && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(value) ? value : null;
+}
+
+function storeActiveSessionId(projectId: string, sessionId: string | null): void {
+  if (typeof window === "undefined") return;
+  const key = activeSessionStorageKey(projectId);
+  if (!sessionId) {
+    window.sessionStorage.removeItem(key);
+    return;
+  }
+  window.sessionStorage.setItem(key, sessionId);
 }
 
 function createBrowserSessionId(): string {
@@ -831,6 +855,12 @@ function formatSessionUpdatedAt(value: string): string {
   }).format(date);
 }
 
+function formatSessionMeta(session: WorkspaceSessionMetadata): string {
+  const updated = formatSessionUpdatedAt(session.updatedAt);
+  if (session.artifactCount <= 0) return updated;
+  return `${updated} - ${session.artifactCount} artifact${session.artifactCount === 1 ? "" : "s"}`;
+}
+
 function libraryArtifactFromEvent({
   artifact,
   createdAt,
@@ -1067,7 +1097,7 @@ function Sidebar({
               <IconList />
               <span className={styles.sidebarTextBlock}>
                 <span className={styles.sidebarTitle}>{session.title}</span>
-                <span className={styles.sidebarMeta}>{formatSessionUpdatedAt(session.updatedAt)}</span>
+                <span className={styles.sidebarMeta}>{formatSessionMeta(session)}</span>
               </span>
             </button>
           </li>
@@ -1232,6 +1262,7 @@ export default function WorkspaceDemoApp() {
         setThreadState(initialThreadState);
         setRunState("idle");
         setActiveSessionId(null);
+        if (sessionId) storeActiveSessionId(projectId, null);
         setActiveTaskTitle("New local session");
         return;
       }
@@ -1239,6 +1270,7 @@ export default function WorkspaceDemoApp() {
       setThreadState(nextThread);
       setRunState("complete");
       setActiveSessionId(body.session.metadata.id);
+      storeActiveSessionId(projectId, body.session.metadata.id);
       setActiveTaskTitle(body.session.metadata.title);
       setArtifactPreview({ status: "closed" });
     } catch {
@@ -1258,7 +1290,11 @@ export default function WorkspaceDemoApp() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void hydrateProjectSession({ projectId: selectedProjectId, signal: controller.signal });
+    void hydrateProjectSession({
+      projectId: selectedProjectId,
+      sessionId: readStoredActiveSessionId(selectedProjectId) ?? undefined,
+      signal: controller.signal,
+    });
     return () => controller.abort();
   }, [hydrateProjectSession, selectedProjectId]);
 
@@ -1270,12 +1306,22 @@ export default function WorkspaceDemoApp() {
     unsubscribeRef.current = source.subscribe((event) => {
       setThreadState((state) => reduceEvent(state, event));
       if (event.kind === "artifact.created" && context) {
+        setSessionList((sessions) => sessions.map((session) => (
+          session.id === context.sessionId
+            ? { ...session, artifactCount: session.artifactCount + 1, updatedAt: event.createdAt }
+            : session
+        )));
         setLibraryArtifacts((artifacts) => upsertLibraryArtifact(artifacts, libraryArtifactFromEvent({
           artifact: event.artifact,
           createdAt: event.createdAt,
           sessionId: context.sessionId,
           sessionTitle: context.sessionTitle,
         })));
+      }
+      if ((event.kind === "message.complete" || event.kind === "task.complete") && context) {
+        setSessionList((sessions) => sessions.map((session) => (
+          session.id === context.sessionId ? { ...session, updatedAt: event.createdAt } : session
+        )));
       }
       if (event.kind === "task.complete" || event.kind === "error") setRunState("complete");
     });
@@ -1285,22 +1331,28 @@ export default function WorkspaceDemoApp() {
     if (runState === "running") return;
     const activePrompt = nextPrompt?.trim() || prompt.trim();
     if (!activePrompt) return;
-    const activeTitle = titleForPrompt(activePrompt);
     const sessionId = activeSessionId ?? createBrowserSessionId();
+    const existingSession = sessionList.find((session) => session.id === sessionId);
+    const activeTitle = existingSession?.title ?? titleForPrompt(activePrompt);
     setActiveSessionId(sessionId);
+    storeActiveSessionId(selectedProjectId, sessionId);
     setActiveTaskTitle(activeTitle);
     setSessionList((sessions) => {
       const now = new Date().toISOString();
+      const existing = sessions.find((session) => session.id === sessionId);
       const optimisticSession: WorkspaceSessionMetadata = {
         id: sessionId,
-        workspaceId: "workspace_undeniable_demo",
+        workspaceId: existing?.workspaceId ?? "workspace_undeniable_demo",
         project: selectedProjectId,
         room: WORKSPACE_ROOM,
         title: activeTitle,
-        createdAt: now,
+        createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-        eventCount: 0,
-        selectedArtifactId: null,
+        eventCount: existing?.eventCount ?? 0,
+        artifactCount: existing?.artifactCount ?? 0,
+        selectedArtifactId: existing?.selectedArtifactId ?? null,
+        archivedAt: existing?.archivedAt ?? null,
+        archivedReason: existing?.archivedReason ?? null,
       };
       return [optimisticSession, ...sessions.filter((session) => session.id !== sessionId)];
     });
@@ -1335,6 +1387,7 @@ export default function WorkspaceDemoApp() {
     setActiveTaskTitle("New local session");
     setActivePanel("tasks");
     setActiveSessionId(null);
+    storeActiveSessionId(selectedProjectId, null);
     setArtifactPreview({ status: "closed" });
   };
 
@@ -1389,6 +1442,7 @@ export default function WorkspaceDemoApp() {
     setPrompt("");
     setArtifactPreview({ status: "closed" });
     setActivePanel("tasks");
+    storeActiveSessionId(selectedProjectId, sessionId);
     void hydrateProjectSession({ projectId: selectedProjectId, sessionId });
   };
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  archiveStaleDuplicateWorkspaceLocalSessions,
   DEFAULT_WORKSPACE_PROJECT,
   DEFAULT_WORKSPACE_ROOM,
   getLatestWorkspaceLocalSession,
@@ -24,6 +25,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const scope = sessionScopeFromUrl(url);
   const sessionId = url.searchParams.get("sessionId");
+  const archivedSessions = await archiveStaleDuplicateWorkspaceLocalSessions(scope);
   const [snapshot, sessions, artifacts] = await Promise.all([
     sessionId
       ? hydrateWorkspaceLocalSession({ ...scope, sessionId })
@@ -38,6 +40,7 @@ export async function GET(request: Request) {
     session: snapshot,
     sessions,
     artifacts,
+    archivedSessions,
   });
 }
 
