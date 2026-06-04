@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promise
 import { resolve, sep } from "node:path";
 
 import type { AgentEvent, Artifact, ArtifactType, Message, Task, TaskStep } from "./workspace-demo-events.ts";
+import { WORKSPACE_DEMO_ARTIFACT_ROOT, type WorkspaceDraftArtifactRequestedFormat } from "./workspace-draft-artifacts.ts";
 
 export const WORKSPACE_DEMO_SESSION_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-sessions";
 export const DEFAULT_WORKSPACE_ROOM = "workspace-demo";
@@ -40,10 +41,12 @@ export interface WorkspaceLocalArtifact {
   title: string;
   subtitle: string;
   preview: string;
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat | "unknown";
   createdAt: string;
   sessionId: string;
   sessionTitle: string;
   sessionUpdatedAt: string;
+  taskTitle: string | null;
 }
 
 export interface WorkspaceLocalSessionScope {
@@ -55,6 +58,12 @@ export interface WorkspaceLocalSessionScope {
 interface WorkspaceLocalSessionStoreFile extends WorkspaceLocalSessionSnapshot {
   version: 1;
   localOnly: true;
+}
+
+interface WorkspaceLocalArtifactMetadata {
+  createdAt: string | null;
+  requestedFormat: WorkspaceDraftArtifactRequestedFormat | "unknown";
+  taskTitle: string | null;
 }
 
 export function createWorkspaceLocalSessionId(): string {
@@ -144,10 +153,11 @@ export async function getLatestWorkspaceLocalSession(
 }
 
 export async function listWorkspaceLocalArtifacts(
-  scope: WorkspaceLocalSessionScope & { limit?: number } = {},
+  scope: WorkspaceLocalSessionScope & { artifactRoot?: string; limit?: number } = {},
 ): Promise<WorkspaceLocalArtifact[]> {
   const sessions = await listWorkspaceLocalSessions(scope);
   const limit = Number.isFinite(scope.limit) ? Math.max(1, Math.min(Number(scope.limit), 80)) : 40;
+  const artifactRoot = scope.artifactRoot ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const artifactById = new Map<string, WorkspaceLocalArtifact>();
 
   for (const session of sessions) {
@@ -155,11 +165,14 @@ export async function listWorkspaceLocalArtifacts(
     if (!snapshot) continue;
     for (const event of snapshot.events) {
       if (event.kind !== "artifact.created") continue;
+      const metadata = await readWorkspaceLocalArtifactMetadata(event.artifact.id, artifactRoot);
       const artifact = normalizeWorkspaceLocalArtifact(event.artifact, {
-        createdAt: event.createdAt,
+        createdAt: metadata?.createdAt ?? event.createdAt,
         sessionId: snapshot.metadata.id,
         sessionTitle: snapshot.metadata.title,
         sessionUpdatedAt: snapshot.metadata.updatedAt,
+        requestedFormat: metadata?.requestedFormat ?? requestedFormatFromArtifactType(event.artifact.type),
+        taskTitle: metadata?.taskTitle ?? null,
       });
       if (!artifact) continue;
       const existing = artifactById.get(artifact.id);
@@ -331,7 +344,7 @@ function assertSafeWorkspaceArtifactId(value: string): string {
 
 function normalizeWorkspaceLocalArtifact(
   artifact: Artifact,
-  context: Pick<WorkspaceLocalArtifact, "createdAt" | "sessionId" | "sessionTitle" | "sessionUpdatedAt">,
+  context: Pick<WorkspaceLocalArtifact, "createdAt" | "requestedFormat" | "sessionId" | "sessionTitle" | "sessionUpdatedAt" | "taskTitle">,
 ): WorkspaceLocalArtifact | null {
   if (!artifact || typeof artifact !== "object") return null;
   if (!isSafeWorkspaceArtifactId(artifact.id) || !isKnownWorkspaceArtifactType(artifact.type)) return null;
@@ -341,11 +354,36 @@ function normalizeWorkspaceLocalArtifact(
     title: safeDisplayText(artifact.title, "Workspace artifact"),
     subtitle: safeDisplayText(artifact.subtitle, "Local Workspace artifact"),
     preview: safeDisplayText(artifact.preview, ""),
+    requestedFormat: context.requestedFormat,
     createdAt: context.createdAt,
     sessionId: context.sessionId,
     sessionTitle: safeDisplayText(context.sessionTitle, "Workspace session"),
     sessionUpdatedAt: context.sessionUpdatedAt,
+    taskTitle: context.taskTitle ? safeDisplayText(context.taskTitle, "Workspace task") : null,
   };
+}
+
+async function readWorkspaceLocalArtifactMetadata(
+  id: string,
+  root: string,
+): Promise<WorkspaceLocalArtifactMetadata | null> {
+  if (!isSafeWorkspaceArtifactId(id)) return null;
+  try {
+    const raw = await readFile(safeWorkspaceLocalArtifactPath(root, `${id}.metadata.json`), "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      createdAt: typeof parsed.createdAt === "string" && !Number.isNaN(Date.parse(parsed.createdAt))
+        ? parsed.createdAt
+        : null,
+      requestedFormat: isWorkspaceDraftArtifactRequestedFormat(parsed.requestedFormat)
+        ? parsed.requestedFormat
+        : "unknown",
+      taskTitle: typeof parsed.taskTitle === "string" ? parsed.taskTitle : null,
+    };
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    return null;
+  }
 }
 
 function isSafeWorkspaceArtifactId(value: string): boolean {
@@ -354,6 +392,36 @@ function isSafeWorkspaceArtifactId(value: string): boolean {
 
 function isKnownWorkspaceArtifactType(value: string): value is ArtifactType {
   return ["document", "spreadsheet", "audit", "brief", "playbook", "markdown", "pdf"].includes(value);
+}
+
+function isWorkspaceDraftArtifactRequestedFormat(value: unknown): value is WorkspaceDraftArtifactRequestedFormat {
+  return typeof value === "string" && [
+    "document",
+    "markdown",
+    "pdf",
+    "docx",
+    "report",
+    "handover",
+    "deck",
+    "export",
+    "file",
+    "deliverable",
+  ].includes(value);
+}
+
+function requestedFormatFromArtifactType(type: ArtifactType): WorkspaceDraftArtifactRequestedFormat | "unknown" {
+  if (type === "pdf") return "pdf";
+  if (type === "markdown") return "markdown";
+  return "unknown";
+}
+
+function safeWorkspaceLocalArtifactPath(root: string, filename: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedPath = resolve(resolvedRoot, filename);
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {
+    throw new Error("Workspace artifact path escaped controlled root.");
+  }
+  return resolvedPath;
 }
 
 function safeDisplayText(value: string, fallback: string): string {

@@ -91,10 +91,12 @@ interface WorkspaceSessionMetadata {
 }
 
 type WorkspaceLibraryArtifact = Artifact & {
+  requestedFormat: string;
   createdAt: string;
   sessionId: string;
   sessionTitle: string;
   sessionUpdatedAt: string;
+  taskTitle: string | null;
 };
 
 interface WorkspaceHydratedThread {
@@ -457,10 +459,12 @@ function EmptyState({
 
 function LibraryPanel({
   artifacts,
+  error,
   hydrating,
   onOpenArtifact,
 }: {
   artifacts: WorkspaceLibraryArtifact[];
+  error: string | null;
   hydrating: boolean;
   onOpenArtifact: (artifact: Artifact) => void;
 }) {
@@ -470,6 +474,16 @@ function LibraryPanel({
         <div className={styles.panelKicker}>Library</div>
         <h1>Loading local artifacts...</h1>
         <p>Checking saved Workspace sessions for this project.</p>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Library</div>
+        <h1>Artifact library unavailable</h1>
+        <p>{error}</p>
       </section>
     );
   }
@@ -496,6 +510,8 @@ function LibraryPanel({
       <div className={styles.libraryList}>
         {artifacts.map((artifact) => {
           const createdAt = formatArtifactCreatedAt(artifact.createdAt);
+          const isPdf = artifact.type === "pdf";
+          const originTitle = artifact.taskTitle || artifact.sessionTitle;
           return (
             <button
               className={styles.libraryArtifact}
@@ -505,17 +521,20 @@ function LibraryPanel({
             >
               <span className={styles.artifactIcon}><IconDocument /></span>
               <span className={styles.artifactBody}>
-                <span className={styles.artifactTitle}>{artifact.title}</span>
-                <span className={styles.artifactMeta}>{artifact.subtitle}</span>
-                <span className={styles.libraryArtifactMeta}>
-                  <span>{artifact.type}</span>
-                  {createdAt ? <span>{createdAt}</span> : null}
-                  <span>{artifact.sessionTitle}</span>
+                <span className={styles.libraryArtifactTop}>
+                  <span className={styles.artifactTitle}>{artifact.title}</span>
+                  <span className={styles.libraryFormatPill}>{artifact.type}</span>
                 </span>
+                <span className={styles.libraryArtifactMeta}>
+                  <span>Requested: {artifact.requestedFormat}</span>
+                  {createdAt ? <span>{createdAt}</span> : null}
+                </span>
+                <span className={styles.libraryArtifactOrigin}>From: {originTitle}</span>
+                {artifact.preview ? <span className={styles.libraryArtifactPreview}>{artifact.preview}</span> : null}
               </span>
               <span className={styles.artifactState}>
-                <span>{artifact.type === "pdf" ? "PDF draft saved" : "Markdown draft saved"}</span>
-                <small>{artifact.type === "pdf" ? "Open / Download PDF" : "Open preview"}</small>
+                <span>{isPdf ? "PDF draft saved" : "Markdown draft saved"}</span>
+                <small>{isPdf ? "Preview / Download PDF" : "Preview / Download markdown"}</small>
               </span>
             </button>
           );
@@ -527,17 +546,19 @@ function LibraryPanel({
 
 function WorkspacePanelView({
   panel,
+  libraryError,
   libraryArtifacts,
   hydrating,
   onOpenArtifact,
 }: {
   panel: Exclude<WorkspacePanel, "tasks">;
+  libraryError: string | null;
   libraryArtifacts: WorkspaceLibraryArtifact[];
   hydrating: boolean;
   onOpenArtifact: (artifact: Artifact) => void;
 }) {
   if (panel === "library") {
-    return <LibraryPanel artifacts={libraryArtifacts} hydrating={hydrating} onOpenArtifact={onOpenArtifact} />;
+    return <LibraryPanel artifacts={libraryArtifacts} error={libraryError} hydrating={hydrating} onOpenArtifact={onOpenArtifact} />;
   }
 
   const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library">, { title: string; body: string }> = {
@@ -821,12 +842,15 @@ function libraryArtifactFromEvent({
   sessionId: string;
   sessionTitle: string;
 }): WorkspaceLibraryArtifact {
+  const requestedFormat = artifact.type === "pdf" ? "pdf" : artifact.type === "markdown" ? "markdown" : "unknown";
   return {
     ...artifact,
+    requestedFormat,
     createdAt,
     sessionId,
     sessionTitle,
     sessionUpdatedAt: createdAt,
+    taskTitle: null,
   };
 }
 
@@ -1164,6 +1188,7 @@ export default function WorkspaceDemoApp() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
   const [libraryArtifacts, setLibraryArtifacts] = useState<WorkspaceLibraryArtifact[]>([]);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
@@ -1190,6 +1215,7 @@ export default function WorkspaceDemoApp() {
     signal?: AbortSignal;
   }) => {
     setHydrating(true);
+    setLibraryError(null);
     try {
       const query = new URLSearchParams({ project: projectId, room: WORKSPACE_ROOM });
       if (sessionId) query.set("sessionId", sessionId);
@@ -1201,6 +1227,7 @@ export default function WorkspaceDemoApp() {
       if (signal?.aborted) return;
       setSessionList(Array.isArray(body.sessions) ? body.sessions : []);
       setLibraryArtifacts(Array.isArray(body.artifacts) ? body.artifacts : []);
+      if (!response.ok || !body.ok) setLibraryError("Local artifact history could not be loaded for this project.");
       if (!response.ok || !body.ok || !body.session) {
         setThreadState(initialThreadState);
         setRunState("idle");
@@ -1218,6 +1245,7 @@ export default function WorkspaceDemoApp() {
       if (!signal?.aborted) {
         setSessionList([]);
         setLibraryArtifacts([]);
+        setLibraryError("Local artifact history could not be loaded for this project.");
         setThreadState(initialThreadState);
         setRunState("idle");
         setActiveSessionId(null);
@@ -1374,6 +1402,7 @@ export default function WorkspaceDemoApp() {
     setArtifactPreview({ status: "closed" });
     setActivePanel("tasks");
     setLibraryArtifacts([]);
+    setLibraryError(null);
     setSelectedProjectId(projectId);
   };
 
@@ -1406,6 +1435,7 @@ export default function WorkspaceDemoApp() {
         {activePanel !== "tasks" ? (
           <WorkspacePanelView
             panel={activePanel}
+            libraryError={libraryError}
             libraryArtifacts={libraryArtifacts}
             hydrating={hydrating}
             onOpenArtifact={openArtifactPreview}
