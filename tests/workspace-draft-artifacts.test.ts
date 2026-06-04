@@ -135,6 +135,53 @@ test("generic workspace PDF uses Undeniable branding title fallback", async () =
     const pdf = await readFile(result.metadata.pdfPath ?? "", "utf8");
     assert.match(pdf, /Atlas for Undeniable/);
     assert.match(pdf, /Undeniable OS/);
+    assert.match(pdf, /Local draft v1/);
+    assert.match(pdf, /Page 1 of/);
+    assert.doesNotMatch(pdf, /Atlas workspace session PDF draft/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PDF renderer adds branded cover structure and footer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-branded-pdf-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Please update the Ricky Calder pay structure handover doc and return it as a PDF.",
+      content: [
+        "## Executive Summary",
+        "",
+        "This draft gives Rhys a clean handover structure for Ricky.",
+        "",
+        "## Recommended Pay Structure",
+        "",
+        "- Keep bands simple.",
+        "- Tie review points to owner decisions.",
+      ].join("\n"),
+      taskTitle: "Ricky Calder pay structure handover",
+      runtimeProvider: "mastra",
+      runId: "run_branded_pdf_test",
+      taskId: "task_branded_pdf_test",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+
+    assert.ok(result);
+    assert.ok(result.metadata.pdfPath);
+    const pdf = await readFile(result.metadata.pdfPath, "utf8");
+    assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
+    assert.match(pdf, /Atlas for Undeniable/);
+    assert.match(pdf, /Undeniable OS/);
+    assert.match(pdf, /Local draft v1/);
+    assert.match(pdf, /Prepared for Workspace beta review/);
+    assert.match(pdf, /Executive Summary/);
+    assert.match(pdf, /Recommended Pay Structure/);
+    assert.match(pdf, /Page 1 of/);
+    assert.match(pdf, /Helvetica-Bold/);
+    assert.match(pdf, / re f/);
+    assert.doesNotMatch(pdf, /Atlas workspace session PDF draft/);
+    assert.doesNotMatch(pdf, /\/Users\/atlasai|workspace-demo-artifacts|\.openclaw/);
+    assert.ok((await stat(result.metadata.pdfPath)).size > 1500);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -286,6 +333,8 @@ test("pdf request saves real local PDF artifact with markdown source kept intern
     assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
     assert.match(pdf, /Atlas for Undeniable/);
     assert.match(pdf, /Undeniable OS/);
+    assert.match(pdf, /Local draft v1/);
+    assert.match(pdf, /Page 1 of/);
     assert.ok((await stat(result.metadata.pdfPath)).size > 500);
     assert.doesNotMatch(result.artifact.subtitle, /not wired/i);
 

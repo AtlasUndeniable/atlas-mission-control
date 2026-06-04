@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
+import { renderBrandedWorkspacePdf } from "./workspace-branded-pdf.ts";
 import type { Artifact } from "./workspace-demo-events.ts";
 
 export type WorkspaceDraftArtifactProvider = "mock" | "local-codex" | "mastra";
@@ -147,7 +148,7 @@ export async function writeWorkspaceDraftArtifact(
     createdAt,
   });
   const shouldWritePdf = intent.requestedFormat === "pdf";
-  const pdf = shouldWritePdf ? renderWorkspaceDraftPdf({
+  const pdf = shouldWritePdf ? renderBrandedWorkspacePdf({
     title: userFacingName,
     createdAt,
     markdown,
@@ -439,153 +440,4 @@ export async function readWorkspaceDraftArtifactPdf(
     }
     throw error;
   }
-}
-
-function renderWorkspaceDraftPdf({
-  title,
-  createdAt,
-  markdown,
-}: {
-  title: string;
-  createdAt: string;
-  markdown: string;
-}): Buffer {
-  const lines = markdownToPdfLines(markdown, title, createdAt);
-  const pages = paginateLines(lines, 44);
-  const objects: string[] = [];
-  const pageObjectIds: number[] = [];
-  const addObject = (body: string) => {
-    objects.push(body);
-    return objects.length;
-  };
-
-  const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
-  const pagesId = addObject("__PAGES__");
-  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  void catalogId;
-  void pagesId;
-
-  for (const pageLines of pages) {
-    const content = pageContentStream(pageLines);
-    const contentId = addObject(`<< /Length ${Buffer.byteLength(content, "ascii")} >>\nstream\n${content}\nendstream`);
-    const pageId = addObject([
-      "<< /Type /Page",
-      "/Parent 2 0 R",
-      "/MediaBox [0 0 612 792]",
-      `/Resources << /Font << /F1 ${fontId} 0 R >> >>`,
-      `/Contents ${contentId} 0 R`,
-      ">>",
-    ].join(" "));
-    pageObjectIds.push(pageId);
-  }
-
-  objects[pagesId - 1] = [
-    "<< /Type /Pages",
-    `/Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}]`,
-    `/Count ${pageObjectIds.length}`,
-    ">>",
-  ].join(" ");
-
-  return buildPdf(objects);
-}
-
-function markdownToPdfLines(markdown: string, title: string, createdAt: string): string[] {
-  const source = [
-    "Atlas for Undeniable",
-    "Undeniable OS",
-    "",
-    title,
-    `Created: ${createdAt}`,
-    "",
-    ...markdown
-      .replace(/\r/g, "")
-      .split("\n")
-      .map((line) => line
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/^\s*[-*]\s+/, "- ")
-        .replace(/\*\*([^*]+)\*\*/g, "$1")
-        .replace(/`([^`]+)`/g, "$1")
-        .trimEnd()),
-  ];
-  return source.flatMap((line) => wrapPdfLine(normalizePdfText(line), 88));
-}
-
-function normalizePdfText(value: string): string {
-  return value
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/[–—]/g, "-")
-    .replace(/→/g, "->")
-    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "")
-    .trimEnd();
-}
-
-function wrapPdfLine(line: string, width: number): string[] {
-  if (!line.trim()) return [""];
-  const words = line.split(/\s+/);
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (!current) {
-      current = word;
-      continue;
-    }
-    if (`${current} ${word}`.length > width) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = `${current} ${word}`;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-function paginateLines(lines: string[], linesPerPage: number): string[][] {
-  const pages: string[][] = [];
-  for (let index = 0; index < lines.length; index += linesPerPage) {
-    pages.push(lines.slice(index, index + linesPerPage));
-  }
-  return pages.length ? pages : [[""]];
-}
-
-function pageContentStream(lines: string[]): string {
-  const content = ["BT", "/F1 10 Tf", "50 742 Td", "14 TL"];
-  lines.forEach((line, index) => {
-    if (index > 0) content.push("T*");
-    content.push(`(${escapePdfString(line)}) Tj`);
-  });
-  content.push("ET");
-  return content.join("\n");
-}
-
-function escapePdfString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-}
-
-function buildPdf(objects: string[]): Buffer {
-  const chunks = ["%PDF-1.4\n"];
-  const offsets: number[] = [0];
-  let byteLength = Buffer.byteLength(chunks[0], "ascii");
-  objects.forEach((body, index) => {
-    offsets.push(byteLength);
-    const chunk = `${index + 1} 0 obj\n${body}\nendobj\n`;
-    chunks.push(chunk);
-    byteLength += Buffer.byteLength(chunk, "ascii");
-  });
-  const xrefOffset = byteLength;
-  chunks.push(`xref\n0 ${objects.length + 1}\n`);
-  chunks.push("0000000000 65535 f \n");
-  for (let index = 1; index < offsets.length; index += 1) {
-    chunks.push(`${String(offsets[index]).padStart(10, "0")} 00000 n \n`);
-  }
-  chunks.push([
-    "trailer",
-    `<< /Size ${objects.length + 1} /Root 1 0 R >>`,
-    "startxref",
-    String(xrefOffset),
-    "%%EOF",
-    "",
-  ].join("\n"));
-  return Buffer.from(chunks.join(""), "ascii");
 }
