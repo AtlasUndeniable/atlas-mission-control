@@ -56,6 +56,7 @@ export interface WorkspaceLocalSessionScope {
   project?: string;
   room?: string;
   root?: string;
+  artifactRoot?: string;
 }
 
 export interface WorkspaceLocalSessionListScope extends WorkspaceLocalSessionScope {
@@ -70,8 +71,11 @@ interface WorkspaceLocalSessionStoreFile extends WorkspaceLocalSessionSnapshot {
 
 interface WorkspaceLocalArtifactMetadata {
   createdAt: string | null;
+  type: ArtifactType | "unknown";
   requestedFormat: WorkspaceDraftArtifactRequestedFormat | "unknown";
   taskTitle: string | null;
+  sourceWorkflow: "atlas-rhys-ricky-handover-archive" | null;
+  unsupportedPdf: boolean;
 }
 
 export function createWorkspaceLocalSessionId(): string {
@@ -203,12 +207,14 @@ export async function listWorkspaceLocalArtifacts(
     for (const event of snapshot.events) {
       if (event.kind !== "artifact.created") continue;
       const metadata = await readWorkspaceLocalArtifactMetadata(event.artifact.id, artifactRoot);
-      const artifact = normalizeWorkspaceLocalArtifact(event.artifact, {
+      const normalizedEventArtifact = normalizeHydratedWorkspaceArtifact(event.artifact, metadata);
+      if (!normalizedEventArtifact) continue;
+      const artifact = normalizeWorkspaceLocalArtifact(normalizedEventArtifact, {
         createdAt: metadata?.createdAt ?? event.createdAt,
         sessionId: snapshot.metadata.id,
         sessionTitle: snapshot.metadata.title,
         sessionUpdatedAt: snapshot.metadata.updatedAt,
-        requestedFormat: metadata?.requestedFormat ?? requestedFormatFromArtifactType(event.artifact.type),
+        requestedFormat: metadata?.requestedFormat ?? requestedFormatFromArtifactType(normalizedEventArtifact.type),
         taskTitle: metadata?.taskTitle ?? null,
       });
       if (!artifact) continue;
@@ -228,10 +234,11 @@ export async function hydrateWorkspaceLocalSession(
   scope: WorkspaceLocalSessionScope & { sessionId: string },
 ): Promise<WorkspaceLocalSessionSnapshot | null> {
   const normalized = normalizeWorkspaceSessionScope(scope);
+  const artifactRoot = scope.artifactRoot ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const sessionId = assertSafeWorkspaceSessionId(scope.sessionId);
   const dir = workspaceSessionDir(normalized.root, normalized.room, normalized.project, sessionId);
   const storeSnapshot = await readWorkspaceSessionStoreFile(workspaceSessionFilePath(dir, "session.json"));
-  if (storeSnapshot) return storeSnapshot;
+  if (storeSnapshot) return sanitizeWorkspaceLocalSessionSnapshotArtifacts(storeSnapshot, artifactRoot);
 
   const metadata = await readWorkspaceSessionMetadataFile(workspaceSessionFilePath(dir, "metadata.json"));
   if (!metadata) return null;
@@ -243,7 +250,7 @@ export async function hydrateWorkspaceLocalSession(
     thread,
   };
   await writeWorkspaceSessionStoreFile(dir, snapshot);
-  return snapshot;
+  return sanitizeWorkspaceLocalSessionSnapshotArtifacts(snapshot, artifactRoot);
 }
 
 export async function updateWorkspaceLocalSessionSelection(
@@ -321,6 +328,49 @@ export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): Workspac
   }
 
   return thread;
+}
+
+async function sanitizeWorkspaceLocalSessionSnapshotArtifacts(
+  snapshot: WorkspaceLocalSessionSnapshot,
+  artifactRoot: string,
+): Promise<WorkspaceLocalSessionSnapshot> {
+  const artifacts = await Promise.all(snapshot.thread.artifacts.map(async (artifact) => {
+    const metadata = await readWorkspaceLocalArtifactMetadata(artifact.id, artifactRoot);
+    return normalizeHydratedWorkspaceArtifact(artifact, metadata);
+  }));
+  const thread: WorkspaceLocalSessionThread = {
+    ...snapshot.thread,
+    artifacts: artifacts.filter((artifact): artifact is Artifact => Boolean(artifact)),
+  };
+  return {
+    ...snapshot,
+    metadata: {
+      ...snapshot.metadata,
+      artifactCount: thread.artifacts.length,
+    },
+    thread,
+  };
+}
+
+function normalizeHydratedWorkspaceArtifact(
+  artifact: Artifact,
+  metadata: WorkspaceLocalArtifactMetadata | null,
+): Artifact | null {
+  if (!artifact || typeof artifact !== "object") return null;
+  if (artifact.type === "pdf" && metadata?.sourceWorkflow === "atlas-rhys-ricky-handover-archive") {
+    return {
+      ...artifact,
+      preview: "Existing Atlas/Rhys Ricky handover package copied into Workspace. Review the PDF before any external use.",
+    };
+  }
+  if (artifact.type !== "pdf" || !metadata?.unsupportedPdf) return artifact;
+  return {
+    ...artifact,
+    type: "markdown",
+    title: artifact.title.replace(/\s+PDF draft$/i, " internal draft"),
+    subtitle: "PDF renderer unavailable; internal markdown draft only",
+    preview: "Legacy placeholder PDF hidden. Open the internal markdown draft while the real Atlas/Rhys workflow is used for supported Ricky PDFs.",
+  };
 }
 
 export function isHydratableWorkspaceSessionEvent(event: AgentEvent): boolean {
@@ -409,14 +459,21 @@ async function readWorkspaceLocalArtifactMetadata(
   try {
     const raw = await readFile(safeWorkspaceLocalArtifactPath(root, `${id}.metadata.json`), "utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const type = typeof parsed.type === "string" && isKnownWorkspaceArtifactType(parsed.type) ? parsed.type : "unknown";
+    const sourceWorkflow = parsed.sourceWorkflow === "atlas-rhys-ricky-handover-archive"
+      ? "atlas-rhys-ricky-handover-archive"
+      : null;
     return {
       createdAt: typeof parsed.createdAt === "string" && !Number.isNaN(Date.parse(parsed.createdAt))
         ? parsed.createdAt
         : null,
+      type,
       requestedFormat: isWorkspaceDraftArtifactRequestedFormat(parsed.requestedFormat)
         ? parsed.requestedFormat
         : "unknown",
       taskTitle: typeof parsed.taskTitle === "string" ? parsed.taskTitle : null,
+      sourceWorkflow,
+      unsupportedPdf: type === "pdf" && sourceWorkflow !== "atlas-rhys-ricky-handover-archive",
     };
   } catch (error) {
     if (isNodeErrorCode(error, "ENOENT")) return null;

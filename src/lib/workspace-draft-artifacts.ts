@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
-import { renderBrandedWorkspacePdf } from "./workspace-branded-pdf.ts";
 import type { Artifact } from "./workspace-demo-events.ts";
 
 export type WorkspaceDraftArtifactProvider = "mock" | "local-codex" | "mastra";
@@ -33,6 +32,10 @@ export interface WorkspaceDraftArtifactMetadata {
   pdfPath?: string;
   metadataPath: string;
   userFacingName: string;
+  sourceWorkflow?: "atlas-rhys-ricky-handover-archive";
+  sourceArtifactTitle?: string;
+  sourceArchivePdfPath?: string;
+  sourceArchiveMarkdownPath?: string;
 }
 
 export interface WorkspaceDraftArtifactResult {
@@ -43,6 +46,12 @@ export interface WorkspaceDraftArtifactResult {
 }
 
 export const WORKSPACE_DEMO_ARTIFACT_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-artifacts";
+
+const REAL_RICKY_HANDOVER_ROOT = "/Users/atlasai/.openclaw/workspace/memory/PARA/Archives/undeniable-os/client-archives/ricky-calder/ricky-calder-coach-hire-pay-model-handover-2026-06-01";
+const REAL_RICKY_HANDOVER_TITLE = "Ricky Calder Coach Hire Pay Model Handover";
+const REAL_RICKY_HANDOVER_PDF_PATH = join(REAL_RICKY_HANDOVER_ROOT, "ricky-calder-coach-hire-pay-model-handover-2026-06-01.pdf");
+const REAL_RICKY_HANDOVER_MARKDOWN_PATH = join(REAL_RICKY_HANDOVER_ROOT, "ricky-calder-coach-hire-pay-model-handover-2026-06-01.md");
+const REAL_PDF_WORKFLOW_BLOCKER = "Internal markdown draft saved; PDF rendering is blocked until the real Atlas/Rhys document workflow is wired for this artifact.";
 
 export interface WorkspaceDraftArtifactPreview {
   id: string;
@@ -134,7 +143,11 @@ export async function writeWorkspaceDraftArtifact(
 ): Promise<WorkspaceDraftArtifactResult> {
   const createdAt = (input.now ?? (() => new Date()))().toISOString();
   const taskTitle = input.taskTitle?.trim() || "Workspace draft";
-  const userFacingName = artifactTitleForIntent(taskTitle, intent);
+  const realPdfSource = await resolveRealWorkspacePdfSource(input, intent);
+  const pdfRequested = intent.requestedFormat === "pdf";
+  const shouldWritePdf = Boolean(realPdfSource);
+  const exportLimitation = intent.exportLimitation ?? (pdfRequested && !realPdfSource ? REAL_PDF_WORKFLOW_BLOCKER : undefined);
+  const userFacingName = realPdfSource?.userFacingName ?? artifactTitleForIntent(taskTitle, intent);
   const id = draftArtifactId({ taskTitle, runId: input.runId, createdAt });
   const root = input.root ?? WORKSPACE_DEMO_ARTIFACT_ROOT;
   const markdownPath = join(root, `${id}.md`);
@@ -147,12 +160,7 @@ export async function writeWorkspaceDraftArtifact(
     runtimeProvider: input.runtimeProvider,
     createdAt,
   });
-  const shouldWritePdf = intent.requestedFormat === "pdf";
-  const pdf = shouldWritePdf ? renderBrandedWorkspacePdf({
-    title: userFacingName,
-    createdAt,
-    markdown,
-  }) : null;
+  const pdf = realPdfSource ? await readFile(realPdfSource.pdfPath) : null;
   const metadata: WorkspaceDraftArtifactMetadata = {
     id,
     title: taskTitle,
@@ -162,11 +170,19 @@ export async function writeWorkspaceDraftArtifact(
     runtimeProvider: input.runtimeProvider,
     requestedFormat: intent.requestedFormat ?? "document",
     intentReason: intent.reason,
-    ...(intent.exportLimitation ? { exportLimitation: intent.exportLimitation } : {}),
+    ...(exportLimitation ? { exportLimitation } : {}),
     localPath: shouldWritePdf ? pdfPath : markdownPath,
     ...(shouldWritePdf ? { sourceMarkdownPath: markdownPath, pdfPath } : {}),
     metadataPath,
     userFacingName,
+    ...(realPdfSource
+      ? {
+          sourceWorkflow: realPdfSource.sourceWorkflow,
+          sourceArtifactTitle: realPdfSource.sourceArtifactTitle,
+          sourceArchivePdfPath: realPdfSource.pdfPath,
+          sourceArchiveMarkdownPath: realPdfSource.markdownPath,
+        }
+      : {}),
   };
 
   await mkdir(root, { recursive: true });
@@ -179,8 +195,8 @@ export async function writeWorkspaceDraftArtifact(
       id,
       type: shouldWritePdf ? "pdf" : "markdown",
       title: userFacingName,
-      subtitle: artifactSubtitleForIntent(input.runtimeProvider, intent),
-      preview: input.content.replace(/\s+/g, " ").slice(0, 160),
+      subtitle: artifactSubtitleForIntent(input.runtimeProvider, intent, exportLimitation, realPdfSource),
+      preview: artifactPreviewForResult(input.content, realPdfSource),
     },
     metadata,
     markdown,
@@ -193,10 +209,15 @@ export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArt
     ? "PDF draft saved."
     : result.metadata.requestedFormat === "docx"
       ? "Markdown draft saved; DOCX export is not wired yet."
+      : result.metadata.requestedFormat === "pdf" && result.metadata.exportLimitation
+        ? "Internal markdown draft saved; PDF rendering is blocked for this request."
       : "Markdown draft saved.";
   const openLine = result.metadata.type === "pdf"
     ? "- Open the artifact card to preview and download the PDF."
     : "- Open the artifact card to preview the full draft.";
+  const sourceLine = result.metadata.sourceWorkflow
+    ? "- Source: existing Atlas/Rhys Ricky handover package; local copy only."
+    : null;
   const preview = cleanArtifactPreview(result.artifact.preview);
   return [
     `${formatLabel}`,
@@ -204,6 +225,7 @@ export function summarizeWorkspaceDraftArtifactForChat(result: WorkspaceDraftArt
     `**${result.artifact.title}**`,
     "",
     preview ? `- Draft focus: ${preview}` : "- Draft focus: Ready for review in the artifact card.",
+    ...(sourceLine ? [sourceLine] : []),
     openLine,
     "- Delivery: local artifact only; no external send performed.",
   ].join("\n");
@@ -225,6 +247,19 @@ export async function readWorkspaceDraftArtifactPreview(
     const metadataText = await readFile(metadataPath, "utf8");
     const metadata = parseWorkspaceDraftArtifactMetadata(metadataText, id);
     if (metadata.type === "pdf") {
+      if (!isSupportedWorkspacePdfArtifact(metadata)) {
+        const markdown = await readFile(markdownPath, "utf8");
+        return {
+          id: metadata.id,
+          title: metadata.userFacingName || metadata.title,
+          type: "markdown",
+          createdAt: metadata.createdAt,
+          taskTitle: metadata.taskTitle,
+          runtimeProvider: metadata.runtimeProvider,
+          requestedFormat: metadata.requestedFormat,
+          markdown,
+        };
+      }
       const [markdown, pdf] = await Promise.all([
         readFile(markdownPath, "utf8").catch(() => ""),
         readFile(pdfPath),
@@ -281,6 +316,13 @@ function cleanArtifactPreview(value: string): string {
     .replace(/^I'm\s+(?:going to\s+)?(?:update|creating|drafting|building|generating|preparing)\s+/i, "")
     .replace(/\s+(?:Update|Draft|Document)$/i, "")
     .trim();
+}
+
+function artifactPreviewForResult(content: string, realPdfSource: RealWorkspacePdfSource | null): string {
+  if (realPdfSource) {
+    return "Existing Atlas/Rhys Ricky handover package copied into Workspace. Review the PDF before any external use.";
+  }
+  return content.replace(/\s+/g, " ").slice(0, 160);
 }
 
 function safeWorkspaceDraftArtifactPath(root: string, filename: string): string {
@@ -362,10 +404,50 @@ function artifactTitleForIntent(taskTitle: string, intent: WorkspaceDraftArtifac
 function artifactSubtitleForIntent(
   runtimeProvider: WorkspaceDraftArtifactProvider,
   intent: WorkspaceDraftArtifactIntent,
+  exportLimitation?: string,
+  realPdfSource?: RealWorkspacePdfSource | null,
 ): string {
+  if (realPdfSource) return `Atlas / ${runtimeProvider} / Ricky handover PDF`;
+  if (exportLimitation) return exportLimitation;
   if (intent.requestedFormat === "pdf") return `Atlas / ${runtimeProvider} / PDF draft`;
-  if (intent.exportLimitation) return intent.exportLimitation;
   return `Atlas / ${runtimeProvider} / markdown draft`;
+}
+
+interface RealWorkspacePdfSource {
+  sourceWorkflow: "atlas-rhys-ricky-handover-archive";
+  sourceArtifactTitle: string;
+  userFacingName: string;
+  pdfPath: string;
+  markdownPath: string;
+}
+
+async function resolveRealWorkspacePdfSource(
+  input: WorkspaceDraftArtifactInput,
+  intent: WorkspaceDraftArtifactIntent,
+): Promise<RealWorkspacePdfSource | null> {
+  if (intent.requestedFormat !== "pdf") return null;
+  if (!isRickyPayHandoverRequest(input)) return null;
+  try {
+    const pdf = await readFile(REAL_RICKY_HANDOVER_PDF_PATH);
+    if (pdf.subarray(0, 5).toString("ascii") !== "%PDF-") return null;
+    return {
+      sourceWorkflow: "atlas-rhys-ricky-handover-archive",
+      sourceArtifactTitle: REAL_RICKY_HANDOVER_TITLE,
+      userFacingName: REAL_RICKY_HANDOVER_TITLE,
+      pdfPath: REAL_RICKY_HANDOVER_PDF_PATH,
+      markdownPath: REAL_RICKY_HANDOVER_MARKDOWN_PATH,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isRickyPayHandoverRequest(input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">): boolean {
+  const text = `${input.prompt} ${input.taskTitle ?? ""}`.toLowerCase();
+  return (
+    /\bricky\b|\bcalder\b/.test(text) &&
+    /\bpay\b|\bcoach\s+hire\b|\bhandover\b|\bpay\s+structure\b|\bpay\s+model\b/.test(text)
+  );
 }
 
 function buildDraftMarkdown({
@@ -429,7 +511,7 @@ export async function readWorkspaceDraftArtifactPdf(
   const pdfPath = safeWorkspaceDraftArtifactPath(root, `${id}.pdf`);
   try {
     const metadata = parseWorkspaceDraftArtifactMetadata(await readFile(metadataPath, "utf8"), id);
-    if (metadata.type !== "pdf") return null;
+    if (metadata.type !== "pdf" || !isSupportedWorkspacePdfArtifact(metadata)) return null;
     return {
       bytes: await readFile(pdfPath),
       filename: `${slugify(metadata.userFacingName || metadata.title)}.pdf`,
@@ -440,4 +522,8 @@ export async function readWorkspaceDraftArtifactPdf(
     }
     throw error;
   }
+}
+
+function isSupportedWorkspacePdfArtifact(metadata: WorkspaceDraftArtifactMetadata): boolean {
+  return metadata.sourceWorkflow === "atlas-rhys-ricky-handover-archive";
 }

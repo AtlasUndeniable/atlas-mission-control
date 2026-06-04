@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,6 +12,7 @@ import {
   detectWorkspaceDraftArtifactIntent,
   isSafeWorkspaceDraftArtifactId,
   maybeWriteWorkspaceDraftArtifact,
+  readWorkspaceDraftArtifactPdf,
   readWorkspaceDraftArtifactPreview,
   shouldCreateWorkspaceDraftArtifact,
   summarizeWorkspaceDraftArtifactForChat,
@@ -110,17 +111,26 @@ test("explicit Ricky handover PDF request creates primary PDF artifact", async (
     assert.ok(result.metadata.sourceMarkdownPath);
     assert.ok(result.metadata.pdfPath);
     assert.equal(result.metadata.localPath, result.metadata.pdfPath);
+    assert.equal(result.metadata.sourceWorkflow, "atlas-rhys-ricky-handover-archive");
+    assert.equal(result.artifact.title, "Ricky Calder Coach Hire Pay Model Handover");
+    assert.equal(
+      result.artifact.preview,
+      "Existing Atlas/Rhys Ricky handover package copied into Workspace. Review the PDF before any external use.",
+    );
+    assert.equal(result.metadata.userFacingName, "Ricky Calder Coach Hire Pay Model Handover");
+    const pdf = await readFile(result.metadata.pdfPath);
+    assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    assert.ok(pdf.byteLength > 200_000);
     assert.match(summarizeWorkspaceDraftArtifactForChat(result), /PDF draft saved/);
+    assert.match(summarizeWorkspaceDraftArtifactForChat(result), /existing Atlas\/Rhys Ricky handover package/);
     assert.doesNotMatch(summarizeWorkspaceDraftArtifactForChat(result), /Markdown draft saved|PDF export is not wired/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-
-
-test("generic workspace PDF uses Undeniable branding title fallback", async () => {
-  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-branding-"));
+test("generic workspace PDF request is blocked to an internal markdown draft without fake branding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-pdf-blocked-"));
   try {
     const result = await maybeWriteWorkspaceDraftArtifact({
       prompt: "Make this a PDF.",
@@ -134,58 +144,15 @@ test("generic workspace PDF uses Undeniable branding title fallback", async () =
     });
 
     assert.ok(result);
-    assert.equal(result.artifact.title, "Undeniable OS workspace PDF draft");
-    assert.doesNotMatch(result.artifact.title, /Atlas workspace session PDF draft/);
-    const pdf = await readFile(result.metadata.pdfPath ?? "", "utf8");
-    assert.match(pdf, /Atlas for Undeniable/);
-    assert.match(pdf, /Undeniable OS/);
-    assert.match(pdf, /Local draft v1/);
-    assert.match(pdf, /Page 1 of/);
-    assert.doesNotMatch(pdf, /Atlas workspace session PDF draft/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("PDF renderer adds branded cover structure and footer", async () => {
-  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-branded-pdf-"));
-  try {
-    const result = await maybeWriteWorkspaceDraftArtifact({
-      prompt: "Please update the Ricky Calder pay structure handover doc and return it as a PDF.",
-      content: [
-        "## Executive Summary",
-        "",
-        "This draft gives Rhys a clean handover structure for Ricky.",
-        "",
-        "## Recommended Pay Structure",
-        "",
-        "- Keep bands simple.",
-        "- Tie review points to owner decisions.",
-      ].join("\n"),
-      taskTitle: "Ricky Calder pay structure handover",
-      runtimeProvider: "mastra",
-      runId: "run_branded_pdf_test",
-      taskId: "task_branded_pdf_test",
-      now: () => new Date("2026-06-02T00:00:00.000Z"),
-      root,
-    });
-
-    assert.ok(result);
-    assert.ok(result.metadata.pdfPath);
-    const pdf = await readFile(result.metadata.pdfPath, "utf8");
-    assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
-    assert.match(pdf, /Atlas for Undeniable/);
-    assert.match(pdf, /Undeniable OS/);
-    assert.match(pdf, /Local draft v1/);
-    assert.match(pdf, /Prepared for Workspace beta review/);
-    assert.match(pdf, /Executive Summary/);
-    assert.match(pdf, /Recommended Pay Structure/);
-    assert.match(pdf, /Page 1 of/);
-    assert.match(pdf, /Helvetica-Bold/);
-    assert.match(pdf, / re f/);
-    assert.doesNotMatch(pdf, /Atlas workspace session PDF draft/);
-    assert.doesNotMatch(pdf, /\/Users\/atlasai|workspace-demo-artifacts|\.openclaw/);
-    assert.ok((await stat(result.metadata.pdfPath)).size > 1500);
+    assert.equal(result.artifact.type, "markdown");
+    assert.equal(result.metadata.type, "markdown");
+    assert.equal(result.metadata.requestedFormat, "pdf");
+    assert.equal(result.metadata.pdfPath, undefined);
+    assert.equal(result.metadata.sourceWorkflow, undefined);
+    assert.match(result.metadata.exportLimitation ?? "", /real Atlas\/Rhys document workflow/);
+    assert.match(result.artifact.subtitle, /PDF rendering is blocked/);
+    assert.match(summarizeWorkspaceDraftArtifactForChat(result), /Internal markdown draft saved; PDF rendering is blocked/);
+    assert.doesNotMatch(summarizeWorkspaceDraftArtifactForChat(result), /PDF draft saved/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -307,7 +274,7 @@ test("draft artifact preview reads only safe markdown artifact ids", async () =>
   }
 });
 
-test("pdf request saves real local PDF artifact with markdown source kept internal", async () => {
+test("unsupported pdf request preserves only markdown source and reports blocker", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-"));
   try {
     const result = await maybeWriteWorkspaceDraftArtifact({
@@ -322,38 +289,70 @@ test("pdf request saves real local PDF artifact with markdown source kept intern
     });
 
     assert.ok(result);
-    assert.equal(result.artifact.type, "pdf");
+    assert.equal(result.artifact.type, "markdown");
     assert.match(result.artifact.title, /Readiness summary PDF draft/);
-    assert.match(result.artifact.subtitle, /PDF draft/);
+    assert.match(result.artifact.subtitle, /PDF rendering is blocked/);
     assert.equal(result.metadata.requestedFormat, "pdf");
-    assert.equal(result.metadata.type, "pdf");
-    assert.equal(result.metadata.exportLimitation, undefined);
-    assert.ok(result.metadata.sourceMarkdownPath);
-    assert.ok(result.metadata.pdfPath);
-    assert.equal(result.metadata.localPath, result.metadata.pdfPath);
-    const markdown = await readFile(result.metadata.sourceMarkdownPath, "utf8");
+    assert.equal(result.metadata.type, "markdown");
+    assert.match(result.metadata.exportLimitation ?? "", /real Atlas\/Rhys document workflow/);
+    assert.equal(result.metadata.sourceMarkdownPath, undefined);
+    assert.equal(result.metadata.pdfPath, undefined);
+    assert.equal(result.metadata.localPath.endsWith(".md"), true);
+    const markdown = await readFile(result.metadata.localPath, "utf8");
     assert.match(markdown, /Delivery: local draft only; no external send performed/);
-    const pdf = await readFile(result.metadata.pdfPath, "utf8");
-    assert.match(pdf.slice(0, 8), /%PDF-1\.4/);
-    assert.match(pdf, /Atlas for Undeniable/);
-    assert.match(pdf, /Undeniable OS/);
-    assert.match(pdf, /Local draft v1/);
-    assert.match(pdf, /Page 1 of/);
-    assert.ok((await stat(result.metadata.pdfPath)).size > 500);
-    assert.doesNotMatch(result.artifact.subtitle, /not wired/i);
+    assert.ok((await stat(result.metadata.localPath)).size > 100);
 
     const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
     assert.ok(preview);
-    assert.equal(preview.type, "pdf");
-    assert.ok(preview.pdf);
-    assert.match(preview.pdf.filename, /readiness_summary_pdf_draft\.pdf/);
+    assert.equal(preview.type, "markdown");
+    assert.equal(preview.pdf, undefined);
+    assert.equal(await readWorkspaceDraftArtifactPdf(result.metadata.id, { root }), null);
     assert.doesNotMatch(JSON.stringify(preview), /localPath|metadataPath|pdfPath|sourceMarkdownPath|\/Users\/atlasai|workspace-demo-artifacts/);
 
     const chatSummary = summarizeWorkspaceDraftArtifactForChat(result);
-    assert.match(chatSummary, /PDF draft saved/);
-    assert.match(chatSummary, /download the PDF/);
-    assert.doesNotMatch(chatSummary, /PDF export is not wired|Markdown draft saved/);
+    assert.match(chatSummary, /Internal markdown draft saved; PDF rendering is blocked/);
+    assert.match(chatSummary, /preview the full draft/);
+    assert.doesNotMatch(chatSummary, /PDF draft saved|download the PDF/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("legacy placeholder PDF metadata previews as markdown and cannot download PDF", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-legacy-pdf-"));
+  try {
+    const id = "artifact_demo_legacy_placeholder_pdf";
+    await writeLegacyArtifactFiles(root, id);
+
+    const preview = await readWorkspaceDraftArtifactPreview(id, { root });
+    assert.ok(preview);
+    assert.equal(preview.type, "markdown");
+    assert.equal(preview.requestedFormat, "pdf");
+    assert.equal(preview.pdf, undefined);
+    assert.match(preview.markdown ?? "", /Legacy placeholder source/);
+    assert.equal(await readWorkspaceDraftArtifactPdf(id, { root }), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function writeLegacyArtifactFiles(root: string, id: string): Promise<void> {
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, `${id}.md`), "# Legacy placeholder source\n", "utf8");
+  await writeFile(join(root, `${id}.pdf`), Buffer.from("%PDF-1.4\nlegacy fake\n"));
+  await writeFile(join(root, `${id}.metadata.json`), `${JSON.stringify({
+    id,
+    title: "Legacy placeholder PDF",
+    type: "pdf",
+    createdAt: "2026-06-02T00:00:00.000Z",
+    taskTitle: "Legacy placeholder PDF",
+    runtimeProvider: "mastra",
+    requestedFormat: "pdf",
+    intentReason: "PDF export requested.",
+    localPath: join(root, `${id}.pdf`),
+    sourceMarkdownPath: join(root, `${id}.md`),
+    pdfPath: join(root, `${id}.pdf`),
+    metadataPath: join(root, `${id}.metadata.json`),
+    userFacingName: "Legacy placeholder PDF",
+  }, null, 2)}\n`, "utf8");
+}

@@ -289,6 +289,7 @@ test("local artifact library lists safe project scoped artifacts newest first", 
       createdAt: new Date(Date.UTC(2026, 5, 2, 0, 6, 0)).toISOString(),
       taskTitle: "Ricky PDF metadata task",
       requestedFormat: "pdf",
+      sourceWorkflow: "atlas-rhys-ricky-handover-archive",
       localPath: "/Users/atlasai/private.pdf",
     }));
 
@@ -299,6 +300,56 @@ test("local artifact library lists safe project scoped artifacts newest first", 
     assert.equal(artifacts[0]?.taskTitle, "Ricky PDF metadata task");
     assert.equal(artifacts[0]?.sessionTitle, "Newer task");
     assert.doesNotMatch(JSON.stringify(artifacts), /\/Users\/atlasai|\.openclaw/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("legacy placeholder PDFs hydrate and list as internal markdown drafts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-legacy-pdf-"));
+  const artifactRoot = await mkdtemp(join(tmpdir(), "atlas-workspace-artifacts-legacy-pdf-"));
+  try {
+    const artifact: Artifact = {
+      id: "artifact_demo_legacy_pdf",
+      type: "pdf",
+      title: "Legacy PDF draft",
+      subtitle: "Atlas / mastra / PDF draft",
+      preview: "PDF draft saved.",
+    };
+    await appendWorkspaceLocalSessionEvent({
+      root,
+      project: "undeniable-os",
+      room: "workspace-demo",
+      sessionId: "session_legacy_pdf",
+      title: "Legacy PDF task",
+      event: artifactEvent(1, artifact),
+    });
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(join(artifactRoot, `${artifact.id}.metadata.json`), JSON.stringify({
+      id: artifact.id,
+      type: "pdf",
+      createdAt: new Date(Date.UTC(2026, 5, 2, 0, 6, 0)).toISOString(),
+      taskTitle: "Legacy PDF task",
+      requestedFormat: "pdf",
+    }));
+
+    const snapshot = await hydrateWorkspaceLocalSession({
+      root,
+      artifactRoot,
+      project: "undeniable-os",
+      room: "workspace-demo",
+      sessionId: "session_legacy_pdf",
+    });
+    assert.equal(snapshot?.thread.artifacts[0]?.type, "markdown");
+    assert.equal(snapshot?.thread.artifacts[0]?.title, "Legacy internal draft");
+    assert.match(snapshot?.thread.artifacts[0]?.subtitle ?? "", /internal markdown draft/);
+
+    const artifacts = await listWorkspaceLocalArtifacts({ root, artifactRoot, project: "undeniable-os", room: "workspace-demo" });
+    assert.equal(artifacts[0]?.type, "markdown");
+    assert.equal(artifacts[0]?.title, "Legacy internal draft");
+    assert.equal(artifacts[0]?.requestedFormat, "pdf");
+    assert.match(artifacts[0]?.preview ?? "", /Legacy placeholder PDF hidden/);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(artifactRoot, { recursive: true, force: true });
