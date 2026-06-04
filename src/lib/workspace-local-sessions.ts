@@ -40,6 +40,11 @@ export interface WorkspaceLocalSessionScope {
   root?: string;
 }
 
+interface WorkspaceLocalSessionStoreFile extends WorkspaceLocalSessionSnapshot {
+  version: 1;
+  localOnly: true;
+}
+
 export function createWorkspaceLocalSessionId(): string {
   return `session_${randomUUID().replaceAll("-", "").slice(0, 18)}`;
 }
@@ -65,35 +70,44 @@ export async function appendWorkspaceLocalSessionEvent({
 
   const metadataPath = workspaceSessionFilePath(dir, "metadata.json");
   const eventsPath = workspaceSessionFilePath(dir, "events.jsonl");
-  const existing = await readWorkspaceSessionMetadataFile(metadataPath);
-  const createdAt = existing?.createdAt ?? event.createdAt;
+  const existingSnapshot = await readWorkspaceSessionStoreFile(workspaceSessionFilePath(dir, "session.json"));
+  const existingMetadata = existingSnapshot?.metadata ?? await readWorkspaceSessionMetadataFile(metadataPath);
+  const existingEvents = existingSnapshot?.events ?? await readWorkspaceSessionEventsFile(eventsPath);
+  const nextEvents = [...existingEvents, event];
+  const createdAt = existingMetadata?.createdAt ?? event.createdAt;
   const metadata: WorkspaceLocalSessionMetadata = {
     id: safeSessionId,
     workspaceId: event.workspaceId,
     project: normalized.project,
     room: normalized.room,
-    title: title.trim() || existing?.title || "Workspace session",
+    title: title.trim() || existingMetadata?.title || "Workspace session",
     createdAt,
     updatedAt: event.createdAt,
-    eventCount: (existing?.eventCount ?? 0) + 1,
-    selectedArtifactId: existing?.selectedArtifactId ?? null,
+    eventCount: nextEvents.length,
+    selectedArtifactId: existingMetadata?.selectedArtifactId ?? null,
+  };
+  const snapshot: WorkspaceLocalSessionSnapshot = {
+    metadata,
+    events: nextEvents,
+    thread: buildWorkspaceLocalSessionThread(nextEvents),
   };
 
   await appendFile(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
   await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  await writeWorkspaceSessionStoreFile(dir, snapshot);
   return metadata;
 }
 
-export async function getLatestWorkspaceLocalSession(
+export async function listWorkspaceLocalSessions(
   scope: WorkspaceLocalSessionScope = {},
-): Promise<WorkspaceLocalSessionSnapshot | null> {
+): Promise<WorkspaceLocalSessionMetadata[]> {
   const normalized = normalizeWorkspaceSessionScope(scope);
   const projectDir = workspaceProjectDir(normalized.root, normalized.room, normalized.project);
   let entries: string[];
   try {
     entries = await readdir(projectDir);
   } catch (error) {
-    if (isNodeErrorCode(error, "ENOENT")) return null;
+    if (isNodeErrorCode(error, "ENOENT")) return [];
     throw error;
   }
 
@@ -104,7 +118,17 @@ export async function getLatestWorkspaceLocalSession(
   );
   return snapshots
     .filter((snapshot): snapshot is WorkspaceLocalSessionSnapshot => Boolean(snapshot))
-    .sort((a, b) => Date.parse(b.metadata.updatedAt) - Date.parse(a.metadata.updatedAt))[0] ?? null;
+    .map((snapshot) => snapshot.metadata)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+export async function getLatestWorkspaceLocalSession(
+  scope: WorkspaceLocalSessionScope = {},
+): Promise<WorkspaceLocalSessionSnapshot | null> {
+  const sessions = await listWorkspaceLocalSessions(scope);
+  const latest = sessions[0];
+  if (!latest) return null;
+  return hydrateWorkspaceLocalSession({ ...scope, sessionId: latest.id });
 }
 
 export async function hydrateWorkspaceLocalSession(
@@ -113,14 +137,19 @@ export async function hydrateWorkspaceLocalSession(
   const normalized = normalizeWorkspaceSessionScope(scope);
   const sessionId = assertSafeWorkspaceSessionId(scope.sessionId);
   const dir = workspaceSessionDir(normalized.root, normalized.room, normalized.project, sessionId);
+  const storeSnapshot = await readWorkspaceSessionStoreFile(workspaceSessionFilePath(dir, "session.json"));
+  if (storeSnapshot) return storeSnapshot;
+
   const metadata = await readWorkspaceSessionMetadataFile(workspaceSessionFilePath(dir, "metadata.json"));
   if (!metadata) return null;
   const events = await readWorkspaceSessionEventsFile(workspaceSessionFilePath(dir, "events.jsonl"));
-  return {
-    metadata,
+  const snapshot: WorkspaceLocalSessionSnapshot = {
+    metadata: { ...metadata, eventCount: events.length },
     events,
     thread: buildWorkspaceLocalSessionThread(events),
   };
+  await writeWorkspaceSessionStoreFile(dir, snapshot);
+  return snapshot;
 }
 
 export async function updateWorkspaceLocalSessionSelection(
@@ -133,18 +162,23 @@ export async function updateWorkspaceLocalSessionSelection(
   const sessionId = assertSafeWorkspaceSessionId(scope.sessionId);
   const dir = workspaceSessionDir(normalized.root, normalized.room, normalized.project, sessionId);
   const metadataPath = workspaceSessionFilePath(dir, "metadata.json");
-  const metadata = await readWorkspaceSessionMetadataFile(metadataPath);
-  if (!metadata) return null;
+  const snapshot = await hydrateWorkspaceLocalSession({ ...normalized, sessionId });
+  if (!snapshot) return null;
   const selectedArtifactId = scope.selectedArtifactId
     ? assertSafeWorkspaceArtifactId(scope.selectedArtifactId)
     : null;
-  const next: WorkspaceLocalSessionMetadata = {
-    ...metadata,
+  const nextMetadata: WorkspaceLocalSessionMetadata = {
+    ...snapshot.metadata,
     selectedArtifactId,
     updatedAt: new Date().toISOString(),
   };
-  await writeFile(metadataPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  return next;
+  const nextSnapshot: WorkspaceLocalSessionSnapshot = {
+    ...snapshot,
+    metadata: nextMetadata,
+  };
+  await writeFile(metadataPath, `${JSON.stringify(nextMetadata, null, 2)}\n`, "utf8");
+  await writeWorkspaceSessionStoreFile(dir, nextSnapshot);
+  return nextMetadata;
 }
 
 export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): WorkspaceLocalSessionThread {
@@ -221,7 +255,7 @@ function workspaceSessionDir(root: string, room: string, project: string, sessio
   return safeWorkspaceSessionPath(root, room, project, sessionId);
 }
 
-function workspaceSessionFilePath(dir: string, filename: "events.jsonl" | "metadata.json"): string {
+function workspaceSessionFilePath(dir: string, filename: "events.jsonl" | "metadata.json" | "session.json"): string {
   return safeWorkspaceSessionPath(dir, filename);
 }
 
@@ -273,6 +307,38 @@ async function readWorkspaceSessionEventsFile(path: string): Promise<AgentEvent[
     if (isNodeErrorCode(error, "ENOENT")) return [];
     throw error;
   }
+}
+
+async function readWorkspaceSessionStoreFile(path: string): Promise<WorkspaceLocalSessionSnapshot | null> {
+  try {
+    return parseWorkspaceSessionStoreFile(await readFile(path, "utf8"));
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
+}
+
+async function writeWorkspaceSessionStoreFile(dir: string, snapshot: WorkspaceLocalSessionSnapshot): Promise<void> {
+  const store: WorkspaceLocalSessionStoreFile = {
+    version: 1,
+    localOnly: true,
+    metadata: snapshot.metadata,
+    events: snapshot.events.filter(isHydratableWorkspaceSessionEvent),
+    thread: buildWorkspaceLocalSessionThread(snapshot.events),
+  };
+  await writeFile(workspaceSessionFilePath(dir, "session.json"), `${JSON.stringify(store, null, 2)}\n`, "utf8");
+}
+
+function parseWorkspaceSessionStoreFile(value: string): WorkspaceLocalSessionSnapshot {
+  const parsed = JSON.parse(value) as Partial<WorkspaceLocalSessionStoreFile>;
+  if (!parsed || typeof parsed !== "object") throw new Error("Workspace session store is invalid.");
+  const metadata = parseWorkspaceSessionMetadata(JSON.stringify(parsed.metadata));
+  const events = Array.isArray(parsed.events) ? parsed.events.filter(isHydratableWorkspaceSessionEvent) : [];
+  return {
+    metadata: { ...metadata, eventCount: events.length },
+    events,
+    thread: buildWorkspaceLocalSessionThread(events),
+  };
 }
 
 function parseWorkspaceSessionMetadata(value: string): WorkspaceLocalSessionMetadata {

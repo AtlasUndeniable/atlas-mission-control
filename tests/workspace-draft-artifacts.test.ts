@@ -113,6 +113,33 @@ test("explicit Ricky handover PDF request creates primary PDF artifact", async (
   }
 });
 
+
+
+test("generic workspace PDF uses Undeniable branding title fallback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-branding-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Make this a PDF.",
+      content: "Draft body.",
+      taskTitle: "Atlas workspace session",
+      runtimeProvider: "mastra",
+      runId: "run_pdf_branding_test",
+      taskId: "task_pdf_branding_test",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+
+    assert.ok(result);
+    assert.equal(result.artifact.title, "Undeniable OS workspace PDF draft");
+    assert.doesNotMatch(result.artifact.title, /Atlas workspace session PDF draft/);
+    const pdf = await readFile(result.metadata.pdfPath ?? "", "utf8");
+    assert.match(pdf, /Atlas for Undeniable/);
+    assert.match(pdf, /Undeniable OS/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("send back as pdf phrase creates PDF artifact", () => {
   const intent = detectWorkspaceDraftArtifactIntent({
     prompt: "Tidy this up and send this back as a pdf.",

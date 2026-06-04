@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -9,6 +9,7 @@ import {
   buildWorkspaceLocalSessionThread,
   getLatestWorkspaceLocalSession,
   hydrateWorkspaceLocalSession,
+  listWorkspaceLocalSessions,
   updateWorkspaceLocalSessionSelection,
 } from "../src/lib/workspace-local-sessions.ts";
 import type { AgentEvent, Artifact, Task, TaskStep } from "../src/lib/workspace-demo-events.ts";
@@ -100,6 +101,16 @@ test("append and hydrate local workspace session events", async () => {
     assert.equal(snapshot.thread.messages.length, 2);
     assert.equal(snapshot.thread.messages[0]?.content, "Return this as a PDF.");
     assert.equal(snapshot.thread.tasks[0]?.title, "Ricky PDF handover");
+
+    const sessionJson = JSON.parse(await readFile(join(root, "workspace-demo", "undeniable-os", "session_append", "session.json"), "utf8")) as {
+      localOnly?: boolean;
+      events?: unknown[];
+      thread?: { messages?: unknown[]; tasks?: unknown[] };
+    };
+    assert.equal(sessionJson.localOnly, true);
+    assert.equal(sessionJson.events?.length, 4);
+    assert.equal(sessionJson.thread?.messages?.length, 2);
+    assert.equal(sessionJson.thread?.tasks?.length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -117,6 +128,23 @@ test("latest local session lookup is project scoped", async () => {
     assert.equal(ricky?.metadata.id, "session_b");
     assert.equal(undeniable?.thread.messages[0]?.content, "Project A");
     assert.equal(ricky?.thread.messages[0]?.content, "Project B");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+
+test("local session list returns newest metadata for sidebar hydration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-list-"));
+  try {
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_first", title: "First task", event: userMessage(1, "First") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_second", title: "Second task", event: userMessage(5, "Second") });
+
+    const sessions = await listWorkspaceLocalSessions({ root, project: "undeniable-os", room: "workspace-demo" });
+    assert.deepEqual(sessions.map((session) => session.id), ["session_second", "session_first"]);
+    assert.equal(sessions[0]?.title, "Second task");
+    assert.equal(sessions[1]?.eventCount, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

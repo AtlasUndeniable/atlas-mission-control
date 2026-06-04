@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   demoRhysReadyStarterPrompt,
   demoRhysReadyTaskTitle,
@@ -80,11 +80,13 @@ interface WorkspaceProjectOption {
 
 interface WorkspaceSessionMetadata {
   id: string;
+  workspaceId: string;
   title: string;
   project: string;
   room: string;
   createdAt: string;
   updatedAt: string;
+  eventCount: number;
   selectedArtifactId: string | null;
 }
 
@@ -99,6 +101,12 @@ interface WorkspaceHydratedThread {
 interface WorkspaceSessionSnapshot {
   metadata: WorkspaceSessionMetadata;
   thread: WorkspaceHydratedThread;
+}
+
+interface WorkspaceSessionsResponse {
+  ok?: boolean;
+  session?: WorkspaceSessionSnapshot | null;
+  sessions?: WorkspaceSessionMetadata[];
 }
 
 const initialThreadState: ThreadState = {
@@ -125,7 +133,7 @@ function titleForPrompt(prompt: string): string {
   if (/\bricky\b|\bcalder\b/i.test(prompt) && /\bpay|handover|structure\b/i.test(prompt)) {
     return "Ricky Calder pay structure handover";
   }
-  return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Atlas workspace session";
+  return prompt === demoRhysReadyStarterPrompt ? demoRhysReadyTaskTitle : "Undeniable OS workspace session";
 }
 
 function initialProjectIdFromLocation(): string {
@@ -849,11 +857,14 @@ function Sidebar({
   selectedProjectId,
   tasks,
   artifacts,
+  sessions,
   selectedTaskId,
+  selectedSessionId,
   onNewTask,
   onOpenArtifact,
   onPanelChange,
   onSelectProject,
+  onSelectSession,
   onSelectTask,
 }: {
   runState: RunState;
@@ -862,13 +873,17 @@ function Sidebar({
   selectedProjectId: string;
   tasks: Task[];
   artifacts: Artifact[];
+  sessions: WorkspaceSessionMetadata[];
   selectedTaskId: string | null;
+  selectedSessionId: string | null;
   onNewTask: () => void;
   onOpenArtifact: (artifact: Artifact) => void;
   onPanelChange: (panel: WorkspacePanel) => void;
   onSelectProject: (projectId: string) => void;
+  onSelectSession: (sessionId: string) => void;
   onSelectTask: (taskId: string) => void;
 }) {
+  const visibleSessions = sessions.slice(0, 8);
   const visibleTasks = [...tasks].reverse();
   const visibleArtifacts = [...artifacts].reverse();
   const navTabs = [
@@ -909,6 +924,14 @@ function Sidebar({
       </ul>
       <div className={styles.sectionHeader}><span>Current Session</span></div>
       <ul className={styles.sidebarList}>
+        {visibleSessions.map((session) => (
+          <li className={selectedSessionId === session.id ? styles.sidebarActive : undefined} key={session.id}>
+            <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectSession(session.id)}>
+              <IconList />
+              <span className={styles.sidebarTitle}>{session.title}</span>
+            </button>
+          </li>
+        ))}
         {runState === "running" && visibleTasks.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconSpinner />
@@ -931,7 +954,7 @@ function Sidebar({
             </button>
           </li>
         ))}
-        {runState !== "running" && visibleTasks.length === 0 && visibleArtifacts.length === 0 ? (
+        {runState !== "running" && visibleSessions.length === 0 && visibleTasks.length === 0 && visibleArtifacts.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconList />
             <span className={styles.sidebarTitle}>No local tasks yet</span>
@@ -1039,6 +1062,7 @@ export default function WorkspaceDemoApp() {
   const [activePanel, setActivePanel] = useState<WorkspacePanel>("tasks");
   const [selectedProjectId, setSelectedProjectId] = useState(() => initialProjectIdFromLocation());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
@@ -1056,46 +1080,60 @@ export default function WorkspaceDemoApp() {
     };
   }, []);
 
+  const hydrateProjectSession = useCallback(async ({
+    projectId,
+    sessionId,
+    signal,
+  }: {
+    projectId: string;
+    sessionId?: string;
+    signal?: AbortSignal;
+  }) => {
+    setHydrating(true);
+    try {
+      const query = new URLSearchParams({ project: projectId, room: WORKSPACE_ROOM });
+      if (sessionId) query.set("sessionId", sessionId);
+      const response = await fetch(`/api/workspace-demo/sessions?${query.toString()}`, {
+        cache: "no-store",
+        signal,
+      });
+      const body = await response.json() as WorkspaceSessionsResponse;
+      if (signal?.aborted) return;
+      setSessionList(Array.isArray(body.sessions) ? body.sessions : []);
+      if (!response.ok || !body.ok || !body.session) {
+        setThreadState(initialThreadState);
+        setRunState("idle");
+        setActiveSessionId(null);
+        setActiveTaskTitle("New local session");
+        setSelectedTaskId(null);
+        return;
+      }
+      const nextThread = threadStateFromHydratedThread(body.session.thread);
+      setThreadState(nextThread);
+      setRunState("complete");
+      setActiveSessionId(body.session.metadata.id);
+      setActiveTaskTitle(body.session.metadata.title);
+      setSelectedTaskId(nextThread.tasks.at(-1)?.id ?? null);
+      setArtifactPreview({ status: "closed" });
+    } catch {
+      if (!signal?.aborted) {
+        setSessionList([]);
+        setThreadState(initialThreadState);
+        setRunState("idle");
+        setActiveSessionId(null);
+        setActiveTaskTitle("New local session");
+        setSelectedTaskId(null);
+      }
+    } finally {
+      if (!signal?.aborted) setHydrating(false);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
-    const hydrate = async () => {
-      setHydrating(true);
-      try {
-        const query = new URLSearchParams({ project: selectedProjectId, room: WORKSPACE_ROOM });
-        const response = await fetch(`/api/workspace-demo/sessions?${query.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        const body = await response.json() as { ok?: boolean; session?: WorkspaceSessionSnapshot | null };
-        if (!response.ok || !body.ok || !body.session) {
-          setThreadState(initialThreadState);
-          setRunState("idle");
-          setActiveSessionId(null);
-          setActiveTaskTitle("New local session");
-          setSelectedTaskId(null);
-          return;
-        }
-        const nextThread = threadStateFromHydratedThread(body.session.thread);
-        setThreadState(nextThread);
-        setRunState("complete");
-        setActiveSessionId(body.session.metadata.id);
-        setActiveTaskTitle(body.session.metadata.title);
-        setSelectedTaskId(nextThread.tasks.at(-1)?.id ?? null);
-      } catch {
-        if (!controller.signal.aborted) {
-          setThreadState(initialThreadState);
-          setRunState("idle");
-          setActiveSessionId(null);
-          setActiveTaskTitle("New local session");
-          setSelectedTaskId(null);
-        }
-      } finally {
-        if (!controller.signal.aborted) setHydrating(false);
-      }
-    };
-    void hydrate();
+    void hydrateProjectSession({ projectId: selectedProjectId, signal: controller.signal });
     return () => controller.abort();
-  }, [selectedProjectId]);
+  }, [hydrateProjectSession, selectedProjectId]);
 
   const subscribeToSource = (source: LocalWorkspaceEventSource) => {
     unsubscribeRef.current?.();
@@ -1114,6 +1152,21 @@ export default function WorkspaceDemoApp() {
     const sessionId = activeSessionId ?? createBrowserSessionId();
     setActiveSessionId(sessionId);
     setActiveTaskTitle(activeTitle);
+    setSessionList((sessions) => {
+      const now = new Date().toISOString();
+      const optimisticSession: WorkspaceSessionMetadata = {
+        id: sessionId,
+        workspaceId: "workspace_undeniable_demo",
+        project: selectedProjectId,
+        room: WORKSPACE_ROOM,
+        title: activeTitle,
+        createdAt: now,
+        updatedAt: now,
+        eventCount: 0,
+        selectedArtifactId: null,
+      };
+      return [optimisticSession, ...sessions.filter((session) => session.id !== sessionId)];
+    });
     setActivePanel("tasks");
     setSelectedTaskId(null);
     setPrompt("");
@@ -1145,7 +1198,7 @@ export default function WorkspaceDemoApp() {
     setPrompt("");
     setActiveTaskTitle("New local session");
     setActivePanel("tasks");
-    setActiveSessionId(createBrowserSessionId());
+    setActiveSessionId(null);
     setSelectedTaskId(null);
     setArtifactPreview({ status: "closed" });
   };
@@ -1197,6 +1250,18 @@ export default function WorkspaceDemoApp() {
     setSelectedTaskId(taskId);
   };
 
+  const selectSession = (sessionId: string) => {
+    if (sessionId === activeSessionId) return;
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    sourceRef.current?.reset();
+    sourceRef.current = null;
+    setPrompt("");
+    setArtifactPreview({ status: "closed" });
+    setActivePanel("tasks");
+    void hydrateProjectSession({ projectId: selectedProjectId, sessionId });
+  };
+
   const selectProject = (projectId: string) => {
     if (projectId === selectedProjectId) return;
     unsubscribeRef.current?.();
@@ -1221,11 +1286,14 @@ export default function WorkspaceDemoApp() {
         selectedProjectId={selectedProjectId}
         tasks={threadState.tasks}
         artifacts={threadState.artifacts}
+        sessions={sessionList}
         selectedTaskId={selectedTaskId}
+        selectedSessionId={activeSessionId}
         onNewTask={startNewTask}
         onOpenArtifact={openArtifactPreview}
         onPanelChange={setActivePanel}
         onSelectProject={selectProject}
+        onSelectSession={selectSession}
         onSelectTask={selectTask}
       />
       <section className={styles.canvas}>

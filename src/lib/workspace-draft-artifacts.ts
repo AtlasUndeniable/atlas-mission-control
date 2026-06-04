@@ -348,6 +348,8 @@ function limitedExportIntent(
 }
 
 function artifactTitleForIntent(taskTitle: string, intent: WorkspaceDraftArtifactIntent): string {
+  const normalizedTaskTitle = taskTitle.trim().toLowerCase();
+  if (intent.requestedFormat === "pdf" && normalizedTaskTitle === "atlas workspace session") return "Undeniable OS workspace PDF draft";
   if (intent.requestedFormat === "pdf") return `${taskTitle} PDF draft`;
   if (intent.requestedFormat === "docx") return `${taskTitle} DOCX draft`;
   if (intent.requestedFormat === "markdown") return `${taskTitle} markdown draft`;
