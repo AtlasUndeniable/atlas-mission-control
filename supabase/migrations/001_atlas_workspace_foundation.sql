@@ -1002,7 +1002,7 @@ begin
     raise exception 'required_permission must be an approval decision permission';
   end if;
 
-  computed_hash := encode(digest(exact_payload::text, 'sha256'), 'hex');
+  computed_hash := encode(extensions.digest(exact_payload::text, 'sha256'), 'hex');
 
   insert into public.approvals (
     project_id,
