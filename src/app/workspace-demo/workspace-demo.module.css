@@ -47,7 +47,9 @@
 .sidebarActive { background: var(--bg-elev-1); color: var(--text-1) !important; }
 .sidebarActive::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent); border-radius: 2px; }
 .sidebarItemButton { width: 100%; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; color: inherit; }
+.sidebarTextBlock { min-width: 0; flex: 1; display: grid; gap: 1px; }
 .sidebarTitle { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.sidebarMeta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-4); font-size: 11px; line-height: 1.2; }
 .sidebarMuted { color: var(--text-4) !important; cursor: default; }
 .sidebarMuted:hover { background: transparent !important; color: var(--text-4) !important; }
 .sidebarSpacer { flex: 1; }

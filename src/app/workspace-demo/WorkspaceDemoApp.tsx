@@ -711,6 +711,17 @@ function formatArtifactCreatedAt(value: string): string | null {
   }).format(date);
 }
 
+function formatSessionUpdatedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Local session";
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function slugifyFilename(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "workspace-draft";
 }
@@ -855,37 +866,25 @@ function Sidebar({
   panel,
   projects,
   selectedProjectId,
-  tasks,
-  artifacts,
   sessions,
-  selectedTaskId,
   selectedSessionId,
   onNewTask,
-  onOpenArtifact,
   onPanelChange,
   onSelectProject,
   onSelectSession,
-  onSelectTask,
 }: {
   runState: RunState;
   panel: WorkspacePanel;
   projects: WorkspaceProjectOption[];
   selectedProjectId: string;
-  tasks: Task[];
-  artifacts: Artifact[];
   sessions: WorkspaceSessionMetadata[];
-  selectedTaskId: string | null;
   selectedSessionId: string | null;
   onNewTask: () => void;
-  onOpenArtifact: (artifact: Artifact) => void;
   onPanelChange: (panel: WorkspacePanel) => void;
   onSelectProject: (projectId: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onSelectTask: (taskId: string) => void;
 }) {
   const visibleSessions = sessions.slice(0, 8);
-  const visibleTasks = [...tasks].reverse();
-  const visibleArtifacts = [...artifacts].reverse();
   const navTabs = [
     { id: "tasks", label: "Tasks" },
     { id: "library", label: "Library" },
@@ -922,42 +921,29 @@ function Sidebar({
           </li>
         ))}
       </ul>
-      <div className={styles.sectionHeader}><span>Current Session</span></div>
+      <div className={styles.sectionHeader}><span>Sessions</span></div>
       <ul className={styles.sidebarList}>
         {visibleSessions.map((session) => (
           <li className={selectedSessionId === session.id ? styles.sidebarActive : undefined} key={session.id}>
             <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectSession(session.id)}>
               <IconList />
-              <span className={styles.sidebarTitle}>{session.title}</span>
+              <span className={styles.sidebarTextBlock}>
+                <span className={styles.sidebarTitle}>{session.title}</span>
+                <span className={styles.sidebarMeta}>{formatSessionUpdatedAt(session.updatedAt)}</span>
+              </span>
             </button>
           </li>
         ))}
-        {runState === "running" && visibleTasks.length === 0 ? (
+        {runState === "running" && visibleSessions.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconSpinner />
             <span className={styles.sidebarTitle}>Running local task</span>
           </li>
         ) : null}
-        {visibleTasks.map((task) => (
-          <li className={selectedTaskId === task.id ? styles.sidebarActive : undefined} key={task.id}>
-            <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectTask(task.id)}>
-              {task.status === "running" ? <IconSpinner /> : <IconDocument />}
-              <span className={styles.sidebarTitle}>{task.title}</span>
-            </button>
-          </li>
-        ))}
-        {visibleArtifacts.map((artifact) => (
-          <li key={artifact.id}>
-            <button className={styles.sidebarItemButton} type="button" onClick={() => onOpenArtifact(artifact)}>
-              <IconFolder />
-              <span className={styles.sidebarTitle}>{artifact.title}</span>
-            </button>
-          </li>
-        ))}
-        {runState !== "running" && visibleSessions.length === 0 && visibleTasks.length === 0 && visibleArtifacts.length === 0 ? (
+        {runState !== "running" && visibleSessions.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconList />
-            <span className={styles.sidebarTitle}>No local tasks yet</span>
+            <span className={styles.sidebarTitle}>No saved sessions yet</span>
           </li>
         ) : null}
       </ul>
@@ -1063,7 +1049,6 @@ export default function WorkspaceDemoApp() {
   const [selectedProjectId, setSelectedProjectId] = useState(() => initialProjectIdFromLocation());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
@@ -1105,7 +1090,6 @@ export default function WorkspaceDemoApp() {
         setRunState("idle");
         setActiveSessionId(null);
         setActiveTaskTitle("New local session");
-        setSelectedTaskId(null);
         return;
       }
       const nextThread = threadStateFromHydratedThread(body.session.thread);
@@ -1113,7 +1097,6 @@ export default function WorkspaceDemoApp() {
       setRunState("complete");
       setActiveSessionId(body.session.metadata.id);
       setActiveTaskTitle(body.session.metadata.title);
-      setSelectedTaskId(nextThread.tasks.at(-1)?.id ?? null);
       setArtifactPreview({ status: "closed" });
     } catch {
       if (!signal?.aborted) {
@@ -1122,7 +1105,6 @@ export default function WorkspaceDemoApp() {
         setRunState("idle");
         setActiveSessionId(null);
         setActiveTaskTitle("New local session");
-        setSelectedTaskId(null);
       }
     } finally {
       if (!signal?.aborted) setHydrating(false);
@@ -1139,7 +1121,6 @@ export default function WorkspaceDemoApp() {
     unsubscribeRef.current?.();
     unsubscribeRef.current = source.subscribe((event) => {
       setThreadState((state) => reduceEvent(state, event));
-      if (event.kind === "task.complete") setSelectedTaskId(`${event.runId}:${event.task.id}`);
       if (event.kind === "task.complete" || event.kind === "error") setRunState("complete");
     });
   };
@@ -1168,7 +1149,6 @@ export default function WorkspaceDemoApp() {
       return [optimisticSession, ...sessions.filter((session) => session.id !== sessionId)];
     });
     setActivePanel("tasks");
-    setSelectedTaskId(null);
     setPrompt("");
     sourceRef.current?.reset();
     setThreadState((state) => ({ ...state, steps: [], task: null, errorMessage: null }));
@@ -1199,7 +1179,6 @@ export default function WorkspaceDemoApp() {
     setActiveTaskTitle("New local session");
     setActivePanel("tasks");
     setActiveSessionId(null);
-    setSelectedTaskId(null);
     setArtifactPreview({ status: "closed" });
   };
 
@@ -1245,11 +1224,6 @@ export default function WorkspaceDemoApp() {
     persistSelectedArtifact(null);
   };
 
-  const selectTask = (taskId: string) => {
-    setActivePanel("tasks");
-    setSelectedTaskId(taskId);
-  };
-
   const selectSession = (sessionId: string) => {
     if (sessionId === activeSessionId) return;
     unsubscribeRef.current?.();
@@ -1284,17 +1258,12 @@ export default function WorkspaceDemoApp() {
         panel={activePanel}
         projects={WORKSPACE_PROJECTS}
         selectedProjectId={selectedProjectId}
-        tasks={threadState.tasks}
-        artifacts={threadState.artifacts}
         sessions={sessionList}
-        selectedTaskId={selectedTaskId}
         selectedSessionId={activeSessionId}
         onNewTask={startNewTask}
-        onOpenArtifact={openArtifactPreview}
         onPanelChange={setActivePanel}
         onSelectProject={selectProject}
         onSelectSession={selectSession}
-        onSelectTask={selectTask}
       />
       <section className={styles.canvas}>
         <header className={styles.topbar}>
