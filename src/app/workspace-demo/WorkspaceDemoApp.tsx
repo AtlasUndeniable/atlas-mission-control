@@ -17,7 +17,7 @@ import styles from "./workspace-demo.module.css";
 
 type RunState = "idle" | "running" | "complete";
 type ReferenceCoverage = "matched" | "thin" | "none";
-type WorkspacePanel = "tasks" | "library" | "plugins" | "scheduled";
+type WorkspacePanel = "tasks" | "library" | "systems" | "plugins" | "scheduled";
 
 interface ArtifactPreview {
   id: string;
@@ -122,6 +122,48 @@ interface WorkspaceSessionsResponse {
   artifacts?: WorkspaceLibraryArtifact[];
 }
 
+interface WorkspaceConnectorCapabilityGroup {
+  state: "available" | "approval_gated" | "not_exposed" | "not_wired" | "blocked";
+  items: string[];
+}
+
+interface WorkspaceConnector {
+  id: string;
+  displayName: string;
+  status: "online" | "degraded" | "offline" | "not_configured" | "not_wired" | "limited";
+  safetyLevel: "read_only" | "approval_gated" | "blocked";
+  capabilities: {
+    read: WorkspaceConnectorCapabilityGroup;
+    draft: WorkspaceConnectorCapabilityGroup;
+    write: WorkspaceConnectorCapabilityGroup;
+    send: WorkspaceConnectorCapabilityGroup;
+  };
+  lastCheck: string;
+  blocker: string | null;
+  fixHint: string | null;
+  health: {
+    checked: boolean;
+    configured: boolean | null;
+    service: string | null;
+    latencyMs: number | null;
+    summary: string;
+  };
+}
+
+interface WorkspaceConnectorRegistryResponse {
+  ok?: boolean;
+  generatedAt?: string;
+  summary?: {
+    online: number;
+    limited: number;
+    notConfigured: number;
+    notWired: number;
+    offline: number;
+    approvalGated: number;
+  };
+  connectors?: WorkspaceConnector[];
+}
+
 const initialThreadState: ThreadState = {
   messages: [],
   artifacts: [],
@@ -142,6 +184,13 @@ const WORKSPACE_PROJECTS: WorkspaceProjectOption[] = [
   { id: "content-planning", title: "Content planning" },
   { id: "training-knowledge", title: "Training / Knowledge" },
 ];
+const WORKSPACE_PANEL_TABS = [
+  { id: "tasks", label: "Tasks", title: "Active tasks" },
+  { id: "library", label: "Library", title: "Artifact library" },
+  { id: "systems", label: "Systems", title: "Agent connections" },
+  { id: "plugins", label: "Plugins", title: "Plugins coming next" },
+  { id: "scheduled", label: "Scheduled", title: "Scheduled coming next" },
+] as const satisfies Array<{ id: WorkspacePanel; label: string; title: string }>;
 
 function titleForPrompt(prompt: string): string {
   if (/\bricky\b|\bcalder\b/i.test(prompt) && /\bpay|handover|structure\b/i.test(prompt)) {
@@ -568,24 +617,144 @@ function LibraryPanel({
   );
 }
 
+function SystemsPanel({
+  connectors,
+  error,
+  loading,
+  summary,
+  onRefresh,
+}: {
+  connectors: WorkspaceConnector[];
+  error: string | null;
+  loading: boolean;
+  summary: WorkspaceConnectorRegistryResponse["summary"] | null;
+  onRefresh: () => void;
+}) {
+  if (loading && connectors.length === 0) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Systems</div>
+        <h1>Checking local connections...</h1>
+        <p>Running read-only local health checks. No external actions are being taken.</p>
+      </section>
+    );
+  }
+
+  if (error && connectors.length === 0) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Systems</div>
+        <h1>Connection status unavailable</h1>
+        <p>{error}</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={styles.systemsPanel}>
+      <div className={styles.systemsHeader}>
+        <div>
+          <div className={styles.panelKicker}>Systems</div>
+          <h1>Agent Connections</h1>
+          <p>Readiness for local connector diagnostics. External sends and client-system mutations are not exposed from this screen.</p>
+        </div>
+        <button className={styles.systemsRefresh} type="button" onClick={onRefresh} disabled={loading}>
+          {loading ? "Checking..." : "Refresh"}
+        </button>
+      </div>
+      {summary ? (
+        <div className={styles.systemsSummary} aria-label="Connector summary">
+          <span>{summary.online} online</span>
+          <span>{summary.limited} limited</span>
+          <span>{summary.notConfigured} not configured</span>
+          <span>{summary.notWired} not wired</span>
+          <span>{summary.approvalGated} approval-gated</span>
+        </div>
+      ) : null}
+      {error ? <p className={styles.systemsError}>{error}</p> : null}
+      <div className={styles.systemsList}>
+        {connectors.map((connector) => (
+          <article className={styles.systemCard} key={connector.id}>
+            <div className={styles.systemCardTop}>
+              <div>
+                <h2>{connector.displayName}</h2>
+                <span>{connector.health.summary}</span>
+              </div>
+              <div className={styles.systemStatusGroup}>
+                <span className={`${styles.systemStatus} ${styles[`systemStatus_${connector.status}`]}`}>
+                  {formatConnectorStatus(connector.status)}
+                </span>
+                <span className={styles.systemSafety}>{formatConnectorSafety(connector.safetyLevel)}</span>
+              </div>
+            </div>
+            <div className={styles.systemMeta}>
+              <span>Last check: {formatArtifactCreatedAt(connector.lastCheck) || "just now"}</span>
+              {connector.health.service ? <span>Service: {connector.health.service}</span> : null}
+              {connector.health.latencyMs !== null ? <span>{connector.health.latencyMs}ms</span> : null}
+            </div>
+            <div className={styles.systemCapabilityGrid}>
+              {(["read", "draft", "write", "send"] as const).map((group) => (
+                <div className={styles.systemCapability} key={group}>
+                  <span className={styles.systemCapabilityTitle}>
+                    {group}
+                    <em>{formatCapabilityState(connector.capabilities[group].state)}</em>
+                  </span>
+                  <ul>
+                    {connector.capabilities[group].items.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            {connector.blocker || connector.fixHint ? (
+              <div className={styles.systemBlocker}>
+                {connector.blocker ? <span>{connector.blocker}</span> : null}
+                {connector.fixHint ? <small>{connector.fixHint}</small> : null}
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function WorkspacePanelView({
   panel,
+  connectorError,
+  connectorLoading,
+  connectorRegistry,
   libraryError,
   libraryArtifacts,
   hydrating,
+  onRefreshConnectors,
   onOpenArtifact,
 }: {
   panel: Exclude<WorkspacePanel, "tasks">;
+  connectorError: string | null;
+  connectorLoading: boolean;
+  connectorRegistry: WorkspaceConnectorRegistryResponse | null;
   libraryError: string | null;
   libraryArtifacts: WorkspaceLibraryArtifact[];
   hydrating: boolean;
+  onRefreshConnectors: () => void;
   onOpenArtifact: (artifact: Artifact) => void;
 }) {
   if (panel === "library") {
     return <LibraryPanel artifacts={libraryArtifacts} error={libraryError} hydrating={hydrating} onOpenArtifact={onOpenArtifact} />;
   }
+  if (panel === "systems") {
+    return (
+      <SystemsPanel
+        connectors={connectorRegistry?.connectors ?? []}
+        error={connectorError}
+        loading={connectorLoading}
+        summary={connectorRegistry?.summary ?? null}
+        onRefresh={onRefreshConnectors}
+      />
+    );
+  }
 
-  const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library">, { title: string; body: string }> = {
+  const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library" | "systems">, { title: string; body: string }> = {
     plugins: {
       title: "Plugins are not connected yet",
       body: "Runtime tools are available internally where the agent supports them. User-managed plugin controls are intentionally dormant in this alpha.",
@@ -603,6 +772,20 @@ function WorkspacePanelView({
       <p>{copy.body}</p>
     </section>
   );
+}
+
+function formatConnectorStatus(status: WorkspaceConnector["status"]) {
+  return status.replaceAll("_", " ");
+}
+
+function formatConnectorSafety(safetyLevel: WorkspaceConnector["safetyLevel"]) {
+  if (safetyLevel === "read_only") return "Read-only";
+  if (safetyLevel === "approval_gated") return "Approval-gated";
+  return "Blocked";
+}
+
+function formatCapabilityState(state: WorkspaceConnectorCapabilityGroup["state"]) {
+  return state.replaceAll("_", " ");
 }
 
 function TaskEmptyPanel() {
@@ -1053,19 +1236,13 @@ function Sidebar({
   onSelectSession: (sessionId: string) => void;
 }) {
   const visibleSessions = sessions.slice(0, 8);
-  const navTabs = [
-    { id: "tasks", label: "Tasks", title: "Active tasks" },
-    { id: "library", label: "Library", title: "Artifact library" },
-    { id: "plugins", label: "Plugins", title: "Plugins coming next" },
-    { id: "scheduled", label: "Scheduled", title: "Scheduled coming next" },
-  ] as const;
 
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brand}><span className={styles.brandMark} /><span className={styles.brandName}>Atlas</span><span className={styles.brandSub}>for Undeniable</span></div>
       <button className={styles.newTask} type="button" onClick={onNewTask}><span className={styles.newTaskPlus}>+</span> New task</button>
       <nav className={styles.navMini} aria-label="Workspace navigation">
-        {navTabs.map((tab) => (
+        {WORKSPACE_PANEL_TABS.map((tab) => (
           <button
             aria-label={tab.title}
             className={panel === tab.id ? styles.navMiniActive : undefined}
@@ -1219,6 +1396,9 @@ export default function WorkspaceDemoApp() {
   const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
   const [libraryArtifacts, setLibraryArtifacts] = useState<WorkspaceLibraryArtifact[]>([]);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [connectorRegistry, setConnectorRegistry] = useState<WorkspaceConnectorRegistryResponse | null>(null);
+  const [connectorError, setConnectorError] = useState<string | null>(null);
+  const [connectorLoading, setConnectorLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
@@ -1297,6 +1477,35 @@ export default function WorkspaceDemoApp() {
     });
     return () => controller.abort();
   }, [hydrateProjectSession, selectedProjectId]);
+
+  const loadConnectorRegistry = useCallback(async (signal?: AbortSignal) => {
+    setConnectorLoading(true);
+    setConnectorError(null);
+    try {
+      const response = await fetch("/api/workspace-demo/connectors", {
+        cache: "no-store",
+        signal,
+      });
+      const body = await response.json() as WorkspaceConnectorRegistryResponse;
+      if (signal?.aborted) return;
+      if (!response.ok || !body.ok || !Array.isArray(body.connectors)) {
+        setConnectorError("Local connector status could not be loaded.");
+        return;
+      }
+      setConnectorRegistry(body);
+    } catch {
+      if (!signal?.aborted) setConnectorError("Local connector status could not be loaded.");
+    } finally {
+      if (!signal?.aborted) setConnectorLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePanel !== "systems") return;
+    const controller = new AbortController();
+    void loadConnectorRegistry(controller.signal);
+    return () => controller.abort();
+  }, [activePanel, loadConnectorRegistry]);
 
   const subscribeToSource = (
     source: LocalWorkspaceEventSource,
@@ -1486,12 +1695,30 @@ export default function WorkspaceDemoApp() {
           <button className={styles.iconButton} type="button" aria-label="More actions coming soon" title="More actions are not connected yet" disabled><IconMore /></button>
           <Inspector events={threadState.internalEvents} referencePacket={referencePacket} />
         </header>
+        <nav className={styles.mobilePanelNav} aria-label="Workspace navigation">
+          {WORKSPACE_PANEL_TABS.map((tab) => (
+            <button
+              aria-label={tab.title}
+              className={activePanel === tab.id ? styles.mobilePanelNavActive : undefined}
+              key={tab.id}
+              onClick={() => setActivePanel(tab.id)}
+              title={tab.title}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
         {activePanel !== "tasks" ? (
           <WorkspacePanelView
             panel={activePanel}
+            connectorError={connectorError}
+            connectorLoading={connectorLoading}
+            connectorRegistry={connectorRegistry}
             libraryError={libraryError}
             libraryArtifacts={libraryArtifacts}
             hydrating={hydrating}
+            onRefreshConnectors={() => void loadConnectorRegistry()}
             onOpenArtifact={openArtifactPreview}
           />
         ) : hydrating ? (
