@@ -269,6 +269,15 @@ test("prompt planner runs expected read-only tools without creating artifact int
       "search_memory",
     ]);
 
+    const rhysMathTools = await prepareWorkspaceAgentToolExecutions({
+      prompt: "40 clients x $250/week is not $10k/month. With available knowledge, what’s the real model?",
+    }, { referenceOptions: fixtures.referenceOptions });
+    assert.deepEqual(rhysMathTools.map((execution) => execution.toolName), [
+      "get_reference_packet",
+      "summarize_calls",
+      "search_memory",
+    ]);
+
     const artifactTools = await prepareWorkspaceAgentToolExecutions({
       prompt: "Find the latest Ricky artifact.",
     }, {

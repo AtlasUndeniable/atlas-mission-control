@@ -5,6 +5,7 @@ export type AgentEventKind =
   | "message.complete"
   | "tool.call"
   | "tool.result"
+  | "run.phase"
   | "artifact.created"
   | "task.step"
   | "task.complete"
@@ -14,6 +15,8 @@ export type MessageRole = "user" | "assistant";
 export type TaskStepStatus = "pending" | "running" | "complete" | "error";
 export type ArtifactType = "document" | "spreadsheet" | "audit" | "brief" | "playbook" | "markdown" | "pdf";
 export type WorkspaceTaskStatus = "idle" | "running" | "complete" | "error";
+export type WorkspaceRunPhaseName = "observe" | "retrieve" | "answer_draft" | "critic_check" | "final";
+export type WorkspaceRunPhaseStatus = "running" | "complete" | "warning" | "error";
 
 interface BaseAgentEvent {
   id: string;
@@ -57,6 +60,12 @@ export interface ToolResultEvent extends BaseAgentEvent {
   resultSummary: string;
 }
 
+export interface RunPhaseEvent extends BaseAgentEvent {
+  kind: "run.phase";
+  visibility: "presentation";
+  phase: WorkspaceRunPhase;
+}
+
 export interface ArtifactCreatedEvent extends BaseAgentEvent {
   kind: "artifact.created";
   visibility: "presentation";
@@ -87,6 +96,7 @@ export type AgentEvent =
   | MessageCompleteEvent
   | ToolCallEvent
   | ToolResultEvent
+  | RunPhaseEvent
   | ArtifactCreatedEvent
   | TaskStepEvent
   | TaskCompleteEvent
@@ -121,6 +131,23 @@ export interface Artifact {
   title: string;
   subtitle: string;
   preview: string;
+}
+
+export interface WorkspaceRunPhase {
+  id: string;
+  name: WorkspaceRunPhaseName;
+  title: string;
+  status: WorkspaceRunPhaseStatus;
+  summary: string;
+  checked: string[];
+  sourceCategories: string[];
+  qa: {
+    passed: boolean;
+    issues: string[];
+    revised: boolean;
+  } | null;
+  finalAnswer: string | null;
+  nextAction: string | null;
 }
 
 export interface Workspace {

@@ -61,6 +61,26 @@ function artifactEvent(index: number, artifact: Artifact): AgentEvent {
   };
 }
 
+function runPhaseEvent(index: number, phaseName: Extract<AgentEvent, { kind: "run.phase" }>["phase"]["name"]): AgentEvent {
+  return {
+    ...eventBase(index),
+    kind: "run.phase",
+    visibility: "presentation",
+    phase: {
+      id: `run_${index}:${phaseName}`,
+      name: phaseName,
+      title: phaseName,
+      status: "complete",
+      summary: `${phaseName} complete.`,
+      checked: ["Reference packet"],
+      sourceCategories: ["call-transcript"],
+      qa: phaseName === "critic_check" ? { passed: true, issues: ["No critic issues found."], revised: false } : null,
+      finalAnswer: phaseName === "final" ? "## What I found\n\nFinal answer." : null,
+      nextAction: "Check excerpts next.",
+    },
+  };
+}
+
 function taskEvents(index: number, title: string): [AgentEvent, AgentEvent] {
   const step: TaskStep = { id: `step_${index}`, title: "Create draft", status: "complete", summary: "Saved locally." };
   const task: Task = {
@@ -130,6 +150,25 @@ test("thread task projection deduplicates repeated task chips for one run", () =
   assert.equal(thread.task?.id, "run_3:task_3");
   assert.equal(thread.tasks.length, 1);
   assert.equal(thread.tasks[0]?.title, "First 10k strategy pass");
+});
+
+test("hydrated session restores run phase QA state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-run-phases-"));
+  try {
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases", title: "QA run", event: userMessage(1, "Use call logs.") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases", title: "QA run", event: runPhaseEvent(2, "observe") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases", title: "QA run", event: runPhaseEvent(3, "retrieve") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases", title: "QA run", event: runPhaseEvent(4, "critic_check") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases", title: "QA run", event: runPhaseEvent(5, "final") });
+
+    const snapshot = await hydrateWorkspaceLocalSession({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_phases" });
+
+    assert.deepEqual(snapshot?.thread.runPhases.map((phase) => phase.name), ["observe", "retrieve", "critic_check", "final"]);
+    assert.equal(snapshot?.thread.runPhases.find((phase) => phase.name === "critic_check")?.qa?.passed, true);
+    assert.match(snapshot?.thread.runPhases.find((phase) => phase.name === "final")?.finalAnswer ?? "", /Final answer/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("latest local session lookup is project scoped", async () => {

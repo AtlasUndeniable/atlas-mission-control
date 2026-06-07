@@ -400,9 +400,19 @@ test("call-memory analytical prompt answers agentically without creating artifac
     .map((event) => event.delta)
     .join("");
   const artifacts = events.filter((event) => event.kind === "artifact.created");
+  const phases = events.filter((event): event is Extract<AgentEvent, { kind: "run.phase" }> => event.kind === "run.phase");
   const taskComplete = events.find((event) => event.kind === "task.complete");
 
   assert.equal(artifacts.length, 0);
+  assert.deepEqual(phases.map((event) => event.phase.name), [
+    "observe",
+    "retrieve",
+    "answer_draft",
+    "critic_check",
+    "final",
+  ]);
+  assert.equal(phases.find((event) => event.phase.name === "critic_check")?.phase.qa?.passed, true);
+  assert.match(phases.find((event) => event.phase.name === "final")?.phase.finalAnswer ?? "", /## What I found/);
   assert.match(presentationText, /## What I checked/);
   assert.match(presentationText, /## What I found/);
   assert.match(presentationText, /## Confidence \/ coverage/);
@@ -413,6 +423,23 @@ test("call-memory analytical prompt answers agentically without creating artifac
   assert.doesNotMatch(presentationText, /\/Users\/atlasai|\.openclaw|librarian-reports\//);
   assert.equal(taskComplete?.kind, "task.complete");
   assert.equal(taskComplete?.task.status, "complete");
+});
+
+test("analytical prompt mentioning pdf/playbooks/call logs emits QA phases and no artifact", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+    input: {
+      prompt: "predictable strategies and models to make them first 10k. use all learned knowledge, call logs, and playbooks, and pdf",
+      title: "First 10k strategy analysis",
+    },
+    referencePacket: matchedReferencePacket(),
+  });
+
+  assert.equal(events.some((event) => event.kind === "artifact.created"), false);
+  assert.deepEqual(
+    events.filter((event): event is Extract<AgentEvent, { kind: "run.phase" }> => event.kind === "run.phase")
+      .map((event) => event.phase.name),
+    ["observe", "retrieve", "answer_draft", "critic_check", "final"],
+  );
 });
 
 test("internal command details are internal only and presentation stream excludes them", async () => {

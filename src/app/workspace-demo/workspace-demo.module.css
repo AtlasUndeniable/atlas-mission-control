@@ -141,6 +141,18 @@
 .checkBoxDone::after { content: ""; position: absolute; left: 3px; top: 1px; width: 4px; height: 7px; border: solid var(--success); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .referenceCoverageLine { width: fit-content; max-width: 100%; margin: 0 0 10px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-3); background: rgba(255,255,255,.025); font-size: 11px; line-height: 1.4; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .referenceSourceChip { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; color: var(--text-2); background: rgba(255,255,255,.035); }
+.runQaCard { width: 100%; min-width: 0; display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.022); color: var(--text-2); }
+.runQaTop { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.runQaKicker { color: var(--text-4); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.runQaPass, .runQaWarn { flex-shrink: 0; border: 1px solid rgba(127,209,162,.42); border-radius: 999px; padding: 2px 8px; color: #bfe7cf; background: rgba(127,209,162,.08); font-size: 11px; line-height: 1.45; }
+.runQaWarn { border-color: rgba(232,189,108,.42); color: #e8bd6c; background: rgba(232,189,108,.08); }
+.runQaGrid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.runQaBlock { min-width: 0; display: grid; align-content: start; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.018); }
+.runQaBlock strong { color: var(--text-1); font-size: 12px; font-weight: 600; }
+.runQaBlock ul { margin: 0; padding-left: 16px; display: grid; gap: 4px; }
+.runQaBlock li { min-width: 0; color: var(--text-3); font-size: 11.5px; line-height: 1.42; overflow-wrap: anywhere; }
+.runQaChips { min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; }
+.runQaChips span { min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 7px; color: var(--text-2); background: rgba(255,255,255,.032); font-size: 11px; }
 .errorNotice { width: 100%; display: grid; gap: 4px; padding: 12px 14px; background: rgba(232,189,108,.08); border: 1px solid rgba(232,189,108,.28); border-radius: 10px; color: var(--text-2); }
 .errorNotice strong { color: var(--text-1); font-size: 13.5px; font-weight: 600; }
 .errorNotice span { overflow-wrap: anywhere; }
@@ -263,6 +275,9 @@
   .chat { padding: 22px 14px 18px; }
   .composerWrap { padding: 10px 14px 16px; }
   .msgUser { max-width: 88%; }
+  .runQaGrid { grid-template-columns: 1fr; }
+  .runQaTop { align-items: flex-start; flex-direction: column; }
+  .runQaChips span { max-width: 100%; }
   .artifactCard { align-items: flex-start; }
   .libraryPanel { padding: 22px 14px 32px; }
   .libraryHeader { align-items: flex-start; flex-direction: column; gap: 8px; }

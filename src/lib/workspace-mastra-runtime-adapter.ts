@@ -20,6 +20,13 @@ import {
   summarizeWorkspaceDraftArtifactForChat,
   type WorkspaceDraftArtifactResult,
 } from "./workspace-draft-artifacts.ts";
+import {
+  describeQaChecks,
+  describeSourceCategories,
+  isWorkspaceAnalyticalMemoryQuestion,
+  runWorkspaceAnalyticalQa,
+} from "./workspace-agentic-qa.ts";
+import type { WorkspaceRunPhase, WorkspaceRunPhaseName, WorkspaceRunPhaseStatus } from "./workspace-demo-events.ts";
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -88,6 +95,20 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
     ];
 
     yield messageComplete(eventCtx, `${eventCtx.runId}_user`, "user", checkedInput.prompt);
+    const shouldRunQaLoop = isWorkspaceAnalyticalMemoryQuestion(checkedInput.prompt);
+    if (shouldRunQaLoop) {
+      yield runPhaseEvent(eventCtx, {
+        name: "observe",
+        title: "Observe request",
+        status: "complete",
+        summary: "Classified as an analytical Workspace question; artifact creation remains gated by explicit deliverable intent.",
+        checked: ["Prompt intent", "Artifact intent boundary", "Read-only retrieval eligibility"],
+        sourceCategories: [],
+        qa: null,
+        finalAnswer: null,
+        nextAction: "Retrieve safe local evidence before drafting.",
+      });
+    }
     yield taskStep(eventCtx, steps[0]);
 
     const env = ctx.env ?? process.env;
@@ -99,6 +120,21 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       yield resultEvent;
     }
     yield referenceInspectorEvent(eventCtx, referencePacket);
+    if (shouldRunQaLoop) {
+      yield runPhaseEvent(eventCtx, {
+        name: "retrieve",
+        title: "Retrieve evidence",
+        status: "complete",
+        summary: referencePacket.references.length
+          ? `Resolved ${referencePacket.references.length} Workspace reference label${referencePacket.references.length === 1 ? "" : "s"}.`
+          : "No usable Workspace source labels were resolved; final answer must state thin coverage.",
+        checked: describeQaChecks(runtimeContext).filter((item) => !/^Ran critic checks/i.test(item)),
+        sourceCategories: describeSourceCategories(runtimeContext),
+        qa: null,
+        finalAnswer: null,
+        nextAction: "Draft with source labels and visible coverage limits.",
+      });
+    }
 
     yield {
       ...baseEvent(eventCtx),
@@ -186,6 +222,63 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
       content = sanitizeMastraPresentationText(normalizePresentationText(content));
       if (!content) {
         throw new Error(streamError ? readErrorMessage(streamError) : "AI SDK returned no presentation text.");
+      }
+      if (shouldRunQaLoop) {
+        yield runPhaseEvent(eventCtx, {
+          name: "answer_draft",
+          title: "Draft answer",
+          status: "complete",
+          summary: "Drafted an answer and held it for critic review before showing it in chat.",
+          checked: ["Draft answer shape", "Source label placement", "No artifact emitted before QA"],
+          sourceCategories: describeSourceCategories(runtimeContext),
+          qa: null,
+          finalAnswer: null,
+          nextAction: "Run critic checks before final response.",
+        });
+        const qaResult = runWorkspaceAnalyticalQa({
+          prompt: checkedInput.prompt,
+          draftText: content,
+          runtimeContext,
+          artifactPlanned: false,
+        });
+        content = qaResult.finalText;
+        const issueMessages = qaResult.initialIssues.map((issue) => `${issue.code}: ${issue.message}`);
+        yield runPhaseEvent(eventCtx, {
+          name: "critic_check",
+          title: "Critic check",
+          status: qaResult.passed ? "complete" : "warning",
+          summary: qaResult.passed
+            ? qaResult.revised
+              ? "Critic found issues and revised the answer once."
+              : "Critic passed with no issues."
+            : "Critic still found coverage risk after one revision.",
+          checked: qaResult.checked,
+          sourceCategories: qaResult.sourceCategories,
+          qa: {
+            passed: qaResult.passed,
+            issues: issueMessages.length ? issueMessages : ["No critic issues found."],
+            revised: qaResult.revised,
+          },
+          finalAnswer: null,
+          nextAction: qaResult.nextAction,
+        });
+        yield runPhaseEvent(eventCtx, {
+          name: "final",
+          title: "Final answer",
+          status: qaResult.passed ? "complete" : "warning",
+          summary: qaResult.revised
+            ? "Critic revised the analytical answer before final response."
+            : "Critic passed the analytical answer before final response.",
+          checked: qaResult.checked,
+          sourceCategories: qaResult.sourceCategories,
+          qa: {
+            passed: qaResult.passed,
+            issues: qaResult.remainingIssues.map((issue) => `${issue.code}: ${issue.message}`),
+            revised: qaResult.revised,
+          },
+          finalAnswer: content,
+          nextAction: qaResult.nextAction,
+        });
       }
       const draftArtifact = await maybeWriteWorkspaceDraftArtifact({
         prompt: checkedInput.prompt,
@@ -423,6 +516,28 @@ function draftArtifactInspectorEvent(ctx: AdapterEventContext, draftArtifact: Wo
   };
 }
 
+function runPhaseEvent(
+  ctx: AdapterEventContext,
+  phase: Omit<WorkspaceRunPhase, "id"> & {
+    name: WorkspaceRunPhaseName;
+    status: WorkspaceRunPhaseStatus;
+  },
+): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_phase"),
+    kind: "run.phase",
+    visibility: "presentation",
+    phase: {
+      id: `${ctx.runId}:${phase.name}`,
+      ...phase,
+      checked: phase.checked.map(redactPresentationPath),
+      sourceCategories: phase.sourceCategories.map((item) => item.replace(/[^a-zA-Z0-9 _.-]+/g, "").slice(0, 80)),
+      finalAnswer: phase.finalAnswer ? redactPresentationPath(phase.finalAnswer) : null,
+    },
+  };
+}
+
 function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
   return {
     ...baseEvent(ctx),
@@ -431,6 +546,10 @@ function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
     visibility: "presentation",
     step,
   };
+}
+
+function redactPresentationPath(text: string): string {
+  return text.replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]");
 }
 
 function taskComplete(ctx: AdapterEventContext, title: string, steps: TaskStep[]): AgentEvent {

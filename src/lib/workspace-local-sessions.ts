@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
-import type { AgentEvent, Artifact, ArtifactType, Message, Task, TaskStep } from "./workspace-demo-events.ts";
+import type { AgentEvent, Artifact, ArtifactType, Message, Task, TaskStep, WorkspaceRunPhase } from "./workspace-demo-events.ts";
 import { WORKSPACE_DEMO_ARTIFACT_ROOT, type WorkspaceDraftArtifactRequestedFormat } from "./workspace-draft-artifacts.ts";
 
 export const WORKSPACE_DEMO_SESSION_ROOT = "/Users/atlasai/.openclaw/workspace/state/workspace-demo-sessions";
@@ -36,6 +36,7 @@ export interface WorkspaceLocalSessionThread {
   steps: TaskStep[];
   task: Task | null;
   tasks: Task[];
+  runPhases: WorkspaceRunPhase[];
 }
 
 export interface WorkspaceLocalArtifact {
@@ -291,6 +292,7 @@ export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): Workspac
     steps: [],
     task: null,
     tasks: [],
+    runPhases: [],
   };
 
   for (const event of events) {
@@ -313,6 +315,11 @@ export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): Workspac
     }
     if (event.kind === "artifact.created" && !thread.artifacts.some((artifact) => artifact.id === event.artifact.id)) {
       thread.artifacts = [...thread.artifacts, event.artifact];
+    }
+    if (event.kind === "run.phase") {
+      thread.runPhases = thread.runPhases.some((phase) => phase.id === event.phase.id)
+        ? thread.runPhases.map((phase) => (phase.id === event.phase.id ? event.phase : phase))
+        : [...thread.runPhases, event.phase];
     }
     if (event.kind === "task.step") {
       thread.steps = thread.steps.some((step) => step.id === event.step.id)
@@ -353,6 +360,7 @@ async function sanitizeWorkspaceLocalSessionSnapshotArtifacts(
   const thread: WorkspaceLocalSessionThread = {
     ...snapshot.thread,
     artifacts: artifacts.filter((artifact): artifact is Artifact => Boolean(artifact)),
+    runPhases: Array.isArray(snapshot.thread.runPhases) ? snapshot.thread.runPhases : [],
   };
   return {
     ...snapshot,
@@ -391,6 +399,7 @@ export function isHydratableWorkspaceSessionEvent(event: AgentEvent): boolean {
     event.kind === "message.delta" ||
     event.kind === "message.complete" ||
     event.kind === "artifact.created" ||
+    event.kind === "run.phase" ||
     event.kind === "task.step" ||
     event.kind === "task.complete"
   );

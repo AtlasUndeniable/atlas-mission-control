@@ -20,6 +20,13 @@ import {
   summarizeWorkspaceDraftArtifactForChat,
   type WorkspaceDraftArtifactResult,
 } from "./workspace-draft-artifacts.ts";
+import {
+  describeQaChecks,
+  describeSourceCategories,
+  isWorkspaceAnalyticalMemoryQuestion,
+  runWorkspaceAnalyticalQa,
+} from "./workspace-agentic-qa.ts";
+import type { WorkspaceRunPhase, WorkspaceRunPhaseName, WorkspaceRunPhaseStatus } from "./workspace-demo-events";
 
 export type WorkspaceLocalRuntimeMode = "mock" | "codex" | "claude";
 
@@ -119,6 +126,20 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     ];
 
     yield messageComplete(eventCtx, userMessageId, "user", checkedInput.prompt);
+    const shouldRunQaLoop = isWorkspaceAnalyticalMemoryQuestion(checkedInput.prompt);
+    if (shouldRunQaLoop) {
+      yield runPhaseEvent(eventCtx, {
+        name: "observe",
+        title: "Observe request",
+        status: "complete",
+        summary: "Classified as an analytical Workspace question; artifact creation remains gated by explicit deliverable intent.",
+        checked: ["Prompt intent", "Artifact intent boundary", "Read-only retrieval eligibility"],
+        sourceCategories: [],
+        qa: null,
+        finalAnswer: null,
+        nextAction: "Retrieve safe local evidence before drafting.",
+      });
+    }
     yield taskStep(eventCtx, steps[0]);
 
     const env = ctx.env ?? process.env;
@@ -150,6 +171,21 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       yield resultEvent;
     }
     yield referenceInspectorEvent(eventCtx, referencePacket);
+    if (shouldRunQaLoop) {
+      yield runPhaseEvent(eventCtx, {
+        name: "retrieve",
+        title: "Retrieve evidence",
+        status: "complete",
+        summary: referencePacket.references.length
+          ? `Resolved ${referencePacket.references.length} Workspace reference label${referencePacket.references.length === 1 ? "" : "s"}.`
+          : "No usable Workspace source labels were resolved; final answer must state thin coverage.",
+        checked: describeQaChecks(runtimeContext).filter((item) => !/^Ran critic checks/i.test(item)),
+        sourceCategories: describeSourceCategories(runtimeContext),
+        qa: null,
+        finalAnswer: null,
+        nextAction: "Draft with source labels and visible coverage limits.",
+      });
+    }
 
     const output = selection.available && selection.command
       ? await runApprovedCommand({
@@ -199,10 +235,72 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
       };
     }
 
+    let finalOutputText = output.presentationText;
+    let finalSummary = output.presentationSummary;
+    if (shouldRunQaLoop && !output.error) {
+      yield runPhaseEvent(eventCtx, {
+        name: "answer_draft",
+        title: "Draft answer",
+        status: "complete",
+        summary: "Drafted an answer and held it for critic review before showing it in chat.",
+        checked: ["Draft answer shape", "Source label placement", "No artifact emitted before QA"],
+        sourceCategories: describeSourceCategories(runtimeContext),
+        qa: null,
+        finalAnswer: null,
+        nextAction: "Run critic checks before final response.",
+      });
+
+      const qaResult = runWorkspaceAnalyticalQa({
+        prompt: checkedInput.prompt,
+        draftText: output.presentationText,
+        runtimeContext,
+        artifactPlanned: false,
+      });
+      finalOutputText = qaResult.finalText;
+      finalSummary = qaResult.revised
+        ? "Critic revised the analytical answer before final response."
+        : "Critic passed the analytical answer before final response.";
+      const issueMessages = qaResult.initialIssues.map((issue) => `${issue.code}: ${issue.message}`);
+      yield runPhaseEvent(eventCtx, {
+        name: "critic_check",
+        title: "Critic check",
+        status: qaResult.passed ? "complete" : "warning",
+        summary: qaResult.passed
+          ? qaResult.revised
+            ? "Critic found issues and revised the answer once."
+            : "Critic passed with no issues."
+          : "Critic still found coverage risk after one revision.",
+        checked: qaResult.checked,
+        sourceCategories: qaResult.sourceCategories,
+        qa: {
+          passed: qaResult.passed,
+          issues: issueMessages.length ? issueMessages : ["No critic issues found."],
+          revised: qaResult.revised,
+        },
+        finalAnswer: null,
+        nextAction: qaResult.nextAction,
+      });
+      yield runPhaseEvent(eventCtx, {
+        name: "final",
+        title: "Final answer",
+        status: qaResult.passed ? "complete" : "warning",
+        summary: finalSummary,
+        checked: qaResult.checked,
+        sourceCategories: qaResult.sourceCategories,
+        qa: {
+          passed: qaResult.passed,
+          issues: qaResult.remainingIssues.map((issue) => `${issue.code}: ${issue.message}`),
+          revised: qaResult.revised,
+        },
+        finalAnswer: finalOutputText,
+        nextAction: qaResult.nextAction,
+      });
+    }
+
     steps[1] = {
       ...steps[1],
       status: output.error ? "error" : "complete",
-      summary: output.presentationSummary,
+      summary: finalSummary,
     };
     steps[2] = { ...steps[2], status: "running" };
     yield taskStep(eventCtx, steps[1]);
@@ -211,7 +309,7 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
     const draftArtifact = !output.error
       ? await maybeWriteWorkspaceDraftArtifact({
         prompt: checkedInput.prompt,
-        content: output.presentationText,
+        content: finalOutputText,
         taskTitle,
         runtimeProvider: selection.mode === "mock" ? "mock" : "local-codex",
         runId: eventCtx.runId,
@@ -220,7 +318,7 @@ export class TerminalLocalRuntimeAdapter implements WorkspaceLocalRuntimeAdapter
         root: ctx.draftArtifactRoot,
       })
       : null;
-    const chatText = draftArtifact ? summarizeWorkspaceDraftArtifactForChat(draftArtifact) : output.presentationText;
+    const chatText = draftArtifact ? summarizeWorkspaceDraftArtifactForChat(draftArtifact) : finalOutputText;
 
     for (const delta of splitStreamingText(chatText)) {
       yield {
@@ -460,6 +558,30 @@ function draftArtifactInspectorEvent(ctx: AdapterEventContext, draftArtifact: Wo
     toolName: "workspace.artifacts",
     label: "Local draft artifact saved",
     resultSummary: JSON.stringify(draftArtifact.metadata),
+  };
+}
+
+function runPhaseEvent(
+  ctx: AdapterEventContext,
+  phase: Omit<WorkspaceRunPhase, "id"> & {
+    name: WorkspaceRunPhaseName;
+    status: WorkspaceRunPhaseStatus;
+  },
+): AgentEvent {
+  return {
+    ...baseEvent(ctx),
+    id: ctx.nextId("evt_phase"),
+    kind: "run.phase",
+    visibility: "presentation",
+    phase: {
+      id: `${ctx.runId}:${phase.name}`,
+      ...phase,
+      checked: phase.checked.map((item) => item.replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")),
+      sourceCategories: phase.sourceCategories.map((item) => item.replace(/[^a-zA-Z0-9 _.-]+/g, "").slice(0, 80)),
+      finalAnswer: phase.finalAnswer
+        ? phase.finalAnswer.replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
+        : null,
+    },
   };
 }
 

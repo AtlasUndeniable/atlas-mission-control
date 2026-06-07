@@ -64,6 +64,24 @@ const replayEvents: AgentEvent[] = [
   {
     ...baseEvent,
     id: "evt_005",
+    kind: "run.phase",
+    visibility: "presentation",
+    phase: {
+      id: "run_competitive_intel_demo:critic_check",
+      name: "critic_check",
+      title: "Critic check",
+      status: "complete",
+      summary: "Critic passed.",
+      checked: ["Source labels", "Path leaks"],
+      sourceCategories: ["librarian-report"],
+      qa: { passed: true, issues: ["No critic issues found."], revised: false },
+      finalAnswer: null,
+      nextAction: "Check source excerpts.",
+    },
+  },
+  {
+    ...baseEvent,
+    id: "evt_006",
     kind: "artifact.created",
     visibility: "presentation",
     artifact: {
@@ -76,7 +94,7 @@ const replayEvents: AgentEvent[] = [
   },
   {
     ...baseEvent,
-    id: "evt_006",
+    id: "evt_007",
     kind: "task.step",
     visibility: "presentation",
     step: {
@@ -88,7 +106,7 @@ const replayEvents: AgentEvent[] = [
   },
   {
     ...baseEvent,
-    id: "evt_007",
+    id: "evt_008",
     kind: "task.complete",
     visibility: "presentation",
     task: {
@@ -109,7 +127,7 @@ const replayEvents: AgentEvent[] = [
   },
   {
     ...baseEvent,
-    id: "evt_008",
+    id: "evt_009",
     kind: "error",
     visibility: "internal",
     message: "Recoverable local adapter error.",

@@ -11,6 +11,7 @@ import {
   type Message,
   type Task,
   type TaskStep,
+  type WorkspaceRunPhase,
 } from "@/lib/workspace-demo-events";
 import { LocalWorkspaceEventSource } from "@/lib/workspace-local-event-source";
 import styles from "./workspace-demo.module.css";
@@ -69,6 +70,7 @@ interface ThreadState {
   steps: TaskStep[];
   task: Task | null;
   tasks: Task[];
+  runPhases: WorkspaceRunPhase[];
   internalEvents: AgentEvent[];
   errorMessage: string | null;
 }
@@ -108,6 +110,7 @@ interface WorkspaceHydratedThread {
   steps: TaskStep[];
   task: Task | null;
   tasks: Task[];
+  runPhases?: WorkspaceRunPhase[];
 }
 
 interface WorkspaceSessionSnapshot {
@@ -170,6 +173,7 @@ const initialThreadState: ThreadState = {
   steps: [],
   task: null,
   tasks: [],
+  runPhases: [],
   internalEvents: [],
   errorMessage: null,
 };
@@ -241,6 +245,7 @@ function threadStateFromHydratedThread(thread: WorkspaceHydratedThread): ThreadS
     steps: Array.isArray(thread.steps) ? thread.steps : [],
     task,
     tasks,
+    runPhases: Array.isArray(thread.runPhases) ? thread.runPhases : [],
     internalEvents: [],
     errorMessage: null,
   };
@@ -290,6 +295,13 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
   if (event.kind === "artifact.created") {
     if (state.artifacts.some((artifact) => artifact.id === event.artifact.id)) return state;
     return { ...state, artifacts: [...state.artifacts, event.artifact] };
+  }
+
+  if (event.kind === "run.phase") {
+    const runPhases = state.runPhases.some((phase) => phase.id === event.phase.id)
+      ? state.runPhases.map((phase) => (phase.id === event.phase.id ? event.phase : phase))
+      : [...state.runPhases, event.phase];
+    return { ...state, runPhases };
   }
 
   if (event.kind === "task.step") {
@@ -1140,7 +1152,7 @@ function ReferenceCoverageLine({ packet }: { packet: ReferenceInspectorPacket | 
     return (
       <div className={styles.referenceCoverageLine}>
         <span>Using Workspace references</span>
-        {labels.map((label) => <span className={styles.referenceSourceChip} key={label}>{label}</span>)}
+        {labels.map((label, index) => <span className={styles.referenceSourceChip} key={`${label}:${index}`}>{label}</span>)}
       </div>
     );
   }
@@ -1148,11 +1160,69 @@ function ReferenceCoverageLine({ packet }: { packet: ReferenceInspectorPacket | 
     return (
       <div className={styles.referenceCoverageLine}>
         <span>Limited references available</span>
-        {labels.map((label) => <span className={styles.referenceSourceChip} key={label}>{label}</span>)}
+        {labels.map((label, index) => <span className={styles.referenceSourceChip} key={`${label}:${index}`}>{label}</span>)}
       </div>
     );
   }
   return null;
+}
+
+function RunQaCard({ phases }: { phases: WorkspaceRunPhase[] }) {
+  if (!phases.length) return null;
+  const latestByName = new Map<WorkspaceRunPhase["name"], WorkspaceRunPhase>();
+  for (const phase of phases) latestByName.set(phase.name, phase);
+  const observe = latestByName.get("observe");
+  const retrieve = latestByName.get("retrieve");
+  const critic = latestByName.get("critic_check");
+  const final = latestByName.get("final");
+  const checked = [...new Set([...(observe?.checked ?? []), ...(retrieve?.checked ?? []), ...(critic?.checked ?? [])])].slice(0, 5);
+  const categories = [...new Set([...(retrieve?.sourceCategories ?? []), ...(critic?.sourceCategories ?? [])])].slice(0, 6);
+  const qaPassed = critic?.qa?.passed;
+  const finalAnswer = final?.finalAnswer ? compactRunCardText(final.finalAnswer) : final?.summary ?? "Final answer pending.";
+  const nextAction = final?.nextAction ?? critic?.nextAction ?? retrieve?.nextAction ?? "Continue with the next safe read-only check.";
+
+  return (
+    <aside className={styles.runQaCard} aria-label="Atlas run QA">
+      <div className={styles.runQaTop}>
+        <span className={styles.runQaKicker}>QA loop</span>
+        <span className={qaPassed === false ? styles.runQaWarn : styles.runQaPass}>
+          {critic ? qaPassed === false ? "coverage thin" : "critic passed" : "checking"}
+        </span>
+      </div>
+      <div className={styles.runQaGrid}>
+        <RunQaBlock title="What Atlas checked" items={checked.length ? checked : ["Prompt observed; retrieval pending."]} />
+        <RunQaBlock title="Evidence/source categories" chips={categories.length ? categories : ["none checked"]} />
+        <RunQaBlock title="QA result" items={[critic?.summary ?? "Critic check pending."]} />
+        <RunQaBlock title="Final answer" items={[finalAnswer]} />
+        <RunQaBlock title="Next best action" items={[nextAction]} />
+      </div>
+    </aside>
+  );
+}
+
+function RunQaBlock({ title, items, chips }: { title: string; items?: string[]; chips?: string[] }) {
+  return (
+    <div className={styles.runQaBlock}>
+      <strong>{title}</strong>
+      {chips ? (
+        <div className={styles.runQaChips}>
+          {chips.map((chip) => <span key={chip}>{chip}</span>)}
+        </div>
+      ) : (
+        <ul>
+          {(items ?? []).map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function compactRunCardText(text: string): string {
+  const compact = text
+    .replace(/^#{1,4}\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return compact.length > 360 ? `${compact.slice(0, 357)}...` : compact;
 }
 
 function ErrorNotice({ message }: { message: string }) {
@@ -1202,7 +1272,7 @@ function ChatThread({
     requestAnimationFrame(() => {
       chat.scrollTop = chat.scrollHeight;
     });
-  }, [state.messages, state.artifacts, state.steps]);
+  }, [state.messages, state.artifacts, state.steps, state.runPhases]);
 
   return (
     <section className={styles.chat} ref={chatRef} onScroll={handleScroll}>
@@ -1217,6 +1287,7 @@ function ChatThread({
             </div>
           )
         ))}
+        <RunQaCard phases={state.runPhases} />
         {visibleArtifacts.length ? (
           <div className={styles.threadArtifacts}>
             {visibleArtifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}

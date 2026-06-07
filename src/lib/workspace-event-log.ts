@@ -9,6 +9,7 @@ export const agentEventKinds = [
   "message.complete",
   "tool.call",
   "tool.result",
+  "run.phase",
   "artifact.created",
   "task.step",
   "task.complete",
@@ -241,6 +242,9 @@ function validateAgentEventShape(value: unknown): asserts value is AgentEvent {
       assertNonEmptyString(value.label, "tool.result.label");
       assertString(value.resultSummary, "tool.result.resultSummary");
       return;
+    case "run.phase":
+      validateRunPhase(value.phase);
+      return;
     case "artifact.created":
       validateArtifact(value.artifact);
       return;
@@ -257,6 +261,27 @@ function validateAgentEventShape(value: unknown): asserts value is AgentEvent {
     default:
       throw new Error(`Unsupported workspace event kind: ${String(value.kind)}`);
   }
+}
+
+function validateRunPhase(value: unknown): void {
+  if (!isObjectRecord(value)) throw new Error("run.phase.phase must be an object");
+  assertNonEmptyString(value.id, "phase.id");
+  assertOneOf(value.name, ["observe", "retrieve", "answer_draft", "critic_check", "final"], "phase.name");
+  assertNonEmptyString(value.title, "phase.title");
+  assertOneOf(value.status, ["running", "complete", "warning", "error"], "phase.status");
+  assertString(value.summary, "phase.summary");
+  assertStringArray(value.checked, "phase.checked");
+  assertStringArray(value.sourceCategories, "phase.sourceCategories");
+  if (value.qa !== null) validateRunPhaseQa(value.qa);
+  if (value.finalAnswer !== null) assertString(value.finalAnswer, "phase.finalAnswer");
+  if (value.nextAction !== null) assertString(value.nextAction, "phase.nextAction");
+}
+
+function validateRunPhaseQa(value: unknown): void {
+  if (!isObjectRecord(value)) throw new Error("phase.qa must be an object");
+  if (typeof value.passed !== "boolean") throw new Error("phase.qa.passed must be boolean");
+  if (typeof value.revised !== "boolean") throw new Error("phase.qa.revised must be boolean");
+  assertStringArray(value.issues, "phase.qa.issues");
 }
 
 function validateArtifact(value: unknown): void {
@@ -311,6 +336,12 @@ function assertEqual<T extends string>(value: unknown, expected: T, path: string
 function assertOneOf<T extends readonly string[]>(value: unknown, options: T, path: string): asserts value is T[number] {
   if (typeof value !== "string" || !options.includes(value)) {
     throw new Error(`${path} must be one of ${options.join(", ")}`);
+  }
+}
+
+function assertStringArray(value: unknown, path: string): asserts value is string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${path} must be an array of strings`);
   }
 }
 
