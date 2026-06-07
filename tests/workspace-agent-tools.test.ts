@@ -260,6 +260,15 @@ test("prompt planner runs expected read-only tools without creating artifact int
       "search_memory",
     ]);
 
+    const rhysBetaTools = await prepareWorkspaceAgentToolExecutions({
+      prompt: "predictable strategies and models to make them first 10k. use all learned knowledge, call logs, and playbooks, and pdf",
+    }, { referenceOptions: fixtures.referenceOptions });
+    assert.deepEqual(rhysBetaTools.map((execution) => execution.toolName), [
+      "get_reference_packet",
+      "summarize_calls",
+      "search_memory",
+    ]);
+
     const artifactTools = await prepareWorkspaceAgentToolExecutions({
       prompt: "Find the latest Ricky artifact.",
     }, {

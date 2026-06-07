@@ -329,6 +329,7 @@ export function sanitizeMastraPresentationText(text: string): string {
     .replace(/<\/?(?:AgentEvent|message\.delta|message\.complete|task\.step|task\.complete)\b[^>]*>/gi, "")
     .replace(/```json\s*\{[\s\S]*?"visibility"\s*:\s*"internal"[\s\S]*?```\s*/gi, "")
     .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
+    .replace(/^(#{1,4}\s*)?Coverage\s*\/\s*Confidence\s*$/gim, "## Confidence / coverage")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return removeLeadingAssistantProcessPromise(cleaned);

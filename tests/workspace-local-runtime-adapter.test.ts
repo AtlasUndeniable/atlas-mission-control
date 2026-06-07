@@ -358,12 +358,14 @@ test("Mastra presentation sanitizer removes event envelope narration", () => {
     "<AgentEvent type=\"task.step\" visibility=\"internal\">Searching internal context</AgentEvent>",
     "<AgentEvent type=\"message.delta\" visibility=\"presentation\">Use clearer bands and a pyramid.</AgentEvent>",
     "Internal notes live at /Users/atlasai/.openclaw/workspace/state/state-current.md and .openclaw/workspace/tools/librarian-reports/ricky.md.",
+    "Coverage / Confidence",
     "```json",
     "{\"visibility\":\"internal\",\"provider\":\"anthropic\"}",
     "```",
   ].join("\n"));
 
   assert.match(cleaned, /clearer bands and a pyramid/);
+  assert.match(cleaned, /## Confidence \/ coverage/);
   assert.match(cleaned, /\[Workspace internal path\]/);
   assert.doesNotMatch(cleaned, /^I['’]?ll help/i);
   assert.doesNotMatch(cleaned, /AgentEvent|task\.step|visibility|provider|anthropic|internal context|\/Users\/atlasai|\.openclaw\/workspace/);
@@ -383,6 +385,34 @@ test("safe mock adapter streams presentation text and completes the task chip", 
   assert.equal(taskComplete?.kind, "task.complete");
   assert.equal(taskComplete?.task.status, "complete");
   assert.equal(taskComplete?.task.completedSteps, taskComplete?.task.totalSteps);
+});
+
+test("call-memory analytical prompt answers agentically without creating artifacts", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter(), {
+    input: {
+      prompt: "predictable strategies and models to make them first 10k. use all learned knowledge, call logs, and playbooks, and pdf",
+      title: "First 10k strategy analysis",
+    },
+    referencePacket: matchedReferencePacket(),
+  });
+  const presentationText = events
+    .filter((event): event is Extract<AgentEvent, { kind: "message.delta" }> => event.kind === "message.delta")
+    .map((event) => event.delta)
+    .join("");
+  const artifacts = events.filter((event) => event.kind === "artifact.created");
+  const taskComplete = events.find((event) => event.kind === "task.complete");
+
+  assert.equal(artifacts.length, 0);
+  assert.match(presentationText, /## What I checked/);
+  assert.match(presentationText, /## What I found/);
+  assert.match(presentationText, /## Confidence \/ coverage/);
+  assert.match(presentationText, /## What I would check next/);
+  assert.match(presentationText, /\[librarian-report: Ricky Calder Source Match\]/);
+  assert.match(presentationText, /first-10k offer/);
+  assert.doesNotMatch(presentationText, /do you want me to dig|should I dig|would you like me to/i);
+  assert.doesNotMatch(presentationText, /\/Users\/atlasai|\.openclaw|librarian-reports\//);
+  assert.equal(taskComplete?.kind, "task.complete");
+  assert.equal(taskComplete?.task.status, "complete");
 });
 
 test("internal command details are internal only and presentation stream excludes them", async () => {

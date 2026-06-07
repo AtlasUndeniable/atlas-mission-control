@@ -52,6 +52,8 @@ const EVENT_VISIBILITY_RULES = [
   "Keep provider names, command paths, stderr, model choices, tokens, keys, cwd, and diagnostics in visibility=internal events only.",
   "Use task.step and task.complete events to communicate progress and completion through the P1 workspace contract.",
   "Write natural presentation text only; do not print JSON, XML, AgentEvent tags, task.step labels, or visibility labels in the assistant response.",
+  "For analytical or memory-backed questions, answer with these sections: What I checked, What I found, Confidence / coverage, What I would check next.",
+  "Include source labels in the answer when resolved references are available, using source type plus title only.",
   "For document tasks, prefer this response shape: short acknowledgement, concise draft summary, artifact-card-ready draft content, brief next step.",
   "Avoid repetitive process narration. Do not repeatedly say you are building, generating, creating, or working on the task across paragraphs.",
   "Do not volunteer unsupported feature lists in normal responses; only mention an unavailable format or delivery channel if the user asked for it or it prevents confusion.",
@@ -150,6 +152,9 @@ export function buildWorkspaceRuntimeContext(
     "Reference Librarian and Obsidian material by handle or path summary only.",
     "Raw local source paths are internal diagnostics; do not print local filesystem paths in the assistant response.",
     "Document task discipline: answer with a short acknowledgement, concise draft summary, draft content, and one brief next step.",
+    "Analytical task discipline: do not ask whether to dig into call transcripts, playbooks, or memory when safe read-only references are available. Use the read-only retrieval already provided and answer now.",
+    "Analytical answer shape: What I checked, What I found, Confidence / coverage, What I would check next.",
+    "Source labels: when references are available, include labels like [call-summary: Title] or [librarian-report: Title]. Do not print local paths.",
     "Do not narrate process repeatedly. One short acknowledgement is enough.",
     "Truthfulness boundary: local Markdown drafts are wired, and explicitly requested local PDF drafts are wired. Do not claim DOCX, export packages, external file delivery, Slack return, or share links. Do not list unavailable formats unless the user asks for them.",
     referencePacket.coverage === "none"

@@ -96,22 +96,22 @@ export function shouldCreateWorkspaceDraftArtifact(input: Pick<WorkspaceDraftArt
 export function detectWorkspaceDraftArtifactIntent(
   input: Pick<WorkspaceDraftArtifactInput, "prompt" | "taskTitle">,
 ): WorkspaceDraftArtifactIntent {
-  const text = input.prompt.toLowerCase();
+  const text = normalizeIntentText(input.prompt);
   if (hasExplicitPdfArtifactIntent(text)) {
     return createIntent("pdf", "PDF export requested.");
   }
-  if (/\bdocx\b|\bword doc\b|\bword document\b|as a docx|make this a docx/.test(text)) {
+  if (hasExplicitDocxArtifactIntent(text)) {
     return limitedExportIntent("docx", "DOCX export requested.");
   }
-  if (/\bmarkdown\b|\bmd\b/.test(text)) return createIntent("markdown", "Markdown draft requested.");
-  if (/\bhandover(?:s)?\b/.test(text)) return createIntent("handover", "Handover deliverable requested.");
-  if (/\bdocs?\b|\bdocument(?:s|ation)?\b/.test(text)) return createIntent("document", "Document deliverable requested.");
-  if (/\breport(?:s)?\b/.test(text)) return createIntent("report", "Report deliverable requested.");
-  if (/\bdeck(?:s)?\b|\bslide deck\b|\bslides\b/.test(text)) return createIntent("deck", "Deck deliverable requested.");
-  if (/\bexport(?:s|ed|ing)?\b|\bpackage this\b|\bpackage it\b/.test(text)) return createIntent("export", "Export/package requested.");
-  if (/\bfile(?:s)?\b|\bsave this\b|\bsave it\b|\bsave the\b/.test(text)) return createIntent("file", "File/save requested.");
-  if (/\bdeliverable(?:s)?\b/.test(text)) return createIntent("deliverable", "Deliverable requested.");
-  if (/\baudit(?:s)?\b|\bplaybook(?:s)?\b/.test(text)) return createIntent("document", "Document-style deliverable requested.");
+  if (hasExplicitMarkdownArtifactIntent(text)) return createIntent("markdown", "Markdown draft requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\bhandover(?:s)?\b/)) return createIntent("handover", "Handover deliverable requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\bdocs?\b|\bdocument(?:s|ation)?\b/)) return createIntent("document", "Document deliverable requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\breport(?:s)?\b/)) return createIntent("report", "Report deliverable requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\bdeck(?:s)?\b|\bslide deck\b|\bslides\b/)) return createIntent("deck", "Deck deliverable requested.");
+  if (hasExplicitExportIntent(text)) return createIntent("export", "Export/package requested.");
+  if (hasExplicitSaveOrFileIntent(text)) return createIntent("file", "File/save requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\bdeliverable(?:s)?\b/)) return createIntent("deliverable", "Deliverable requested.");
+  if (hasExplicitNamedDeliverableIntent(text, /\baudit(?:s)?\b|\bplaybook(?:s)?\b/)) return createIntent("document", "Document-style deliverable requested.");
   return {
     shouldCreate: false,
     requestedFormat: null,
@@ -119,14 +119,52 @@ export function detectWorkspaceDraftArtifactIntent(
   };
 }
 
+function normalizeIntentText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 function hasExplicitPdfArtifactIntent(text: string): boolean {
   return (
-    /\bpdfs?\b/.test(text) ||
+    /\b(?:render|create|draft|build|generate|write|prepare|save|download|produce)\b.{0,80}\bpdfs?\b/.test(text) ||
     /\b(?:return|send|bring|give|provide)\s+(?:this|it|that|the\s+\w+)?\s*(?:back\s+)?as\s+a\s+pdf\b/.test(text) ||
     /\bdownloadable\s+pdf\b/.test(text) ||
     /\bexport\s+(?:this|it|that|the\s+\w+)?\s*(?:to|as)\s+(?:a\s+)?pdf\b/.test(text) ||
+    /\bsave\s+(?:this|it|that|the\s+\w+)?\s*(?:to|as)\s+(?:a\s+)?pdf\b/.test(text) ||
     /\bmake\s+(?:this|it|that)?\s*(?:a\s+)?pdf\b/.test(text)
   );
+}
+
+function hasExplicitDocxArtifactIntent(text: string): boolean {
+  return /\b(?:render|create|draft|build|generate|write|prepare|save|download|produce)\b.{0,80}\b(?:docx|word doc|word document)\b/.test(text)
+    || /\b(?:return|send|bring|give|provide|export|save)\s+(?:this|it|that|the\s+\w+)?\s*(?:back\s+)?(?:as|to)\s+(?:a\s+)?(?:docx|word doc|word document)\b/.test(text)
+    || /\bturn\s+(?:this|it|that)\s+into\s+(?:a\s+)?(?:docx|word doc|word document)\b/.test(text)
+    || /\bmake\s+(?:this|it|that)\s+(?:a\s+)?(?:docx|word doc|word document)\b/.test(text);
+}
+
+function hasExplicitMarkdownArtifactIntent(text: string): boolean {
+  return /\b(?:render|create|draft|build|generate|write|prepare|save|download|produce)\b.{0,80}\b(?:markdown|md)\b/.test(text)
+    || /\b(?:return|send|bring|give|provide|export|save)\s+(?:this|it|that|the\s+\w+)?\s*(?:back\s+)?(?:as|to)\s+(?:a\s+)?(?:markdown|md)\b/.test(text)
+    || /\bturn\s+(?:this|it|that)\s+into\s+(?:a\s+)?(?:markdown|md)\b/.test(text)
+    || /\bmake\s+(?:this|it|that)\s+(?:a\s+)?(?:markdown|md)\b/.test(text);
+}
+
+function hasExplicitNamedDeliverableIntent(text: string, nounPattern: RegExp): boolean {
+  const noun = nounPattern.source;
+  return new RegExp(`\\b(?:create|draft|build|generate|write|prepare|render|produce)\\b.{0,80}(?:${noun})`).test(text)
+    || new RegExp(`(?:${noun}).{0,80}\\b(?:create|draft|build|generate|write|prepare|render|save|export|produce)\\b`).test(text)
+    || /\bturn\s+(?:this|it|that)\s+into\b/.test(text) && nounPattern.test(text)
+    || /\bmake\s+(?:this|it|that|a|an|the)\b.{0,80}/.test(text) && nounPattern.test(text)
+    || /\bupdate\b.{0,80}/.test(text) && nounPattern.test(text);
+}
+
+function hasExplicitExportIntent(text: string): boolean {
+  return /\bexport(?:s|ed|ing)?\b/.test(text)
+    || /\bpackage\s+(?:this|it|that|the\s+\w+)\b/.test(text);
+}
+
+function hasExplicitSaveOrFileIntent(text: string): boolean {
+  return /\bsave\s+(?:this|it|that|the\s+\w+)/.test(text)
+    || /\b(?:create|draft|build|generate|write|prepare|render|produce)\b.{0,80}\bfile(?:s)?\b/.test(text);
 }
 
 export async function maybeWriteWorkspaceDraftArtifact(
@@ -134,6 +172,9 @@ export async function maybeWriteWorkspaceDraftArtifact(
 ): Promise<WorkspaceDraftArtifactResult | null> {
   const intent = detectWorkspaceDraftArtifactIntent(input);
   if (!intent.shouldCreate) return null;
+  if (intent.requestedFormat === "pdf" && !(await resolveRealWorkspacePdfSource(input, intent))) {
+    return null;
+  }
   return writeWorkspaceDraftArtifact(input, intent);
 }
 

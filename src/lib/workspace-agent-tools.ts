@@ -768,7 +768,8 @@ function dateMs(value: string | undefined): number {
 }
 
 function looksLikeCallTrendRequest(prompt: string): boolean {
-  return /\b(calls?|transcripts?|recent calls?|trends?)\b/i.test(prompt) && /\b(top|trend|summary|summari[sz]e|recent)\b/i.test(prompt);
+  return /\b(calls?|call logs?|transcripts?|recent calls?|trends?)\b/i.test(prompt) &&
+    /\b(top|trend|summary|summari[sz]e|recent|predict|predictable|strateg(?:y|ies)|models?|learned knowledge|playbooks?)\b/i.test(prompt);
 }
 
 function looksLikeArtifactFindRequest(prompt: string): boolean {

@@ -76,6 +76,8 @@ interface WorkspaceLocalArtifactMetadata {
   taskTitle: string | null;
   sourceWorkflow: "atlas-rhys-ricky-handover-archive" | null;
   unsupportedPdf: boolean;
+  archivedAt: string | null;
+  archivedReason: string | null;
 }
 
 export function createWorkspaceLocalSessionId(): string {
@@ -319,15 +321,25 @@ export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): Workspac
     }
     if (event.kind === "task.complete") {
       const taskSnapshot: Task = { ...event.task, id: `${event.runId}:${event.task.id}` };
-      thread.task = event.task;
+      thread.task = taskSnapshot;
       thread.tasks = thread.tasks.some((task) => task.id === taskSnapshot.id)
         ? thread.tasks.map((task) => (task.id === taskSnapshot.id ? taskSnapshot : task))
         : [...thread.tasks, taskSnapshot];
+      thread.tasks = dedupeWorkspaceThreadTasks(thread.tasks);
       thread.steps = event.task.steps;
     }
   }
 
   return thread;
+}
+
+function dedupeWorkspaceThreadTasks(tasks: Task[]): Task[] {
+  const byKey = new Map<string, Task>();
+  for (const task of tasks) {
+    const key = `${task.id}::${task.title.toLowerCase().replace(/\s+/g, " ").trim()}`;
+    byKey.set(key, task);
+  }
+  return [...byKey.values()];
 }
 
 async function sanitizeWorkspaceLocalSessionSnapshotArtifacts(
@@ -357,6 +369,7 @@ function normalizeHydratedWorkspaceArtifact(
   metadata: WorkspaceLocalArtifactMetadata | null,
 ): Artifact | null {
   if (!artifact || typeof artifact !== "object") return null;
+  if (metadata?.archivedAt) return null;
   if (artifact.type === "pdf" && metadata?.sourceWorkflow === "atlas-rhys-ricky-handover-archive") {
     return {
       ...artifact,
@@ -474,6 +487,8 @@ async function readWorkspaceLocalArtifactMetadata(
       taskTitle: typeof parsed.taskTitle === "string" ? parsed.taskTitle : null,
       sourceWorkflow,
       unsupportedPdf: type === "pdf" && sourceWorkflow !== "atlas-rhys-ricky-handover-archive",
+      archivedAt: typeof parsed.archivedAt === "string" ? parsed.archivedAt : null,
+      archivedReason: typeof parsed.archivedReason === "string" ? parsed.archivedReason : null,
     };
   } catch (error) {
     if (isNodeErrorCode(error, "ENOENT")) return null;

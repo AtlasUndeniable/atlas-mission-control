@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -47,6 +47,14 @@ test("draft artifact intent is explicit deliverable only", () => {
     prompt: "Export these content ideas as a file.",
     taskTitle: "Content ideas",
   }), true);
+  assert.equal(shouldCreateWorkspaceDraftArtifact({
+    prompt: "predictable strategies and models to make them first 10k. use all learned knowledge, call logs, and playbooks, and pdf",
+    taskTitle: "Undeniable OS workspace session",
+  }), false);
+  assert.equal(shouldCreateWorkspaceDraftArtifact({
+    prompt: "What patterns show up across the PDF playbooks, call logs, and knowledge?",
+    taskTitle: "Analysis",
+  }), false);
 });
 
 test("draft artifact intent tracks requested format and export limitation", () => {
@@ -129,11 +137,11 @@ test("explicit Ricky handover PDF request creates primary PDF artifact", async (
   }
 });
 
-test("generic workspace PDF request is blocked to an internal markdown draft without fake branding", async () => {
+test("generic unsupported PDF request does not create a fake artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-pdf-blocked-"));
   try {
     const result = await maybeWriteWorkspaceDraftArtifact({
-      prompt: "Make this a PDF.",
+      prompt: "Render this as a PDF.",
       content: "Draft body.",
       taskTitle: "Atlas workspace session",
       runtimeProvider: "mastra",
@@ -143,16 +151,7 @@ test("generic workspace PDF request is blocked to an internal markdown draft wit
       root,
     });
 
-    assert.ok(result);
-    assert.equal(result.artifact.type, "markdown");
-    assert.equal(result.metadata.type, "markdown");
-    assert.equal(result.metadata.requestedFormat, "pdf");
-    assert.equal(result.metadata.pdfPath, undefined);
-    assert.equal(result.metadata.sourceWorkflow, undefined);
-    assert.match(result.metadata.exportLimitation ?? "", /real Atlas\/Rhys document workflow/);
-    assert.match(result.artifact.subtitle, /PDF rendering is blocked/);
-    assert.match(summarizeWorkspaceDraftArtifactForChat(result), /Internal markdown draft saved; PDF rendering is blocked/);
-    assert.doesNotMatch(summarizeWorkspaceDraftArtifactForChat(result), /PDF draft saved/);
+    assert.equal(result, null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -274,11 +273,11 @@ test("draft artifact preview reads only safe markdown artifact ids", async () =>
   }
 });
 
-test("unsupported pdf request preserves only markdown source and reports blocker", async () => {
+test("unsupported pdf request creates no artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-"));
   try {
     const result = await maybeWriteWorkspaceDraftArtifact({
-      prompt: "Make this a PDF for Rhys.",
+      prompt: "Save this as a PDF for Rhys.",
       content: "Draft body.",
       taskTitle: "Readiness summary",
       runtimeProvider: "mastra",
@@ -288,31 +287,7 @@ test("unsupported pdf request preserves only markdown source and reports blocker
       root,
     });
 
-    assert.ok(result);
-    assert.equal(result.artifact.type, "markdown");
-    assert.match(result.artifact.title, /Readiness summary PDF draft/);
-    assert.match(result.artifact.subtitle, /PDF rendering is blocked/);
-    assert.equal(result.metadata.requestedFormat, "pdf");
-    assert.equal(result.metadata.type, "markdown");
-    assert.match(result.metadata.exportLimitation ?? "", /real Atlas\/Rhys document workflow/);
-    assert.equal(result.metadata.sourceMarkdownPath, undefined);
-    assert.equal(result.metadata.pdfPath, undefined);
-    assert.equal(result.metadata.localPath.endsWith(".md"), true);
-    const markdown = await readFile(result.metadata.localPath, "utf8");
-    assert.match(markdown, /Delivery: local draft only; no external send performed/);
-    assert.ok((await stat(result.metadata.localPath)).size > 100);
-
-    const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
-    assert.ok(preview);
-    assert.equal(preview.type, "markdown");
-    assert.equal(preview.pdf, undefined);
-    assert.equal(await readWorkspaceDraftArtifactPdf(result.metadata.id, { root }), null);
-    assert.doesNotMatch(JSON.stringify(preview), /localPath|metadataPath|pdfPath|sourceMarkdownPath|\/Users\/atlasai|workspace-demo-artifacts/);
-
-    const chatSummary = summarizeWorkspaceDraftArtifactForChat(result);
-    assert.match(chatSummary, /Internal markdown draft saved; PDF rendering is blocked/);
-    assert.match(chatSummary, /preview the full draft/);
-    assert.doesNotMatch(chatSummary, /PDF draft saved|download the PDF/);
+    assert.equal(result, null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

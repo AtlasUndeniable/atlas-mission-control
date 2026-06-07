@@ -118,6 +118,20 @@ test("append and hydrate local workspace session events", async () => {
   }
 });
 
+test("thread task projection deduplicates repeated task chips for one run", () => {
+  const [, completeEvent] = taskEvents(3, "First 10k strategy pass");
+  const repeatedComplete: AgentEvent = {
+    ...completeEvent,
+    id: "evt_duplicate_complete",
+  };
+
+  const thread = buildWorkspaceLocalSessionThread([completeEvent, repeatedComplete]);
+
+  assert.equal(thread.task?.id, "run_3:task_3");
+  assert.equal(thread.tasks.length, 1);
+  assert.equal(thread.tasks[0]?.title, "First 10k strategy pass");
+});
+
 test("latest local session lookup is project scoped", async () => {
   const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-project-"));
   try {
@@ -350,6 +364,56 @@ test("legacy placeholder PDFs hydrate and list as internal markdown drafts", asy
     assert.equal(artifacts[0]?.title, "Legacy internal draft");
     assert.equal(artifacts[0]?.requestedFormat, "pdf");
     assert.match(artifacts[0]?.preview ?? "", /Legacy placeholder PDF hidden/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("archived artifact metadata hides bad local test artifacts without deleting files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-archived-artifact-"));
+  const artifactRoot = await mkdtemp(join(tmpdir(), "atlas-workspace-artifacts-archived-artifact-"));
+  try {
+    const artifact: Artifact = {
+      id: "artifact_demo_bad_beta_pdf",
+      type: "markdown",
+      title: "Undeniable OS workspace session PDF draft",
+      subtitle: "Internal markdown draft saved.",
+      preview: "Bad beta artifact.",
+    };
+    await appendWorkspaceLocalSessionEvent({
+      root,
+      project: "undeniable-os",
+      room: "workspace-demo",
+      sessionId: "session_archived_artifact",
+      title: "Undeniable OS workspace session",
+      event: artifactEvent(1, artifact),
+    });
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(join(artifactRoot, `${artifact.id}.metadata.json`), JSON.stringify({
+      id: artifact.id,
+      type: "markdown",
+      createdAt: new Date(Date.UTC(2026, 5, 6, 3, 15, 0)).toISOString(),
+      taskTitle: "Undeniable OS workspace session",
+      requestedFormat: "pdf",
+      archivedAt: "2026-06-07T00:00:00.000Z",
+      archivedReason: "bad-beta-artifact-intent",
+    }));
+    await writeFile(join(artifactRoot, `${artifact.id}.md`), "# Preserved for rollback\n", "utf8");
+
+    const snapshot = await hydrateWorkspaceLocalSession({
+      root,
+      artifactRoot,
+      project: "undeniable-os",
+      room: "workspace-demo",
+      sessionId: "session_archived_artifact",
+    });
+    const artifacts = await listWorkspaceLocalArtifacts({ root, artifactRoot, project: "undeniable-os", room: "workspace-demo" });
+
+    assert.equal(snapshot?.thread.artifacts.length, 0);
+    assert.equal(snapshot?.metadata.artifactCount, 0);
+    assert.equal(artifacts.length, 0);
+    assert.match(await readFile(join(artifactRoot, `${artifact.id}.md`), "utf8"), /Preserved for rollback/);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(artifactRoot, { recursive: true, force: true });

@@ -537,25 +537,32 @@ function buildMockOutput(
   reason: string,
   runtimeContext = buildWorkspaceRuntimeContext(input, { provider: "mock" }),
 ): LocalAdapterOutput {
-  const referenceLine = runtimeContext.workspaceReferences.coverage === "matched"
-    ? "Using Workspace references resolved for this prompt."
+  const checked = describeRuntimeChecks(runtimeContext);
+  const sourceLabels = formatSourceLabels(runtimeContext);
+  const found = buildMockFindings(input, runtimeContext);
+  const confidence = runtimeContext.workspaceReferences.coverage === "matched"
+    ? "Medium-high for the retrieved source labels; still verify before acting."
     : runtimeContext.workspaceReferences.coverage === "thin"
-      ? "Limited references available; treat memory-dependent points as provisional."
-      : "No matching Workspace references were available for this prompt.";
+      ? "Medium-low. I found some local reference signals, but coverage is thin."
+      : "Low-medium. I can give the operating model from the prompt, but I do not have grounded Workspace sources for this run.";
   const presentationText = [
-    "Local adapter V0 is running in safe mock mode.",
+    "## What I checked",
     "",
-    referenceLine,
+    ...checked.map((item) => `- ${item}`),
+    ...(sourceLabels.length ? ["", `Sources: ${sourceLabels.join("; ")}`] : []),
     "",
-    `I received the workspace task: **${input.prompt}**`,
+    "## What I found",
     "",
-    "Here is the local pass I would hand back to the Manus-style thread:",
+    found,
     "",
-    "- Framed the request as a local-only workspace task.",
-    "- Kept command details internal so the chat receives only presentation-safe output.",
-    "- Produced a small artifact summary and completed the task chip through the same AgentEvent contract.",
+    "## Confidence / coverage",
     "",
-    "No Slack, Monday, Typeform, OpenClaw, production Supabase, or Mastra calls were made.",
+    confidence,
+    "",
+    "## What I would check next",
+    "",
+    "- Pull the top matched call transcript excerpts and playbook notes into a focused evidence table.",
+    "- Separate proven patterns from hypotheses before turning this into a client-facing asset.",
   ].join("\n");
 
   return {
@@ -565,6 +572,53 @@ function buildMockOutput(
     usedFallback: true,
     error: null,
   };
+}
+
+function describeRuntimeChecks(runtimeContext: WorkspaceRuntimeContextPacket): string[] {
+  const checks = [
+    "Safe read-only Workspace reference resolver.",
+    ...runtimeContext.agentTools
+      .filter((execution) => execution.toolName !== "get_reference_packet")
+      .map((execution) => {
+        if (execution.toolName === "summarize_calls") return `Call/reference summarizer (${execution.output.coverage} coverage).`;
+        if (execution.toolName === "search_memory") return `Workspace memory search (${execution.output.coverage} coverage).`;
+        if (execution.toolName === "find_artifact") return `Read-only artifact lookup (${execution.output.coverage} coverage).`;
+        return `${execution.toolName} (${execution.output.coverage} coverage).`;
+      }),
+  ];
+  return [...new Set(checks)];
+}
+
+function formatSourceLabels(runtimeContext: WorkspaceRuntimeContextPacket): string[] {
+  return runtimeContext.workspaceReferences.references.slice(0, 5).map((reference) =>
+    `[${reference.sourceType}: ${reference.title}]`,
+  );
+}
+
+function buildMockFindings(
+  input: WorkspaceLocalRuntimeInput,
+  runtimeContext: WorkspaceRuntimeContextPacket,
+): string {
+  const prompt = input.prompt.toLowerCase();
+  const isFirst10kStrategy = /\bfirst\s+10k\b|\b10k\b/.test(prompt) &&
+    /\bstrateg(?:y|ies)|models?|playbooks?|knowledge|call logs?\b/.test(prompt);
+  if (isFirst10kStrategy) {
+    return [
+      "For a first-10k offer, I would anchor the answer around three predictable moves:",
+      "",
+      "1. Pick one painful outcome and make the first promise narrow enough to sell in a conversation.",
+      "2. Use proof from calls and playbooks to turn the promise into a repeatable diagnosis, not a broad content dump.",
+      "3. Build the first delivery model around fast feedback loops: weekly target, one constraint removed, one visible win, one next ask.",
+      "",
+      runtimeContext.workspaceReferences.coverage === "none"
+        ? "I did not get grounded call-log excerpts in this run, so treat this as a beta operating pass rather than a source-backed final answer."
+        : "The source labels above are the grounding available to this run; I am not claiming broader transcript coverage than those sources.",
+    ].join("\n");
+  }
+
+  return runtimeContext.workspaceReferences.coverage === "none"
+    ? `I can give a useful first pass on **${input.prompt}**, but this run did not resolve grounded Workspace sources. I am not going to pretend I searched call transcripts or playbooks.`
+    : `The strongest grounded direction from the resolved Workspace sources is to answer **${input.prompt}** with explicit source coverage, mark assumptions, and avoid turning analysis into an artifact unless you ask me to render, save, export, or create one.`;
 }
 
 function buildBlockedOutput(
@@ -625,6 +679,7 @@ function splitStreamingText(text: string): string[] {
 function normalizePresentationText(text: string): string {
   const cleaned = text
     .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
+    .replace(/^(#{1,4}\s*)?Coverage\s*\/\s*Confidence\s*$/gim, "## Confidence / coverage")
     .trim();
   const disciplined = removeLeadingAssistantProcessPromise(cleaned);
   if (!disciplined) return "Local adapter completed without presentation output.";

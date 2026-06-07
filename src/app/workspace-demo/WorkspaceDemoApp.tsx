@@ -233,12 +233,14 @@ function createBrowserSessionId(): string {
 }
 
 function threadStateFromHydratedThread(thread: WorkspaceHydratedThread): ThreadState {
+  const task = thread.task ?? null;
+  const tasks = dedupeThreadTasks(Array.isArray(thread.tasks) ? thread.tasks : [], task);
   return {
     messages: Array.isArray(thread.messages) ? thread.messages : [],
     artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
     steps: Array.isArray(thread.steps) ? thread.steps : [],
-    task: thread.task ?? null,
-    tasks: Array.isArray(thread.tasks) ? thread.tasks : [],
+    task,
+    tasks,
     internalEvents: [],
     errorMessage: null,
   };
@@ -301,17 +303,25 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
 
   if (event.kind === "task.complete") {
     const taskSnapshot: Task = { ...event.task, id: `${event.runId}:${event.task.id}` };
+    const nextTasks = state.tasks.some((task) => task.id === taskSnapshot.id)
+      ? state.tasks.map((task) => (task.id === taskSnapshot.id ? taskSnapshot : task))
+      : [...state.tasks, taskSnapshot];
     return {
       ...state,
-      task: event.task,
-      tasks: state.tasks.some((task) => task.id === taskSnapshot.id)
-        ? state.tasks.map((task) => (task.id === taskSnapshot.id ? taskSnapshot : task))
-        : [...state.tasks, taskSnapshot],
+      task: taskSnapshot,
+      tasks: dedupeThreadTasks(nextTasks, taskSnapshot),
       steps: event.task.steps,
     };
   }
 
   return state;
+}
+
+function dedupeThreadTasks(tasks: Task[], currentTask: Task | null = null): Task[] {
+  const byId = new Map<string, Task>();
+  for (const task of tasks) byId.set(task.id, task);
+  if (currentTask) byId.set(currentTask.id, currentTask);
+  return [...byId.values()];
 }
 
 function readLatestReferencePacket(events: AgentEvent[]): ReferenceInspectorPacket | null {
@@ -1125,11 +1135,22 @@ function TaskChip({ task, steps }: { task: Task | null; steps: TaskStep[] }) {
 }
 
 function ReferenceCoverageLine({ packet }: { packet: ReferenceInspectorPacket | null }) {
+  const labels = packet?.references.slice(0, 4).map((reference) => `${reference.sourceType}: ${reference.title}`) ?? [];
   if (packet?.coverage === "matched") {
-    return <div className={styles.referenceCoverageLine}>Using Workspace references</div>;
+    return (
+      <div className={styles.referenceCoverageLine}>
+        <span>Using Workspace references</span>
+        {labels.map((label) => <span className={styles.referenceSourceChip} key={label}>{label}</span>)}
+      </div>
+    );
   }
   if (packet?.coverage === "thin") {
-    return <div className={styles.referenceCoverageLine}>Limited references available</div>;
+    return (
+      <div className={styles.referenceCoverageLine}>
+        <span>Limited references available</span>
+        {labels.map((label) => <span className={styles.referenceSourceChip} key={label}>{label}</span>)}
+      </div>
+    );
   }
   return null;
 }
@@ -1158,7 +1179,7 @@ function ChatThread({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
   const hasAssistantMessage = state.messages.some((message) => message.role === "assistant");
-  const taskCards = state.tasks.length > 0 ? state.tasks : state.steps.length ? [state.task].filter((task): task is Task => Boolean(task)) : [];
+  const taskCards = dedupeThreadTasks(state.tasks, state.task);
   const showActiveSteps = state.steps.length > 0 && (runState === "running" || taskCards.length === 0);
   const visibleArtifacts = [...state.artifacts].reverse();
 
