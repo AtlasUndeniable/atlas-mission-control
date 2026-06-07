@@ -12,6 +12,9 @@ import {
   capabilityPromptSummary,
   getAtlasCapabilityRegistry,
   type AtlasCapability,
+  type AtlasSafetyPolicy,
+  type AtlasSkill,
+  type AtlasToolBinding,
 } from "./workspace-capabilities.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
@@ -43,6 +46,9 @@ export interface WorkspaceRuntimeContextPacket {
   workspaceReferences: WorkspaceReferencePacket;
   agentTools: WorkspaceAgentToolExecution[];
   capabilities: AtlasCapability[];
+  skills: AtlasSkill[];
+  toolBindings: AtlasToolBinding[];
+  safetyPolicies: AtlasSafetyPolicy[];
   provider: WorkspaceRuntimeContextProvider;
   internalSummary: string;
   systemPrompt: string;
@@ -119,6 +125,9 @@ export function buildWorkspaceRuntimeContext(
   const agentToolSummary = agentTools.map((execution) => `${execution.toolName}:${execution.output.coverage}`).join(",");
   const capabilityRegistry = getAtlasCapabilityRegistry();
   const capabilities = capabilityRegistry.capabilities;
+  const skills = capabilityRegistry.skills;
+  const toolBindings = capabilityRegistry.toolBindings;
+  const safetyPolicies = capabilityRegistry.safetyPolicies;
   const capabilitySummary = capabilityRegistry.summary;
   const internalSummary = [
     `workspace=${WORKSPACE_ID}`,
@@ -160,6 +169,10 @@ export function buildWorkspaceRuntimeContext(
     "",
     "Atlas capability registry:",
     ...capabilityPromptSummary(capabilities),
+    "Discovered skills and bindings:",
+    ...skills.map((skillItem) => `- ${skillItem.name}: ${skillItem.status}; capabilities=${skillItem.capabilityIds.join(",")}`),
+    "Safety policies:",
+    ...safetyPolicies.map((policy) => `- ${policy.name}: ${policy.safetyLevel}; ${policy.description}`),
     "",
     "Use presentation events for user-facing output. Keep internal diagnostics internal.",
     "Reference Librarian and Obsidian material by handle or path summary only.",
@@ -204,6 +217,9 @@ export function buildWorkspaceRuntimeContext(
     workspaceReferences: referencePacket,
     agentTools,
     capabilities,
+    skills,
+    toolBindings,
+    safetyPolicies,
     provider: options.provider,
     internalSummary,
     systemPrompt,

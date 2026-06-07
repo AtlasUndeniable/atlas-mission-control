@@ -173,6 +173,12 @@ interface AtlasCapabilityIO {
   required: boolean;
 }
 
+interface AtlasSubstrateSource {
+  label: string;
+  kind: string;
+  summary: string;
+}
+
 interface AtlasCapability {
   id: string;
   name: string;
@@ -188,7 +194,44 @@ interface AtlasCapability {
     connectors: string[];
     skills: string[];
   };
+  sourceRefs: AtlasSubstrateSource[];
   knownLimitations: string[];
+}
+
+interface AtlasSkill {
+  id: string;
+  name: string;
+  category: string;
+  status: AtlasCapability["status"];
+  description: string;
+  capabilityIds: string[];
+  toolBindingIds: string[];
+  safetyPolicyIds: string[];
+  sourceRefs: AtlasSubstrateSource[];
+  knownLimitations: string[];
+}
+
+interface AtlasToolBinding {
+  id: string;
+  name: string;
+  kind: string;
+  status: AtlasCapability["status"];
+  description: string;
+  executionSurface: string;
+  capabilityIds: string[];
+  safetyPolicyIds: string[];
+  sourceRefs: AtlasSubstrateSource[];
+  knownLimitations: string[];
+}
+
+interface AtlasSafetyPolicy {
+  id: string;
+  name: string;
+  safetyLevel: AtlasCapability["safetyLevel"];
+  approvalRequirement: AtlasCapability["approvalRequirement"];
+  description: string;
+  enforcedBy: string[];
+  prohibited: string[];
 }
 
 interface AtlasCapabilityRegistryResponse {
@@ -204,6 +247,10 @@ interface AtlasCapabilityRegistryResponse {
     approvalGated: number;
   };
   capabilities?: AtlasCapability[];
+  skills?: AtlasSkill[];
+  toolBindings?: AtlasToolBinding[];
+  safetyPolicies?: AtlasSafetyPolicy[];
+  discoveredSubstrate?: AtlasSubstrateSource[];
 }
 
 const initialThreadState: ThreadState = {
@@ -784,12 +831,20 @@ function CapabilitiesPanel({
   capabilities,
   error,
   loading,
+  skills,
+  toolBindings,
+  safetyPolicies,
+  discoveredSubstrate,
   summary,
   onRefresh,
 }: {
   capabilities: AtlasCapability[];
   error: string | null;
   loading: boolean;
+  skills: AtlasSkill[];
+  toolBindings: AtlasToolBinding[];
+  safetyPolicies: AtlasSafetyPolicy[];
+  discoveredSubstrate: AtlasSubstrateSource[];
   summary: AtlasCapabilityRegistryResponse["summary"] | null;
   onRefresh: () => void;
 }) {
@@ -818,8 +873,8 @@ function CapabilitiesPanel({
       <div className={styles.systemsHeader}>
         <div>
           <div className={styles.panelKicker}>Capabilities</div>
-          <h1>Atlas Capability Registry</h1>
-          <p>Current Workspace abilities and limits. Blocked and planned entries are not available actions.</p>
+          <h1>Atlas Capability + Skill Registry</h1>
+          <p>Current Workspace abilities, discovered Atlas substrate, and limits. Blocked and planned entries are not available actions.</p>
         </div>
         <button className={styles.systemsRefresh} type="button" onClick={onRefresh} disabled={loading}>
           {loading ? "Checking..." : "Refresh"}
@@ -833,9 +888,28 @@ function CapabilitiesPanel({
           <span>{summary.planned} planned</span>
           <span>{summary.readOnly} read-only</span>
           <span>{summary.localWrite} local write</span>
+          <span>{skills.length} skills</span>
+          <span>{toolBindings.length} bindings</span>
         </div>
       ) : null}
       {error ? <p className={styles.systemsError}>{error}</p> : null}
+      {discoveredSubstrate.length ? (
+        <section className={styles.registrySection} aria-label="Discovered substrate">
+          <div className={styles.registrySectionHeader}>
+            <h2>Discovered substrate</h2>
+            <span>{discoveredSubstrate.length} local sources wrapped</span>
+          </div>
+          <div className={styles.registrySourceList}>
+            {discoveredSubstrate.map((sourceRef) => (
+              <div className={styles.registrySource} key={`${sourceRef.kind}:${sourceRef.label}`}>
+                <strong>{sourceRef.label}</strong>
+                <span>{formatCapabilityCategory(sourceRef.kind)}</span>
+                <p>{sourceRef.summary}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div className={styles.capabilityList}>
         {capabilities.map((capability) => (
           <article className={styles.capabilityCard} key={capability.id}>
@@ -863,11 +937,80 @@ function CapabilitiesPanel({
                 ...capability.backing.connectors.map((item) => `Connector: ${item}`),
                 ...capability.backing.skills.map((item) => `Skill: ${item}`),
               ]} empty="No backing tool exposed" />
+              <CapabilityTextBlock title="Sources" items={capability.sourceRefs.map((sourceRef) => `${sourceRef.label}: ${sourceRef.summary}`)} empty="No discovered source listed" />
               <CapabilityTextBlock title="Known limits" items={capability.knownLimitations} empty="No extra limitations listed" />
             </div>
           </article>
         ))}
       </div>
+      <section className={styles.registrySection} aria-label="Atlas skills">
+        <div className={styles.registrySectionHeader}>
+          <h2>Skills</h2>
+          <span>{skills.length} discovered wrappers</span>
+        </div>
+        <div className={styles.registryCompactGrid}>
+          {skills.map((skill) => (
+            <article className={styles.registryCompactCard} key={skill.id}>
+              <div className={styles.systemCardTop}>
+                <div>
+                  <h2>{skill.name}</h2>
+                  <span>{skill.description}</span>
+                </div>
+                <span className={`${styles.systemStatus} ${styles[`capabilityStatus_${skill.status}`]}`}>
+                  {formatCapabilityRegistryStatus(skill.status)}
+                </span>
+              </div>
+              <div className={styles.systemMeta}>
+                <span>{formatCapabilityCategory(skill.category)}</span>
+                <span>{skill.capabilityIds.length} capabilities</span>
+                <span>{skill.toolBindingIds.length} bindings</span>
+              </div>
+              <CapabilityTextBlock title="Sources" items={skill.sourceRefs.map((sourceRef) => sourceRef.label)} empty="No source listed" />
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className={styles.registrySection} aria-label="Tool bindings and safety">
+        <div className={styles.registrySectionHeader}>
+          <h2>Tool bindings + safety</h2>
+          <span>{toolBindings.length} bindings / {safetyPolicies.length} policies</span>
+        </div>
+        <div className={styles.registryCompactGrid}>
+          {toolBindings.map((binding) => (
+            <article className={styles.registryCompactCard} key={binding.id}>
+              <div className={styles.systemCardTop}>
+                <div>
+                  <h2>{binding.name}</h2>
+                  <span>{binding.description}</span>
+                </div>
+                <span className={`${styles.systemStatus} ${styles[`capabilityStatus_${binding.status}`]}`}>
+                  {formatCapabilityRegistryStatus(binding.status)}
+                </span>
+              </div>
+              <div className={styles.systemMeta}>
+                <span>{formatCapabilityCategory(binding.kind)}</span>
+                <span>{binding.executionSurface}</span>
+              </div>
+              <CapabilityTextBlock title="Safety" items={binding.safetyPolicyIds.map(formatCapabilityCategory)} empty="No safety policy listed" />
+            </article>
+          ))}
+          {safetyPolicies.map((policy) => (
+            <article className={styles.registryCompactCard} key={policy.id}>
+              <div className={styles.systemCardTop}>
+                <div>
+                  <h2>{policy.name}</h2>
+                  <span>{policy.description}</span>
+                </div>
+                <span className={styles.systemSafety}>{formatCapabilitySafety(policy.safetyLevel)}</span>
+              </div>
+              <div className={styles.systemMeta}>
+                <span>Approval: {formatCapabilityApproval(policy.approvalRequirement)}</span>
+              </div>
+              <CapabilityTextBlock title="Prohibited" items={policy.prohibited} empty="No prohibited action listed" />
+            </article>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
@@ -938,6 +1081,10 @@ function WorkspacePanelView({
     return (
       <CapabilitiesPanel
         capabilities={capabilityRegistry?.capabilities ?? []}
+        skills={capabilityRegistry?.skills ?? []}
+        toolBindings={capabilityRegistry?.toolBindings ?? []}
+        safetyPolicies={capabilityRegistry?.safetyPolicies ?? []}
+        discoveredSubstrate={capabilityRegistry?.discoveredSubstrate ?? []}
         error={capabilityError}
         loading={capabilityLoading}
         summary={capabilityRegistry?.summary ?? null}

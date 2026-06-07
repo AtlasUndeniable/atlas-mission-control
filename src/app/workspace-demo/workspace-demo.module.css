@@ -104,6 +104,17 @@
 .capabilityList { width: 100%; max-width: 1040px; margin: 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .capabilityCard { min-width: 0; padding: 14px 16px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 12px; }
 .capabilityGrid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.registrySection { width: 100%; max-width: 1040px; margin: 16px auto 0; display: grid; gap: 10px; }
+.registrySectionHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-4); font-size: 11px; }
+.registrySectionHeader h2 { margin: 0; color: var(--text-1); font-size: 14px; line-height: 1.3; font-weight: 600; letter-spacing: 0; }
+.registrySectionHeader span { flex-shrink: 0; }
+.registrySourceList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.registrySource { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.018); display: grid; gap: 4px; }
+.registrySource strong { color: var(--text-2); font-size: 12px; line-height: 1.3; }
+.registrySource span { color: var(--text-4); font-size: 10.5px; text-transform: uppercase; }
+.registrySource p { margin: 0; color: var(--text-3); font-size: 11.5px; line-height: 1.4; }
+.registryCompactGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.registryCompactCard { min-width: 0; padding: 12px; background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 10px; }
 .systemCardTop { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
 .systemCardTop h2 { margin: 0 0 2px; color: var(--text-1); font-size: 14px; line-height: 1.3; font-weight: 600; letter-spacing: 0; }
 .systemCardTop span { color: var(--text-3); font-size: 12px; line-height: 1.4; }
@@ -274,9 +285,9 @@
   .sidebar { display: none; }
   .topbar { padding: 0 12px; gap: 8px; }
   .iconButton { display: none; }
-  .mobilePanelNav { flex-shrink: 0; display: flex; gap: 4px; padding: 8px 10px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: none; }
+  .mobilePanelNav { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; overflow: hidden; border-bottom: 1px solid var(--border); scrollbar-width: none; }
   .mobilePanelNav::-webkit-scrollbar { display: none; }
-  .mobilePanelNav button { flex: 0 0 auto; padding: 6px 9px; border-radius: 7px; color: var(--text-3); background: var(--bg-elev-1); border: 1px solid transparent; font-size: 12px; white-space: nowrap; }
+  .mobilePanelNav button { flex: 1 1 84px; min-width: 0; padding: 6px 8px; border-radius: 7px; color: var(--text-3); background: var(--bg-elev-1); border: 1px solid transparent; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mobilePanelNav button:hover, .mobilePanelNavActive { color: var(--text-1) !important; border-color: var(--border-strong) !important; background: var(--bg-elev-2) !important; }
   .chat { padding: 22px 14px 18px; }
   .composerWrap { padding: 10px 14px 16px; }
@@ -295,6 +306,9 @@
   .systemsRefresh { align-self: flex-start; }
   .capabilityList { grid-template-columns: 1fr; }
   .capabilityGrid { grid-template-columns: 1fr; }
+  .registrySectionHeader { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .registrySourceList { grid-template-columns: 1fr; }
+  .registryCompactGrid { grid-template-columns: 1fr; }
   .systemCardTop { grid-template-columns: 1fr; }
   .systemStatusGroup { align-items: flex-start; }
   .systemCapabilityGrid { grid-template-columns: 1fr; }
