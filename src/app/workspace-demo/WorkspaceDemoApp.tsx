@@ -18,7 +18,7 @@ import styles from "./workspace-demo.module.css";
 
 type RunState = "idle" | "running" | "complete";
 type ReferenceCoverage = "matched" | "thin" | "none";
-type WorkspacePanel = "tasks" | "library" | "systems" | "plugins" | "scheduled";
+type WorkspacePanel = "tasks" | "library" | "capabilities" | "systems" | "plugins" | "scheduled";
 
 interface ArtifactPreview {
   id: string;
@@ -167,6 +167,45 @@ interface WorkspaceConnectorRegistryResponse {
   connectors?: WorkspaceConnector[];
 }
 
+interface AtlasCapabilityIO {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+interface AtlasCapability {
+  id: string;
+  name: string;
+  category: string;
+  status: "available" | "limited" | "blocked" | "planned";
+  description: string;
+  inputs: AtlasCapabilityIO[];
+  outputs: AtlasCapabilityIO[];
+  safetyLevel: "read_only" | "local_write" | "approval_gated" | "blocked";
+  approvalRequirement: "none" | "user_confirmation" | "explicit_approval" | "not_supported";
+  backing: {
+    tools: string[];
+    connectors: string[];
+    skills: string[];
+  };
+  knownLimitations: string[];
+}
+
+interface AtlasCapabilityRegistryResponse {
+  ok?: boolean;
+  generatedAt?: string;
+  summary?: {
+    available: number;
+    limited: number;
+    blocked: number;
+    planned: number;
+    readOnly: number;
+    localWrite: number;
+    approvalGated: number;
+  };
+  capabilities?: AtlasCapability[];
+}
+
 const initialThreadState: ThreadState = {
   messages: [],
   artifacts: [],
@@ -191,6 +230,7 @@ const WORKSPACE_PROJECTS: WorkspaceProjectOption[] = [
 const WORKSPACE_PANEL_TABS = [
   { id: "tasks", label: "Tasks", title: "Active tasks" },
   { id: "library", label: "Library", title: "Artifact library" },
+  { id: "capabilities", label: "Capabilities", title: "Atlas capabilities" },
   { id: "systems", label: "Systems", title: "Agent connections" },
   { id: "plugins", label: "Plugins", title: "Plugins coming next" },
   { id: "scheduled", label: "Scheduled", title: "Scheduled coming next" },
@@ -740,8 +780,133 @@ function SystemsPanel({
   );
 }
 
+function CapabilitiesPanel({
+  capabilities,
+  error,
+  loading,
+  summary,
+  onRefresh,
+}: {
+  capabilities: AtlasCapability[];
+  error: string | null;
+  loading: boolean;
+  summary: AtlasCapabilityRegistryResponse["summary"] | null;
+  onRefresh: () => void;
+}) {
+  if (loading && capabilities.length === 0) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Capabilities</div>
+        <h1>Loading Atlas capability registry...</h1>
+        <p>Checking the local registry. No external systems are being called.</p>
+      </section>
+    );
+  }
+
+  if (error && capabilities.length === 0) {
+    return (
+      <section className={styles.workspacePanel}>
+        <div className={styles.panelKicker}>Capabilities</div>
+        <h1>Capability registry unavailable</h1>
+        <p>{error}</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={styles.systemsPanel}>
+      <div className={styles.systemsHeader}>
+        <div>
+          <div className={styles.panelKicker}>Capabilities</div>
+          <h1>Atlas Capability Registry</h1>
+          <p>Current Workspace abilities and limits. Blocked and planned entries are not available actions.</p>
+        </div>
+        <button className={styles.systemsRefresh} type="button" onClick={onRefresh} disabled={loading}>
+          {loading ? "Checking..." : "Refresh"}
+        </button>
+      </div>
+      {summary ? (
+        <div className={styles.systemsSummary} aria-label="Capability summary">
+          <span>{summary.available} available</span>
+          <span>{summary.limited} limited</span>
+          <span>{summary.blocked} blocked</span>
+          <span>{summary.planned} planned</span>
+          <span>{summary.readOnly} read-only</span>
+          <span>{summary.localWrite} local write</span>
+        </div>
+      ) : null}
+      {error ? <p className={styles.systemsError}>{error}</p> : null}
+      <div className={styles.capabilityList}>
+        {capabilities.map((capability) => (
+          <article className={styles.capabilityCard} key={capability.id}>
+            <div className={styles.systemCardTop}>
+              <div>
+                <h2>{capability.name}</h2>
+                <span>{capability.description}</span>
+              </div>
+              <div className={styles.systemStatusGroup}>
+                <span className={`${styles.systemStatus} ${styles[`capabilityStatus_${capability.status}`]}`}>
+                  {formatCapabilityRegistryStatus(capability.status)}
+                </span>
+                <span className={styles.systemSafety}>{formatCapabilitySafety(capability.safetyLevel)}</span>
+              </div>
+            </div>
+            <div className={styles.systemMeta}>
+              <span>{formatCapabilityCategory(capability.category)}</span>
+              <span>Approval: {formatCapabilityApproval(capability.approvalRequirement)}</span>
+            </div>
+            <div className={styles.capabilityGrid}>
+              <CapabilityIoBlock title="Inputs" items={capability.inputs} />
+              <CapabilityIoBlock title="Outputs" items={capability.outputs} />
+              <CapabilityTextBlock title="Backing" items={[
+                ...capability.backing.tools.map((item) => `Tool: ${item}`),
+                ...capability.backing.connectors.map((item) => `Connector: ${item}`),
+                ...capability.backing.skills.map((item) => `Skill: ${item}`),
+              ]} empty="No backing tool exposed" />
+              <CapabilityTextBlock title="Known limits" items={capability.knownLimitations} empty="No extra limitations listed" />
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CapabilityIoBlock({ title, items }: { title: string; items: AtlasCapabilityIO[] }) {
+  return (
+    <div className={styles.systemCapability}>
+      <span className={styles.systemCapabilityTitle}>{title}</span>
+      <ul>
+        {items.map((item) => (
+          <li key={`${item.name}:${item.description}`}>
+            <strong>{item.name}</strong>
+            {item.required ? "" : " (optional)"}
+            {": "}
+            {item.description}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CapabilityTextBlock({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  const visibleItems = items.length ? items : [empty];
+  return (
+    <div className={styles.systemCapability}>
+      <span className={styles.systemCapabilityTitle}>{title}</span>
+      <ul>
+        {visibleItems.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </div>
+  );
+}
+
 function WorkspacePanelView({
   panel,
+  capabilityError,
+  capabilityLoading,
+  capabilityRegistry,
   connectorError,
   connectorLoading,
   connectorRegistry,
@@ -749,9 +914,13 @@ function WorkspacePanelView({
   libraryArtifacts,
   hydrating,
   onRefreshConnectors,
+  onRefreshCapabilities,
   onOpenArtifact,
 }: {
   panel: Exclude<WorkspacePanel, "tasks">;
+  capabilityError: string | null;
+  capabilityLoading: boolean;
+  capabilityRegistry: AtlasCapabilityRegistryResponse | null;
   connectorError: string | null;
   connectorLoading: boolean;
   connectorRegistry: WorkspaceConnectorRegistryResponse | null;
@@ -759,10 +928,22 @@ function WorkspacePanelView({
   libraryArtifacts: WorkspaceLibraryArtifact[];
   hydrating: boolean;
   onRefreshConnectors: () => void;
+  onRefreshCapabilities: () => void;
   onOpenArtifact: (artifact: Artifact) => void;
 }) {
   if (panel === "library") {
     return <LibraryPanel artifacts={libraryArtifacts} error={libraryError} hydrating={hydrating} onOpenArtifact={onOpenArtifact} />;
+  }
+  if (panel === "capabilities") {
+    return (
+      <CapabilitiesPanel
+        capabilities={capabilityRegistry?.capabilities ?? []}
+        error={capabilityError}
+        loading={capabilityLoading}
+        summary={capabilityRegistry?.summary ?? null}
+        onRefresh={onRefreshCapabilities}
+      />
+    );
   }
   if (panel === "systems") {
     return (
@@ -776,7 +957,7 @@ function WorkspacePanelView({
     );
   }
 
-  const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library" | "systems">, { title: string; body: string }> = {
+  const panelCopy: Record<Exclude<WorkspacePanel, "tasks" | "library" | "capabilities" | "systems">, { title: string; body: string }> = {
     plugins: {
       title: "Plugins are not connected yet",
       body: "Runtime tools are available internally where the agent supports them. User-managed plugin controls are intentionally dormant in this alpha.",
@@ -808,6 +989,25 @@ function formatConnectorSafety(safetyLevel: WorkspaceConnector["safetyLevel"]) {
 
 function formatCapabilityState(state: WorkspaceConnectorCapabilityGroup["state"]) {
   return state.replaceAll("_", " ");
+}
+
+function formatCapabilityRegistryStatus(status: AtlasCapability["status"]) {
+  return status;
+}
+
+function formatCapabilitySafety(safetyLevel: AtlasCapability["safetyLevel"]) {
+  if (safetyLevel === "read_only") return "Read-only";
+  if (safetyLevel === "local_write") return "Local write";
+  if (safetyLevel === "approval_gated") return "Approval-gated";
+  return "Blocked";
+}
+
+function formatCapabilityApproval(approvalRequirement: AtlasCapability["approvalRequirement"]) {
+  return approvalRequirement.replaceAll("_", " ");
+}
+
+function formatCapabilityCategory(category: string) {
+  return category.replaceAll("_", " ");
 }
 
 function TaskEmptyPanel() {
@@ -1488,6 +1688,9 @@ export default function WorkspaceDemoApp() {
   const [sessionList, setSessionList] = useState<WorkspaceSessionMetadata[]>([]);
   const [libraryArtifacts, setLibraryArtifacts] = useState<WorkspaceLibraryArtifact[]>([]);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [capabilityRegistry, setCapabilityRegistry] = useState<AtlasCapabilityRegistryResponse | null>(null);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [connectorRegistry, setConnectorRegistry] = useState<WorkspaceConnectorRegistryResponse | null>(null);
   const [connectorError, setConnectorError] = useState<string | null>(null);
   const [connectorLoading, setConnectorLoading] = useState(false);
@@ -1505,6 +1708,28 @@ export default function WorkspaceDemoApp() {
       unsubscribeRef.current?.();
       sourceRef.current?.stop();
     };
+  }, []);
+
+  const loadCapabilityRegistry = useCallback(async (signal?: AbortSignal) => {
+    setCapabilityLoading(true);
+    setCapabilityError(null);
+    try {
+      const response = await fetch("/api/workspace-demo/capabilities", {
+        cache: "no-store",
+        signal,
+      });
+      const body = await response.json() as AtlasCapabilityRegistryResponse;
+      if (signal?.aborted) return;
+      if (!response.ok || !body.ok || !Array.isArray(body.capabilities)) {
+        setCapabilityError("Atlas capability registry could not be loaded.");
+        return;
+      }
+      setCapabilityRegistry(body);
+    } catch {
+      if (!signal?.aborted) setCapabilityError("Atlas capability registry could not be loaded.");
+    } finally {
+      if (!signal?.aborted) setCapabilityLoading(false);
+    }
   }, []);
 
   const hydrateProjectSession = useCallback(async ({
@@ -1569,6 +1794,13 @@ export default function WorkspaceDemoApp() {
     });
     return () => controller.abort();
   }, [hydrateProjectSession, selectedProjectId]);
+
+  useEffect(() => {
+    if (activePanel !== "capabilities") return;
+    const controller = new AbortController();
+    void loadCapabilityRegistry(controller.signal);
+    return () => controller.abort();
+  }, [activePanel, loadCapabilityRegistry]);
 
   const loadConnectorRegistry = useCallback(async (signal?: AbortSignal) => {
     setConnectorLoading(true);
@@ -1804,12 +2036,16 @@ export default function WorkspaceDemoApp() {
         {activePanel !== "tasks" ? (
           <WorkspacePanelView
             panel={activePanel}
+            capabilityError={capabilityError}
+            capabilityLoading={capabilityLoading}
+            capabilityRegistry={capabilityRegistry}
             connectorError={connectorError}
             connectorLoading={connectorLoading}
             connectorRegistry={connectorRegistry}
             libraryError={libraryError}
             libraryArtifacts={libraryArtifacts}
             hydrating={hydrating}
+            onRefreshCapabilities={() => void loadCapabilityRegistry()}
             onRefreshConnectors={() => void loadConnectorRegistry()}
             onOpenArtifact={openArtifactPreview}
           />

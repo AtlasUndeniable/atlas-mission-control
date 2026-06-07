@@ -181,6 +181,7 @@ export function describeQaChecks(runtimeContext: WorkspaceRuntimeContextPacket):
   const checks = [
     "Observed prompt intent and artifact intent boundary.",
     "Resolved Workspace reference packet.",
+    "Checked Atlas capability registry boundaries.",
     ...runtimeContext.agentTools
       .filter((execution) => execution.toolName !== "get_reference_packet")
       .map((execution) => {

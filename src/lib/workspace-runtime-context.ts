@@ -8,6 +8,11 @@ import {
   formatWorkspaceAgentToolOutputsForPrompt,
   type WorkspaceAgentToolExecution,
 } from "./workspace-agent-tools.ts";
+import {
+  capabilityPromptSummary,
+  getAtlasCapabilityRegistry,
+  type AtlasCapability,
+} from "./workspace-capabilities.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceRuntimeContextProvider = "mock" | "local-codex" | "mastra";
@@ -37,6 +42,7 @@ export interface WorkspaceRuntimeContextPacket {
   agentCognition: WorkspaceAgentCognitionPacket;
   workspaceReferences: WorkspaceReferencePacket;
   agentTools: WorkspaceAgentToolExecution[];
+  capabilities: AtlasCapability[];
   provider: WorkspaceRuntimeContextProvider;
   internalSummary: string;
   systemPrompt: string;
@@ -111,6 +117,9 @@ export function buildWorkspaceRuntimeContext(
   const librarianHandles = LIBRARIAN_REFERENCES.map((reference) => reference.handle).join(",");
   const agentTools = options.agentTools ?? [];
   const agentToolSummary = agentTools.map((execution) => `${execution.toolName}:${execution.output.coverage}`).join(",");
+  const capabilityRegistry = getAtlasCapabilityRegistry();
+  const capabilities = capabilityRegistry.capabilities;
+  const capabilitySummary = capabilityRegistry.summary;
   const internalSummary = [
     `workspace=${WORKSPACE_ID}`,
     `project=${PROJECT}`,
@@ -119,6 +128,7 @@ export function buildWorkspaceRuntimeContext(
     `provider=${options.provider}`,
     `librarian_handles=${librarianHandles}`,
     agentToolSummary ? `agent_tools=${agentToolSummary}` : "agent_tools=none",
+    `capabilities=available:${capabilitySummary.available},limited:${capabilitySummary.limited},blocked:${capabilitySummary.blocked},planned:${capabilitySummary.planned}`,
     `cognition=${workspaceAgentCognition.id}`,
     referencePacket.internalSummary,
   ].join("; ");
@@ -148,6 +158,9 @@ export function buildWorkspaceRuntimeContext(
     "Read-only agent tool results:",
     ...formatWorkspaceAgentToolOutputsForPrompt(agentTools),
     "",
+    "Atlas capability registry:",
+    ...capabilityPromptSummary(capabilities),
+    "",
     "Use presentation events for user-facing output. Keep internal diagnostics internal.",
     "Reference Librarian and Obsidian material by handle or path summary only.",
     "Raw local source paths are internal diagnostics; do not print local filesystem paths in the assistant response.",
@@ -157,6 +170,7 @@ export function buildWorkspaceRuntimeContext(
     "Source labels: when references are available, include labels like [call-summary: Title] or [librarian-report: Title]. Do not print local paths.",
     "Do not narrate process repeatedly. One short acknowledgement is enough.",
     "Truthfulness boundary: local Markdown drafts are wired, and explicitly requested local PDF drafts are wired. Do not claim DOCX, export packages, external file delivery, Slack return, or share links. Do not list unavailable formats unless the user asks for them.",
+    "Capability truthfulness: do not present blocked or planned capabilities as available. If asked about Slack sends, Monday/Typeform mutations, Google/Meta ads mutations, arbitrary branded PDFs, shared Supabase persistence, or user-created skills, state the current limitation plainly.",
     referencePacket.coverage === "none"
       ? "No matching Workspace references were resolved. Do not claim memory search; mark missing facts as needing confirmation."
       : referencePacket.coverage === "thin"
@@ -189,6 +203,7 @@ export function buildWorkspaceRuntimeContext(
     agentCognition: workspaceAgentCognition,
     workspaceReferences: referencePacket,
     agentTools,
+    capabilities,
     provider: options.provider,
     internalSummary,
     systemPrompt,
