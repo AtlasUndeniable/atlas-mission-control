@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, stat } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_SOURCE_ROOT = resolve(fileURLToPath(new URL("../openclaw-runtime/workspace", import.meta.url)));
@@ -11,6 +11,8 @@ export const DEFAULT_TARGET_ROOT = "/Users/atlasai/.openclaw/workspace";
 export const SLACK_RUNTIME_FILES = [
   "lib/slack-listener-reply.mjs",
   "lib/slack-listener-reply.test.mjs",
+  "lib/slack-dm-jobs.mjs",
+  "lib/slack-dm-jobs.test.mjs",
   "services/slack-listener/listener.mjs",
 ];
 

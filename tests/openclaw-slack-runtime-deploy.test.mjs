@@ -19,11 +19,15 @@ async function withTempRoots(fn) {
     await seedRuntimeTree(sourceRoot, {
       "lib/slack-listener-reply.mjs": "source reply\n",
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
+      "lib/slack-dm-jobs.mjs": "source dm jobs\n",
+      "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
       "services/slack-listener/listener.mjs": "source listener\n",
     });
     await seedRuntimeTree(targetRoot, {
       "lib/slack-listener-reply.mjs": "old reply\n",
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
+      "lib/slack-dm-jobs.mjs": "source dm jobs\n",
+      "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
       "services/slack-listener/listener.mjs": "old listener\n",
     });
     await fn({ sourceRoot, targetRoot });
@@ -52,6 +56,8 @@ test("buildRuntimePlan owns exactly the Slack listener runtime files", async () 
     assert.deepEqual(SLACK_RUNTIME_FILES, [
       "lib/slack-listener-reply.mjs",
       "lib/slack-listener-reply.test.mjs",
+      "lib/slack-dm-jobs.mjs",
+      "lib/slack-dm-jobs.test.mjs",
       "services/slack-listener/listener.mjs",
     ]);
     assert.equal(plan[0].sourceSha256, sha256("source reply\n"));

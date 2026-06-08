@@ -14,6 +14,8 @@ export function isStatusFollowup(text = "") {
     || /\bwhere\s+are\s+we\s+at\b/.test(normalized)
     || /\bthat\s+request\b/.test(normalized)
     || /\bany\s+update\b/.test(normalized)
+    || /\b(asset|doc|document|file|pdf|deck|brief|thing|request)\b.{0,80}\b(i|we)\s+asked\s+for\b/.test(normalized)
+    || /\bwhat\s+about\b.{0,80}\b(asset|doc|document|file|pdf|deck|brief|request)\b/.test(normalized)
     || isTimeoutDebugFollowup(normalized);
 }
 
@@ -60,6 +62,24 @@ export function preferredDeliveryForSlackRequest({ text = "", isSlackDm = true }
   return { preferredDelivery: "slack_thread", reason: "source is Slack channel/thread" };
 }
 
+export function findKnownArtifactForRequest(text = "") {
+  const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+  const asksFirst10k = /\b(first|1st)?\s*\$?10k\b|\bfirst\s+ten\s+k\b|\bfirst\s+10\s*k\b/.test(normalized);
+  const asksOnlineCoach = /\b(online\s+coach|coach|coaching)\b/.test(normalized);
+  const asksAsset = /\b(asset|doc|document|pdf|playbook|strategy|strategic|model|pricing|offer|retention|sales)\b/.test(normalized);
+
+  if (asksFirst10k && asksOnlineCoach && asksAsset) {
+    return {
+      key: "first-10k-online-coach",
+      artifactPath: "/Users/atlasai/.openclaw/workspace/exports/2026-05-20-first-10k-month-bible-branded.pdf",
+      title: "First $10K Month coaching playbook",
+      message: "Done. I found the verified First $10K Month branded asset and attached it here. This is the existing Atlas/Undeniable artifact, not a fresh hallucinated draft.",
+    };
+  }
+
+  return null;
+}
+
 export function isLikelyLongRunningRequest(text = "") {
   const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
   const hasResearchVerb = /\b(find|search|look for|pull|gather|source|research|examples?)\b/.test(normalized);
@@ -74,19 +94,19 @@ export function isLikelyLongRunningRequest(text = "") {
 }
 
 export function workspaceAckForRequest() {
-  return "Got it. I'll build this in Atlas and bring the file back here when it's ready.";
+  return "I have this logged as an asset request, but no verified file exists yet. I won't call it done until I return the actual file here.";
 }
 
 export function liveTimeoutHandoffText() {
-  return "I'm still here. This needs workspace time, so I won't keep trying to finish it inside the live Slack reply window. I've got it tracked and will bring the result back here when it's ready.";
+  return "I'm still here. This needs workspace time, so I won't keep trying to finish it inside the live Slack reply window. I have it logged, but no verified file exists yet.";
 }
 
 export function draftFailedHandoffText() {
-  return "I picked this up, but the Slack reply path failed before I could produce a usable response. I've got it tracked for workspace review.";
+  return "I picked this up, but the Slack reply path failed before I could produce a usable response. It is logged, but no verified result exists yet.";
 }
 
 export function deliveryRequestedText() {
-  return "Yep. I'll bring it back here when it's ready.";
+  return "I don't have a verified file to send yet. I have the request logged, but delivery cannot happen until an artifact exists.";
 }
 
 export function approvalBlockedArtifactText({ artifactPaths = [] } = {}) {

@@ -3,9 +3,11 @@ import test from "node:test";
 import {
   classifyGatewayFailure,
   chunkSlackText,
+  deliveryRequestedText,
   draftFailedHandoffText,
   extractGatewayReply,
   extractMediaPaths,
+  findKnownArtifactForRequest,
   formatGatewayFailureDetails,
   gatewayFailureDetails,
   gatewayFailureSummary,
@@ -17,6 +19,7 @@ import {
   isTimeoutDebugFollowup,
   isUsefulGatewayReply,
   liveTimeoutHandoffText,
+  workspaceAckForRequest,
   misroutedDeliveryReplyText,
   prepareSlackReply,
   preferredDeliveryForSlackRequest,
@@ -125,7 +128,7 @@ test("gateway failure details are structured and redacted", () => {
 
 test("draft failed fallback is user-facing and avoids internals", () => {
   const reply = draftFailedHandoffText();
-  assert.match(reply, /tracked for workspace review/);
+  assert.match(reply, /no verified result exists yet/);
   assert.doesNotMatch(reply, /stderr|stdout|slackdm-|\/Users|operator review/i);
 });
 
@@ -220,4 +223,32 @@ test("isDeliveryRequestFollowup catches Rhys asking for the file here", () => {
   assert.equal(isDeliveryRequestFollowup("put it here"), true);
   assert.equal(isDeliveryRequestFollowup("yeah can you complete it and then send the completed doc here?"), true);
   assert.equal(isDeliveryRequestFollowup("create a doc and send it tomorrow"), false);
+});
+
+test("asset handoff copy never promises delivery without a verified artifact", () => {
+  for (const reply of [
+    workspaceAckForRequest(),
+    liveTimeoutHandoffText(),
+    draftFailedHandoffText(),
+    deliveryRequestedText(),
+  ]) {
+    assert.doesNotMatch(reply, /I'll build|bring .*back.*ready|will bring|when it's ready/i);
+    assert.doesNotMatch(reply, /operator review|slackdm-|\/Users\/atlasai/i);
+  }
+  assert.match(workspaceAckForRequest(), /no verified file exists yet/i);
+  assert.match(deliveryRequestedText(), /delivery cannot happen until an artifact exists/i);
+});
+
+test("isStatusFollowup catches Rhys asking for the missing asset", () => {
+  assert.equal(isStatusFollowup("and the asset I asked for before that?"), true);
+  assert.equal(isStatusFollowup("what about the doc I asked for?"), true);
+  assert.equal(isStatusFollowup("where is the file we asked for"), true);
+});
+
+test("known First 10K coaching asset requests map to verified artifact package", () => {
+  const artifact = findKnownArtifactForRequest("i want to create an asset for their first 10k as an online coach with offer pricing content sales retention and pdf");
+  assert.equal(artifact?.key, "first-10k-online-coach");
+  assert.match(artifact.artifactPath, /first-10k-month-bible-branded\.pdf$/);
+  assert.match(artifact.message, /verified First \$10K Month branded asset/);
+  assert.equal(findKnownArtifactForRequest("create a generic branded pdf for a random client"), null);
 });
