@@ -2,7 +2,7 @@ import https from "node:https";
 import http from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { WebSocket } from "ws";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { runGates } from "../../lib/slack-gates.mjs";
 import { holdAndAlert } from "../../lib/slack-gate-actions.mjs";
 import { recordArtifactCreated, recordDeliveryState } from "../../lib/artifact-delivery.mjs";
@@ -43,6 +43,7 @@ const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const AUTHORISED_USERS = (process.env.AUTHORISED_USERS || "").split(",").filter(Boolean);
 const LOG_FILE = "/Users/atlasai/.openclaw/logs/listener.log";
 const OPENCLAW_CONFIG_FILE = "/Users/atlasai/.openclaw/openclaw.json";
+const INTENDED_SOCKET_OWNER = process.env.OPENCLAW_SLACK_SOCKET_OWNER || "slack-listener";
 
 const PING_INTERVAL_MS = 60_000;
 const RHYS_DM_CHANNEL = "D0AM2R3H6SE"; // Rhys's DM with the bot (U068FRX5423)
@@ -74,6 +75,49 @@ function readBrainProvenance() {
     return splitProviderModel(modelId);
   } catch {
     return splitProviderModel(process.env.OPENCLAW_DEFAULT_MODEL || "");
+  }
+}
+
+function readOpenClawSlackConfig() {
+  try {
+    const config = JSON.parse(readFileSync(OPENCLAW_CONFIG_FILE, "utf8"));
+    return {
+      enabled: config?.channels?.slack?.enabled === true,
+      mode: config?.channels?.slack?.mode || "unknown",
+    };
+  } catch {
+    return { enabled: false, mode: "unknown" };
+  }
+}
+
+function currentSocketOwnerStatus() {
+  const owners = [];
+  try {
+    const ps = execFileSync("ps", ["-axo", "pid,ppid,command"], { encoding: "utf8", maxBuffer: 1024 * 1024 });
+    if (/services\/slack-listener\/listener\.mjs/.test(ps)) owners.push("slack-listener");
+    const gatewaySlack = readOpenClawSlackConfig();
+    if (gatewaySlack.enabled && gatewaySlack.mode === "socket" && /(?:^|\n)\s*\d+\s+\d+\s+.*(?:^|\s)openclaw(?:\s|$)/m.test(ps)) {
+      owners.push("openclaw-gateway");
+    }
+  } catch {
+    owners.push("unknown");
+  }
+  const uniqueOwners = [...new Set(owners)];
+  const status = uniqueOwners.length > 1
+    ? "conflict"
+    : uniqueOwners.length === 0
+      ? "no_active_socket_owner"
+      : uniqueOwners.includes(INTENDED_SOCKET_OWNER)
+        ? "ok"
+        : "wrong_owner";
+  return { status, owners: uniqueOwners };
+}
+
+function logSocketOwnerStatus() {
+  const socketOwner = currentSocketOwnerStatus();
+  log("🔒", `SOCKET_OWNER_STATUS status=${socketOwner.status} intended_owner=${INTENDED_SOCKET_OWNER} active_socket_owners=${socketOwner.owners.join(",") || "none"}`);
+  if (socketOwner.status === "conflict") {
+    log("⚠️", "SOCKET_OWNER_CONFLICT multiple active Slack Socket Mode owners detected; listener will continue, but live Slack may disconnect with too_many_websockets.");
   }
 }
 
@@ -943,6 +987,7 @@ async function main() {
   if (!process.env.SLACK_USER_TOKEN) {
     log("⚠️", "SLACK_USER_TOKEN not set — some features may be limited");
   }
+  logSocketOwnerStatus();
 
   const result = await slackApi("auth.test", {});
   if (result.ok) { botUserId = result.user_id; log("🤖", `Bot user ID: ${botUserId}`); }
