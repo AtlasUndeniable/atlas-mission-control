@@ -146,6 +146,55 @@ export function redactSlackDiagnostic(value = "") {
     .trim();
 }
 
+export function splitProviderModel(modelId = "") {
+  const text = String(modelId || "").trim();
+  if (!text) return { provider: "unknown", model: "unknown", modelId: "unknown" };
+  const [provider, ...modelParts] = text.split("/");
+  return {
+    provider: provider || "unknown",
+    model: modelParts.join("/") || text,
+    modelId: text,
+  };
+}
+
+export function classifyGatewayFailure({
+  timedOut = false,
+  errorMessage = "",
+  stderr = "",
+  stdout = "",
+  reply = "",
+} = {}) {
+  const diagnostic = `${errorMessage}\n${stderr}\n${stdout}\n${reply}`.toLowerCase();
+  if (/context overflow|estimated context size exceeds/.test(diagnostic)) return "context_overflow";
+  if (/sessionwritelocktimeouterror|session-write-lock|lock held/.test(diagnostic)) return "session_lock_timeout";
+  if (timedOut || /timed out|timeout|etimedout|sigterm|killed/.test(diagnostic)) return "timeout";
+  if (/invalid_auth|not_authed|account_inactive|token_revoked|auth\.test failed|device identity required|unauthori[sz]ed/.test(diagnostic)) return "auth_error";
+  if (/rate_limited|ratelimited|too_many_requests|429|too_many_websockets/.test(diagnostic)) return "rate_or_socket_limit";
+  if (/provider|model fallback|llm request failed|fetch failed|openai|anthropic|claude|gpt-|codex/.test(diagnostic)) return "provider_error";
+  if (!isUsefulGatewayReply(reply)) return "empty_response";
+  return "gateway_error";
+}
+
+export function gatewayFailureDetails({
+  timedOut = false,
+  errorMessage = "",
+  stderr = "",
+  stdout = "",
+  reply = "",
+  provider = "unknown",
+  model = "unknown",
+  modelId = "",
+} = {}) {
+  const modelParts = splitProviderModel(modelId || (provider !== "unknown" && model !== "unknown" ? `${provider}/${model}` : ""));
+  const failureType = classifyGatewayFailure({ timedOut, errorMessage, stderr, stdout, reply });
+  return {
+    failureType,
+    provider: provider === "unknown" ? modelParts.provider : provider,
+    model: model === "unknown" ? modelParts.model : model,
+    summary: gatewayFailureSummary({ timedOut, errorMessage, stderr, stdout, reply }),
+  };
+}
+
 export function gatewayFailureSummary({
   timedOut = false,
   errorMessage = "",
@@ -164,6 +213,19 @@ export function gatewayFailureSummary({
     !stderr && stdout ? `stdout: ${redactSlackDiagnostic(stdout)}` : "",
   ].filter(Boolean).join(" | ");
   return diagnostic ? `${base} ${diagnostic}`.slice(0, 900) : base;
+}
+
+export function formatGatewayFailureDetails(details = {}) {
+  const failureType = redactSlackDiagnostic(details.failureType || "gateway_error");
+  const provider = redactSlackDiagnostic(details.provider || "unknown");
+  const model = redactSlackDiagnostic(details.model || "unknown");
+  const summary = redactSlackDiagnostic(details.summary || "");
+  return [
+    `failure_type=${failureType}`,
+    `provider=${provider}`,
+    `model=${model}`,
+    summary ? `summary=${summary}` : "",
+  ].filter(Boolean).join(" | ");
 }
 
 export function chunkSlackText(text = "", limit = SLACK_SAFE_MESSAGE_LIMIT) {

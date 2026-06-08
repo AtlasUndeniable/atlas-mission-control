@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  classifyGatewayFailure,
   chunkSlackText,
   draftFailedHandoffText,
   extractGatewayReply,
   extractMediaPaths,
+  formatGatewayFailureDetails,
+  gatewayFailureDetails,
   gatewayFailureSummary,
   isDeliveryRequestFollowup,
   isExplicitEmailDeliveryRequest,
@@ -81,6 +84,43 @@ test("gatewayFailureSummary preserves redacted stderr/stdout diagnostics", () =>
   });
   assert.match(stdoutOnly, /stdout: openclaw returned an empty payload/);
   assert.doesNotMatch(stdoutOnly, /\/Users\/atlasai|\.openclaw/);
+});
+
+test("gateway failure details classify recent Slack failure modes", () => {
+  assert.equal(classifyGatewayFailure({
+    timedOut: true,
+    stderr: "Command failed after 180000ms",
+  }), "timeout");
+  assert.equal(classifyGatewayFailure({
+    stderr: "SessionWriteLockTimeoutError at /Users/atlasai/.openclaw/workspace/state/slack-U.jsonl.lock",
+  }), "session_lock_timeout");
+  assert.equal(classifyGatewayFailure({
+    stderr: "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+  }), "context_overflow");
+  assert.equal(classifyGatewayFailure({
+    stderr: "LLM request failed: network connection error. rawError=fetch failed",
+  }), "provider_error");
+  assert.equal(classifyGatewayFailure({
+    stderr: "disconnect reason=too_many_websockets",
+  }), "rate_or_socket_limit");
+  assert.equal(classifyGatewayFailure({
+    reply: "",
+  }), "empty_response");
+});
+
+test("gateway failure details are structured and redacted", () => {
+  const details = gatewayFailureDetails({
+    modelId: "openai-codex/gpt-5.5",
+    stderr: "LLM request failed: fetch failed at /Users/atlasai/.openclaw/workspace/state/slack-U.jsonl.lock xoxb-secret",
+  });
+  assert.equal(details.failureType, "provider_error");
+  assert.equal(details.provider, "openai-codex");
+  assert.equal(details.model, "gpt-5.5");
+  const formatted = formatGatewayFailureDetails(details);
+  assert.match(formatted, /failure_type=provider_error/);
+  assert.match(formatted, /provider=openai-codex/);
+  assert.match(formatted, /model=gpt-5\.5/);
+  assert.doesNotMatch(formatted, /\/Users\/atlasai|\.openclaw|xoxb-secret/);
 });
 
 test("draft failed fallback is user-facing and avoids internals", () => {

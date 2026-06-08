@@ -1,6 +1,6 @@
 import https from "node:https";
 import http from "node:http";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { WebSocket } from "ws";
 import { execFile } from "node:child_process";
 import { runGates } from "../../lib/slack-gates.mjs";
@@ -19,6 +19,8 @@ import {
   deliveryRequestedText,
   extractGatewayReply,
   draftFailedHandoffText,
+  formatGatewayFailureDetails,
+  gatewayFailureDetails,
   gatewayFailureSummary,
   handoffSummaryForRequest,
   isDeliveryRequestFollowup,
@@ -31,6 +33,7 @@ import {
   misroutedDeliveryReplyText,
   prepareSlackReply,
   preferredDeliveryForSlackRequest,
+  splitProviderModel,
   workspaceAckForRequest,
 } from "../../lib/slack-listener-reply.mjs";
 
@@ -39,6 +42,7 @@ const APP_TOKEN = process.env.SLACK_APP_TOKEN || "";
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const AUTHORISED_USERS = (process.env.AUTHORISED_USERS || "").split(",").filter(Boolean);
 const LOG_FILE = "/Users/atlasai/.openclaw/logs/listener.log";
+const OPENCLAW_CONFIG_FILE = "/Users/atlasai/.openclaw/openclaw.json";
 
 const PING_INTERVAL_MS = 60_000;
 const RHYS_DM_CHANNEL = "D0AM2R3H6SE"; // Rhys's DM with the bot (U068FRX5423)
@@ -61,6 +65,16 @@ function log(emoji, msg) {
   const line = `[${ts()}] ${emoji} ${msg}`;
   console.log(line);
   try { appendFileSync(LOG_FILE, line + "\n"); } catch {}
+}
+
+function readBrainProvenance() {
+  try {
+    const config = JSON.parse(readFileSync(OPENCLAW_CONFIG_FILE, "utf8"));
+    const modelId = config?.agents?.defaults?.model?.primary || "";
+    return splitProviderModel(modelId);
+  } catch {
+    return splitProviderModel(process.env.OPENCLAW_DEFAULT_MODEL || "");
+  }
 }
 
 function gatewayCooldownRemainingMs(sessionId) {
@@ -174,8 +188,10 @@ async function sendSlackMessageChunk(channel, text, threadTs, gateCtx = {}) {
 
 // ── Forward to OpenClaw Gateway via CLI ──
 function forwardToGateway(text, userId) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const sessionId = `slack-${userId}`;
+    const brain = readBrainProvenance();
+    log("🧠", `Gateway dispatch session=${sessionId} provider=${brain.provider} model=${brain.model} timeoutMs=${GATEWAY_TIMEOUT_MS}`);
     execFile("/opt/homebrew/bin/openclaw", [
       "agent",
       "--message", text,
@@ -194,7 +210,16 @@ function forwardToGateway(text, userId) {
       const stdoutText = String(stdout || "").slice(0, 4000);
       const stderrText = String(stderr || "").slice(0, 4000);
       if (err) {
-        log("❌", `Agent error: ${err.message}`);
+        const failureDetails = gatewayFailureDetails({
+          timedOut: err.killed || err.code === "ETIMEDOUT" || err.signal === "SIGTERM",
+          errorMessage: err.message,
+          stderr: stderrText,
+          stdout: stdoutText,
+          reply,
+          provider: brain.provider,
+          model: brain.model,
+        });
+        log("❌", `Agent error: ${formatGatewayFailureDetails(failureDetails)}`);
         resolve({
           ok: false,
           reply,
@@ -202,10 +227,12 @@ function forwardToGateway(text, userId) {
           stdout: stdoutText,
           stderr: stderrText,
           timedOut: err.killed || err.code === "ETIMEDOUT" || err.signal === "SIGTERM",
+          brain,
+          failureDetails,
         });
         return;
       }
-      resolve({ ok: true, reply, error: null, stdout: stdoutText, stderr: stderrText, timedOut: false });
+      resolve({ ok: true, reply, error: null, stdout: stdoutText, stderr: stderrText, timedOut: false, brain });
     });
   });
 }
@@ -517,10 +544,22 @@ async function handleMessage(event) {
         stdout: gatewayResult.stdout || "",
         reply: gatewayReply || "",
       });
+      const failureDetails = gatewayResult.failureDetails || gatewayFailureDetails({
+        timedOut: isTimeout,
+        errorMessage: gatewayResult.error?.message || "",
+        stderr: gatewayResult.stderr || "",
+        stdout: gatewayResult.stdout || "",
+        reply: gatewayReply || "",
+        provider: gatewayResult.brain?.provider,
+        model: gatewayResult.brain?.model,
+      });
       await updateSlackDmJob(job.id, {
         status: isTimeout ? "needs_workspace_job" : "failed",
         failedAt: new Date().toISOString(),
-        safeErrorSummary,
+        safeErrorSummary: formatGatewayFailureDetails({ ...failureDetails, summary: safeErrorSummary }),
+        failureType: failureDetails.failureType,
+        brainProvider: failureDetails.provider,
+        brainModel: failureDetails.model,
         error: gatewayResult.error?.message || safeErrorSummary,
         stdout: gatewayResult.stdout || null,
         stderr: gatewayResult.stderr || null,
@@ -530,7 +569,7 @@ async function handleMessage(event) {
         preferredDeliveryReason: deliveryPreference.reason,
       });
       await sendSlackMessage(channel, fallback, threadTs, { kind: "summary", callerSite: "gateway-timeout-status" });
-      log("✅", `Useful timeout status sent in ${channel} for ${userId}`);
+      log("✅", `Useful gateway failure status sent in ${channel} for ${userId} ${formatGatewayFailureDetails(failureDetails)}`);
       return;
     }
 
@@ -547,6 +586,8 @@ async function handleMessage(event) {
         safeErrorSummary: "Gateway selected email or Mission Control instead of the Slack DM delivery path.",
         gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
         gatewayError: gatewayResult.error?.message || null,
+        brainProvider: gatewayResult.brain?.provider || null,
+        brainModel: gatewayResult.brain?.model || null,
         preferredDelivery: deliveryPreference.preferredDelivery,
         preferredDeliveryReason: deliveryPreference.reason,
       });
@@ -597,6 +638,8 @@ async function handleMessage(event) {
           preferredDeliveryReason: deliveryPreference.reason,
           gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
           gatewayError: gatewayResult.error?.message || null,
+          brainProvider: gatewayResult.brain?.provider || null,
+          brainModel: gatewayResult.brain?.model || null,
         });
         log("✅", `Gateway artifact delivered to Rhys DM via helper job=${job.id} file=${result.fileId}`);
         return;
@@ -628,6 +671,8 @@ async function handleMessage(event) {
           preferredDeliveryReason: deliveryPreference.reason,
           gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
           gatewayError: gatewayResult.error?.message || null,
+          brainProvider: gatewayResult.brain?.provider || null,
+          brainModel: gatewayResult.brain?.model || null,
         });
         await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "gateway-artifact-delivery-blocked" });
         log("⚠️", `Gateway artifact delivery blocked job=${job.id}: ${sendErr.message}`);
@@ -645,6 +690,8 @@ async function handleMessage(event) {
       artifactReadyAt: prepared.mediaPaths.length ? new Date().toISOString() : null,
       gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
       gatewayError: gatewayResult.error?.message || null,
+      brainProvider: gatewayResult.brain?.provider || null,
+      brainModel: gatewayResult.brain?.model || null,
       preferredDelivery: deliveryPreference.preferredDelivery,
       preferredDeliveryReason: deliveryPreference.reason,
     });
@@ -671,12 +718,22 @@ async function handleMessage(event) {
     const isTimeout = err.killed || err.message?.includes("TIMEOUT") || err.message?.includes("timed out") || err.signal === "SIGTERM";
     const errorType = isTimeout ? "TIMEOUT" : "ERROR";
     if (isTimeout) setGatewayCooldown(sessionId);
+    const brain = readBrainProvenance();
+    const failureDetails = gatewayFailureDetails({
+      timedOut: isTimeout,
+      errorMessage: err.message,
+      provider: brain.provider,
+      model: brain.model,
+    });
 
-    log("❌", `GATEWAY_${errorType} from=${userId} channel=${channel} error="${err.message}" msg="${snippet}"`);
+    log("❌", `GATEWAY_${errorType} from=${userId} channel=${channel} ${formatGatewayFailureDetails(failureDetails)} msg="${snippet}"`);
     await updateSlackDmJob(job.id, {
       status: isTimeout ? "needs_workspace_job" : "failed",
       failedAt: new Date().toISOString(),
-      safeErrorSummary: isTimeout ? "Live Slack agent window timed out; workspace handoff required." : "Gateway failed before a usable reply.",
+      safeErrorSummary: formatGatewayFailureDetails(failureDetails),
+      failureType: failureDetails.failureType,
+      brainProvider: failureDetails.provider,
+      brainModel: failureDetails.model,
       error: err.message,
       gatewayTimedOut: isTimeout,
     });
@@ -728,7 +785,8 @@ async function getSocketUrl() {
       res.on("end", () => {
         try {
           const result = JSON.parse(chunks);
-          result.ok ? resolve(result.url) : reject(new Error(result.error));
+          if (result.ok) resolve(result.url);
+          else reject(new Error(result.error));
         } catch (e) { reject(e); }
       });
     });
@@ -802,7 +860,7 @@ async function connect() {
       }
     });
 
-    ws.on("close", (code, reason) => {
+    ws.on("close", (code) => {
       stopHeartbeat();
       log("🔌", `WebSocket closed (${code})`);
       scheduleReconnect();
