@@ -20,6 +20,7 @@ export type WorkspacePromptIntent =
   | "artifact_lookup"
   | "internal_markdown_draft"
   | "ricky_pdf_package_retrieval"
+  | "atlas_document_workflow"
   | "arbitrary_pdf_generation"
   | "slack_send"
   | "monday_mutation"
@@ -147,7 +148,11 @@ function classifyCapabilityId(text: string, requestedFormat: string | null, expl
 
   if (requestedFormat === "pdf" && explicitArtifactIntent) {
     if (isRickyPdfRequest(text)) return "ricky-pdf-package-retrieval";
+    if (isAtlasDocumentWorkflowRequest(text)) return "atlas-document-production-workflow";
     return "arbitrary-branded-pdf-generation";
+  }
+  if (requestedFormat === "docx" && explicitArtifactIntent) {
+    if (isAtlasDocumentWorkflowRequest(text)) return "atlas-document-production-workflow";
   }
 
   if (explicitArtifactIntent) return "internal-markdown-draft";
@@ -164,6 +169,14 @@ function isRickyPdfRequest(text: string): boolean {
   return /\bricky\b|\bcalder\b|\bcoach hire\b/.test(text) && /\b(pay|handover|package|structure|model)\b/.test(text);
 }
 
+function isAtlasDocumentWorkflowRequest(text: string): boolean {
+  return (
+    /\b(?:use|select|run|invoke|wrap|route to|via)\b.{0,90}\b(?:real|actual|production|proper|existing|source-of-truth)\b.{0,90}\b(?:atlas|rhys|undeniable)\b.{0,90}\b(?:document|doc|pdf|docx|converter|workflow)\b/.test(text) ||
+    /\b(?:real|actual|production|proper|existing|source-of-truth)\b.{0,90}\b(?:atlas|rhys|undeniable)\b.{0,90}\b(?:document|doc|pdf|docx|converter|workflow)\b/.test(text) ||
+    /\b(?:atlas|rhys|undeniable)\b.{0,90}\b(?:doc-converter|document converter|document workflow|pdf workflow|docx workflow)\b/.test(text)
+  );
+}
+
 function intentForCapability(capabilityId: string): WorkspacePromptIntent {
   switch (capabilityId) {
     case "recent-call-topic-retrieval":
@@ -176,6 +189,8 @@ function intentForCapability(capabilityId: string): WorkspacePromptIntent {
       return "internal_markdown_draft";
     case "ricky-pdf-package-retrieval":
       return "ricky_pdf_package_retrieval";
+    case "atlas-document-production-workflow":
+      return "atlas_document_workflow";
     case "arbitrary-branded-pdf-generation":
       return "arbitrary_pdf_generation";
     case "slack-send":

@@ -23,7 +23,7 @@ type WorkspacePanel = "tasks" | "library" | "capabilities" | "systems" | "plugin
 interface ArtifactPreview {
   id: string;
   title: string;
-  type: "markdown" | "pdf";
+  type: "markdown" | "pdf" | "docx";
   createdAt: string;
   taskTitle: string;
   runtimeProvider: string;
@@ -31,6 +31,11 @@ interface ArtifactPreview {
   markdown?: string;
   pdf?: {
     url: string;
+    downloadUrl: string;
+    filename: string;
+    byteLength: number;
+  };
+  docx?: {
     downloadUrl: string;
     filename: string;
     byteLength: number;
@@ -1329,6 +1334,7 @@ function ArtifactPreviewPanel({
   const type = state.status === "ready" ? state.preview.type : state.artifact.type;
   const createdAt = state.status === "ready" ? formatArtifactCreatedAt(state.preview.createdAt) : null;
   const isPdf = state.status === "ready" && state.preview.type === "pdf";
+  const isDocx = state.status === "ready" && state.preview.type === "docx";
   const previewMarkdown = state.status === "ready" && state.preview.markdown ? artifactPreviewDisplayMarkdown(state.preview.markdown) : "";
   const canUseMarkdown = previewMarkdown.trim().length > 0;
 
@@ -1362,6 +1368,9 @@ function ArtifactPreviewPanel({
               <a href={state.preview.pdf.downloadUrl}>Download PDF</a>
             </>
           ) : null}
+          {state.status === "ready" && state.preview.docx ? (
+            <a href={state.preview.docx.downloadUrl}>Download DOCX</a>
+          ) : null}
           <button type="button" onClick={downloadMarkdown} disabled={!canUseMarkdown}>Download markdown</button>
         </div>
         <div className={styles.previewBody}>
@@ -1377,6 +1386,11 @@ function ArtifactPreviewPanel({
               <p>
                 PDF ready locally. Use Open PDF or Download PDF if the inline viewer is unavailable.
               </p>
+            </div>
+          ) : isDocx && state.preview.docx ? (
+            <div className={styles.previewMarkdown}>
+              <p className={styles.previewEmpty}>DOCX ready locally. Use Download DOCX to open the Word document.</p>
+              <MarkdownLite content={previewMarkdown} streaming={false} />
             </div>
           ) : (
             <div className={styles.previewMarkdown}>

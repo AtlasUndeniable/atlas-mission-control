@@ -49,6 +49,18 @@ test("generic branded PDF prompt selects blocked arbitrary PDF capability", () =
   assert.doesNotMatch(JSON.stringify(plan), /\/Users\/atlasai|\.openclaw|SLACK_|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
 });
 
+test("explicit real Atlas document workflow prompt selects production workflow", () => {
+  const plan = routeWorkspaceCapability({
+    prompt: "Use the real Atlas/Rhys document workflow to render this as a PDF.",
+    title: "Workflow recovery test",
+  });
+
+  assert.equal(plan.intent, "atlas_document_workflow");
+  assert.equal(plan.capabilityId, "atlas-document-production-workflow");
+  assert.equal(plan.allowed, true);
+  assert.ok(plan.toolBindingIds.includes("atlas-document-converter"));
+});
+
 test("Slack send prompt selects blocked Slack send capability", () => {
   const plan = routeWorkspaceCapability({
     prompt: "Send this answer to Rhys in Slack.",

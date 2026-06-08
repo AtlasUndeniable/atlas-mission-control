@@ -20,6 +20,7 @@ const requiredCapabilityIds = [
   "internal-markdown-draft",
   "ricky-pdf-package-retrieval",
   "audit-pdf-renderer-workflow",
+  "atlas-document-production-workflow",
   "brand-voice-guidance-retrieval",
   "slack-draft-reply-workflow",
   "session-persistence-continuation",
@@ -43,12 +44,12 @@ test("capability registry validates seeded Atlas capabilities", () => {
   validateAtlasRegistry(registry);
   assert.equal(registry.version, 1);
   assert.deepEqual(registry.capabilities.map((capability) => capability.id), requiredCapabilityIds);
-  assert.equal(registry.summary.available, 8);
+  assert.equal(registry.summary.available, 9);
   assert.equal(registry.summary.limited, 5);
   assert.equal(registry.summary.blocked, 5);
   assert.equal(registry.summary.planned, 2);
   assert.equal(registry.skills.length, 8);
-  assert.equal(registry.toolBindings.length, 12);
+  assert.equal(registry.toolBindings.length, 13);
   assert.equal(registry.safetyPolicies.length, 6);
 });
 
@@ -65,10 +66,12 @@ test("discovered substrate is represented as safe capabilities, skills, and bind
   assert.ok(bindingIds.has("workspace-search-memory"));
   assert.ok(bindingIds.has("workspace-summarize-calls"));
   assert.ok(bindingIds.has("audit-pdf-renderer"));
+  assert.ok(bindingIds.has("atlas-document-converter"));
   assert.ok(bindingIds.has("slack-listener-reply-runtime"));
   assert.ok(sourceLabels.has("Layered memory vault"));
   assert.ok(sourceLabels.has("Librarian reports"));
   assert.ok(sourceLabels.has("Audit subagent"));
+  assert.ok(sourceLabels.has("Atlas document converter"));
   assert.ok(sourceLabels.has("Strategist subagent"));
   assert.ok(sourceLabels.has("Slack reply runtime"));
 });

@@ -12,11 +12,16 @@ import {
   detectWorkspaceDraftArtifactIntent,
   isSafeWorkspaceDraftArtifactId,
   maybeWriteWorkspaceDraftArtifact,
+  readWorkspaceDraftArtifactDocx,
   readWorkspaceDraftArtifactPdf,
   readWorkspaceDraftArtifactPreview,
   shouldCreateWorkspaceDraftArtifact,
   summarizeWorkspaceDraftArtifactForChat,
 } from "../src/lib/workspace-draft-artifacts.ts";
+import {
+  ATLAS_DOCUMENT_WORKFLOW_ID,
+  type WorkspaceRealArtifactRenderer,
+} from "../src/lib/workspace-real-artifact-workflow.ts";
 
 test("draft artifact intent is explicit deliverable only", () => {
   assert.equal(shouldCreateWorkspaceDraftArtifact({
@@ -152,6 +157,117 @@ test("generic unsupported PDF request does not create a fake artifact", async ()
     });
 
     assert.equal(result, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("branded PDF stays blocked unless the real Atlas document workflow is selected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-branded-block-"));
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Create a polished branded PDF for this model.",
+      content: "## Model\n\nThis should not become a fake PDF.",
+      taskTitle: "Client model",
+      runtimeProvider: "mastra",
+      runId: "run_branded_pdf_blocked",
+      taskId: "task_branded_pdf_blocked",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+    });
+
+    assert.equal(result, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("selected real Atlas document workflow renders PDF and DOCX sidecar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-real-workflow-"));
+  const renderer: WorkspaceRealArtifactRenderer = async (input) => ({
+    workflowId: ATLAS_DOCUMENT_WORKFLOW_ID,
+    sourceMarkdownPath: join(root, "render-source.md"),
+    outputs: input.formats.map((format) => ({
+      format,
+      filename: `${input.outputStem}.${format}`,
+      exportPath: join(root, `${input.outputStem}.${format}`),
+      bytes: format === "pdf"
+        ? Buffer.from("%PDF-1.7\nreal workflow pdf\n")
+        : Buffer.from("PK\u0003\u0004real workflow docx\n"),
+    })),
+  });
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Use the real Atlas/Rhys document workflow to render this as a PDF.",
+      content: "# Real Workflow\n\nRevenue target is $10,000 and the plan is ready.",
+      taskTitle: "Real workflow recovery test",
+      runtimeProvider: "mastra",
+      runId: "run_real_workflow_pdf",
+      taskId: "task_real_workflow_pdf",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+      realArtifactRenderer: renderer,
+    });
+
+    assert.ok(result);
+    assert.equal(result.metadata.type, "pdf");
+    assert.equal(result.metadata.sourceWorkflow, ATLAS_DOCUMENT_WORKFLOW_ID);
+    assert.ok(result.pdf);
+    assert.ok(result.docx);
+    assert.equal(result.pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    assert.equal(result.docx.subarray(0, 2).toString("ascii"), "PK");
+    assert.ok(result.metadata.pdfPath);
+    assert.ok(result.metadata.docxPath);
+    assert.match(result.markdown, /Revenue target is \$10,000/);
+    assert.doesNotMatch(result.markdown, /Task Prompt|Delivery: local draft only/);
+
+    const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
+    assert.ok(preview);
+    assert.equal(preview.type, "pdf");
+    assert.ok(preview.pdf);
+    assert.ok(preview.docx);
+    assert.ok(await readWorkspaceDraftArtifactDocx(result.metadata.id, { root }));
+    assert.match(summarizeWorkspaceDraftArtifactForChat(result), /real Atlas\/Undeniable document converter/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("selected real Atlas document workflow can produce DOCX as primary artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-draft-artifacts-real-docx-"));
+  const renderer: WorkspaceRealArtifactRenderer = async (input) => ({
+    workflowId: ATLAS_DOCUMENT_WORKFLOW_ID,
+    sourceMarkdownPath: join(root, "render-source.md"),
+    outputs: input.formats.map((format) => ({
+      format,
+      filename: `${input.outputStem}.${format}`,
+      exportPath: join(root, `${input.outputStem}.${format}`),
+      bytes: Buffer.from("PK\u0003\u0004real workflow docx\n"),
+    })),
+  });
+  try {
+    const result = await maybeWriteWorkspaceDraftArtifact({
+      prompt: "Use the real Undeniable document workflow and return this as a DOCX.",
+      content: "Real document body.",
+      taskTitle: "Real DOCX workflow recovery test",
+      runtimeProvider: "mastra",
+      runId: "run_real_workflow_docx",
+      taskId: "task_real_workflow_docx",
+      now: () => new Date("2026-06-02T00:00:00.000Z"),
+      root,
+      realArtifactRenderer: renderer,
+    });
+
+    assert.ok(result);
+    assert.equal(result.metadata.type, "docx");
+    assert.equal(result.artifact.type, "docx");
+    assert.ok(result.docx);
+    assert.equal(result.pdf, undefined);
+    const preview = await readWorkspaceDraftArtifactPreview(result.metadata.id, { root });
+    assert.ok(preview);
+    assert.equal(preview.type, "docx");
+    assert.ok(preview.docx);
+    assert.equal(preview.pdf, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

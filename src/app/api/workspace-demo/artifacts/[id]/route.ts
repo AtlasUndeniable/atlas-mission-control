@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  readWorkspaceDraftArtifactDocx,
   readWorkspaceDraftArtifactPdf,
   readWorkspaceDraftArtifactPreview,
 } from "@/lib/workspace-draft-artifacts";
@@ -26,6 +27,23 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
         headers: {
           "content-type": "application/pdf",
           "content-disposition": `${disposition}; filename="${pdf.filename}"`,
+          "cache-control": "no-store",
+        },
+      });
+    }
+    if (url.searchParams.get("format") === "docx") {
+      const docx = await readWorkspaceDraftArtifactDocx(id);
+      if (!docx) {
+        return NextResponse.json(
+          { ok: false, error: "DOCX artifact not found." },
+          { status: 404 },
+        );
+      }
+      const body = Uint8Array.from(docx.bytes).buffer;
+      return new Response(body, {
+        headers: {
+          "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "content-disposition": `attachment; filename="${docx.filename}"`,
           "cache-control": "no-store",
         },
       });

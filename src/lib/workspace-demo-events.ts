@@ -13,7 +13,7 @@ export type AgentEventKind =
 
 export type MessageRole = "user" | "assistant";
 export type TaskStepStatus = "pending" | "running" | "complete" | "error";
-export type ArtifactType = "document" | "spreadsheet" | "audit" | "brief" | "playbook" | "markdown" | "pdf";
+export type ArtifactType = "document" | "spreadsheet" | "audit" | "brief" | "playbook" | "markdown" | "pdf" | "docx";
 export type WorkspaceTaskStatus = "idle" | "running" | "complete" | "error";
 export type WorkspaceRunPhaseName = "observe" | "retrieve" | "answer_draft" | "critic_check" | "final";
 export type WorkspaceRunPhaseStatus = "running" | "complete" | "warning" | "error";

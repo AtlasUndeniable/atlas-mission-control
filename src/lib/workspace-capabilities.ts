@@ -137,6 +137,7 @@ const SUBSTRATE = {
   librarianReports: source("Librarian reports", "librarian_report", "Maintenance, graph diff, daily delta, ingestion, and artifact hygiene reports."),
   librarianSubagent: source("Librarian subagent", "openclaw_subagent", "Nightly, parser, graph, indexer, context-pack, and review queue scripts."),
   auditSubagent: source("Audit subagent", "openclaw_subagent", "Audit generator, QA, run contract, Typeform parser, and PDF renderer workflow."),
+  atlasDocumentConverter: source("Atlas document converter", "runtime_workflow", "Existing OpenClaw doc-converter workflow for real Undeniable PDF/DOCX artifacts."),
   strategistSubagent: source("Strategist subagent", "openclaw_subagent", "Classifier, retriever, brief writer, compliance, and strategist voice resource."),
   rickyPackage: source("Ricky package archive", "artifact_archive", "Existing Ricky Calder handover package and source-match dry run evidence."),
   slackRuntime: source("Slack reply runtime", "runtime_workflow", "OpenClaw listener and reply draft workflow, with send paths outside Workspace."),
@@ -153,6 +154,7 @@ const DISCOVERED_SUBSTRATE: AtlasSubstrateSource[] = [
   SUBSTRATE.librarianReports,
   SUBSTRATE.librarianSubagent,
   SUBSTRATE.auditSubagent,
+  SUBSTRATE.atlasDocumentConverter,
   SUBSTRATE.strategistSubagent,
   SUBSTRATE.rickyPackage,
   SUBSTRATE.slackRuntime,
@@ -303,6 +305,30 @@ const SEEDED_CAPABILITIES: AtlasCapability[] = [
     knownLimitations: [
       "The renderer is a real local workflow, but general Workspace PDF creation is not productized.",
       "Workspace should not promise arbitrary branded PDFs from this capability.",
+    ],
+  },
+  {
+    id: "atlas-document-production-workflow",
+    name: "Atlas document production workflow",
+    category: "artifacts",
+    status: "available",
+    description: "Render explicit real Atlas/Undeniable document workflow requests to local PDF/DOCX artifacts using the existing converter.",
+    inputs: [
+      requiredInput("Explicit workflow selection", "A prompt that names the real Atlas/Rhys/Undeniable document workflow or converter."),
+      requiredInput("Document body", "Workspace-generated markdown source to render."),
+    ],
+    outputs: [
+      requiredOutput("Real PDF/DOCX artifact", "Local artifact rendered by the existing converter, with markdown kept only as source."),
+      optionalOutput("Download links", "Workspace preview/download links for produced PDF and DOCX files."),
+    ],
+    safetyLevel: "local_write",
+    approvalRequirement: "user_confirmation",
+    backing: backing(["Atlas document converter"], ["Workspace local artifact store"], ["Artifact retrieval skill", "Document workflow skill"]),
+    sourceRefs: [SUBSTRATE.draftArtifacts, SUBSTRATE.atlasDocumentConverter],
+    knownLimitations: [
+      "Only PDF and DOCX are wired through this converter.",
+      "Deck output remains blocked unless a real deck workflow is separately selected.",
+      "Local artifact creation does not send or publish files.",
     ],
   },
   {
@@ -484,7 +510,7 @@ const SEEDED_CAPABILITIES: AtlasCapability[] = [
 const SEEDED_SKILLS: AtlasSkill[] = [
   skill("memory-librarian", "Memory Librarian", "memory", "available", "Recall and summarize memory, context packs, and Librarian report evidence.", ["memory-search-recall", "call-memory-answer", "librarian-maintenance-reporting"], ["workspace-search-memory", "workspace-reference-packet", "librarian-report-reader"], ["read-only-retrieval", "path-secret-redaction"], [SUBSTRATE.librarianMemory, SUBSTRATE.librarianReports, SUBSTRATE.librarianSubagent], ["Report application and memory writes are not exposed in Workspace."]),
   skill("call-retrieval", "Call retrieval", "calls", "limited", "Resolve call-related labels and trend summaries for analytical answers.", ["call-memory-answer", "recent-call-topic-retrieval"], ["workspace-summarize-calls", "workspace-reference-packet"], ["read-only-retrieval", "capability-truthfulness"], [SUBSTRATE.workspaceAgentTools, SUBSTRATE.librarianReports], ["Not a full transcript search product yet."]),
-  skill("artifact-retrieval", "Artifact retrieval", "artifacts", "available", "Find existing artifacts and produce explicit-intent local drafts.", ["artifact-library-lookup", "internal-markdown-draft", "ricky-pdf-package-retrieval"], ["workspace-find-artifact", "workspace-draft-artifact-writer", "ricky-package-resolver"], ["local-artifact-write-gate", "path-secret-redaction"], [SUBSTRATE.artifactProjection, SUBSTRATE.draftArtifacts, SUBSTRATE.rickyPackage], ["Artifact creation requires explicit deliverable intent."]),
+  skill("artifact-retrieval", "Artifact retrieval", "artifacts", "available", "Find existing artifacts and produce explicit-intent local drafts.", ["artifact-library-lookup", "internal-markdown-draft", "ricky-pdf-package-retrieval", "atlas-document-production-workflow"], ["workspace-find-artifact", "workspace-draft-artifact-writer", "ricky-package-resolver", "atlas-document-converter"], ["local-artifact-write-gate", "path-secret-redaction"], [SUBSTRATE.artifactProjection, SUBSTRATE.draftArtifacts, SUBSTRATE.rickyPackage, SUBSTRATE.atlasDocumentConverter], ["Artifact creation requires explicit deliverable intent and workflow support."]),
   skill("audit-document-workflow", "Audit document workflow", "artifacts", "limited", "Represent the existing audit renderer and QA flow without claiming general document generation.", ["audit-pdf-renderer-workflow", "typeform-mutation"], ["audit-pdf-renderer"], ["local-artifact-write-gate", "mutation-block"], [SUBSTRATE.auditSubagent], ["Audit generation is not generalized into Workspace yet."]),
   skill("strategist-guidance", "Strategist guidance", "guidance", "limited", "Retrieve strategist voice, compliance, and brief-writing guidance.", ["brand-voice-guidance-retrieval"], ["strategist-retriever"], ["read-only-retrieval", "capability-truthfulness"], [SUBSTRATE.strategistSubagent], ["Guidance retrieval is advisory and source-scoped."]),
   skill("qa-critic", "QA critic", "quality", "available", "Check draft analytical answers for unsupported claims, missing labels, path leaks, and unnecessary follow-up.", ["qa-critic-check"], ["workspace-qa-critic"], ["path-secret-redaction", "capability-truthfulness"], [SUBSTRATE.runtimeContext, SUBSTRATE.localSessions], ["Lightweight deterministic QA, not human review."]),
@@ -499,6 +525,7 @@ const SEEDED_TOOL_BINDINGS: AtlasToolBinding[] = [
   toolBinding("workspace-reference-packet", "get_reference_packet", "workspace_tool", "available", "Resolve source packets for Workspace answers and QA grounding.", "Workspace reference resolver", ["memory-search-recall", "call-memory-answer", "recent-call-topic-retrieval"], ["read-only-retrieval", "path-secret-redaction"], [SUBSTRATE.workspaceAgentTools, SUBSTRATE.runtimeContext], ["Thin or absent packets must be described as thin or absent."]),
   toolBinding("workspace-draft-artifact-writer", "Workspace draft artifact writer", "workspace_runtime", "available", "Creates local markdown and supported Ricky PDF artifacts only after explicit intent.", "Workspace runtime artifact gate", ["internal-markdown-draft", "ricky-pdf-package-retrieval"], ["local-artifact-write-gate", "path-secret-redaction"], [SUBSTRATE.draftArtifacts], ["Unsupported PDFs produce a limitation instead of a fake artifact."]),
   toolBinding("ricky-package-resolver", "Ricky package resolver", "artifact_store", "available", "Copies the supported Ricky handover package into the local Workspace artifact flow.", "Workspace artifact store", ["ricky-pdf-package-retrieval"], ["local-artifact-write-gate"], [SUBSTRATE.rickyPackage, SUBSTRATE.draftArtifacts], ["Only the discovered Ricky package is supported."]),
+  toolBinding("atlas-document-converter", "Atlas document converter", "runtime_workflow", "available", "Calls the existing OpenClaw doc-converter script for explicitly selected real PDF/DOCX artifact production.", "OpenClaw doc-converter workflow", ["atlas-document-production-workflow"], ["local-artifact-write-gate", "path-secret-redaction"], [SUBSTRATE.atlasDocumentConverter, SUBSTRATE.draftArtifacts], ["No deck rendering support."]),
   toolBinding("librarian-report-reader", "Librarian report reader", "local_script", "limited", "Represents existing Librarian report and context pack output as read-only evidence.", "Librarian report archive", ["librarian-maintenance-reporting", "memory-search-recall"], ["read-only-retrieval", "path-secret-redaction"], [SUBSTRATE.librarianReports, SUBSTRATE.librarianSubagent], ["Does not apply Librarian bundles from Workspace."]),
   toolBinding("audit-pdf-renderer", "Audit PDF renderer", "openclaw_subagent", "limited", "Known audit workflow renderer for audit markdown to local PDF.", "Audit subagent workflow", ["audit-pdf-renderer-workflow"], ["local-artifact-write-gate", "capability-truthfulness"], [SUBSTRATE.auditSubagent], ["Not generalized to arbitrary branded PDFs."]),
   toolBinding("strategist-retriever", "Strategist retriever", "openclaw_subagent", "limited", "Retrieves strategist voice and brief-writing guidance.", "Strategist subagent workflow", ["brand-voice-guidance-retrieval"], ["read-only-retrieval", "capability-truthfulness"], [SUBSTRATE.strategistSubagent], ["Advisory only; external-facing decisions still need review."]),
