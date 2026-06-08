@@ -110,6 +110,14 @@ function findProcess(processes, pattern) {
   return processes.find((process) => pattern.test(process.command)) || null;
 }
 
+function findGatewayProcess(processes) {
+  const candidates = processes.filter((process) => /(?:^|\s)openclaw(?:\s|$)|\/openclaw\s+gateway/.test(process.command));
+  return candidates.find((process) => /\/openclaw\s+gateway/.test(process.command))
+    || candidates.find((process) => process.ppid === 1)
+    || candidates[0]
+    || null;
+}
+
 function findLaunchAgent(agents, pattern) {
   return agents.find((agent) => pattern.test(`${agent.label} ${agent.programArguments.join(" ")}`)) || null;
 }
@@ -152,7 +160,7 @@ export async function collectSlackSocketOwnerReport({
   const slackBridgeSource = await readText(join(liveRoot, "services/slack-bridge/slack-bridge.mjs"));
 
   const listenerProcess = findProcess(processList, /services\/slack-listener\/listener\.mjs/);
-  const gatewayProcess = findProcess(processList, /(?:^|\s)openclaw(?:\s|$)|\/openclaw\s+gateway/);
+  const gatewayProcess = findGatewayProcess(processList);
   const slackBridgeProcess = findProcess(processList, /services\/slack-bridge\/slack-bridge\.mjs/);
   const listenerAgent = findLaunchAgent(launchAgents, /com\.atlas\.slack-listener|services\/slack-listener\/listener\.mjs/);
   const gatewayAgent = findLaunchAgent(launchAgents, /com\.atlas\.gateway|openclaw.*gateway/);
