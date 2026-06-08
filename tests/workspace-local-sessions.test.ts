@@ -81,6 +81,34 @@ function runPhaseEvent(index: number, phaseName: Extract<AgentEvent, { kind: "ru
   };
 }
 
+function capabilityRunPhaseEvent(index: number): AgentEvent {
+  const event = runPhaseEvent(index, "observe");
+  if (event.kind !== "run.phase") return event;
+  return {
+    ...event,
+    phase: {
+      ...event.phase,
+      title: "Plan capability route",
+      summary: "Selected Recent call topic retrieval via Call retrieval.",
+      capabilityPlan: {
+        intent: "recent_call_topic_retrieval",
+        capabilityId: "recent-call-topic-retrieval",
+        capabilityName: "Recent call topic retrieval",
+        capabilityStatus: "limited",
+        skillId: "call-retrieval",
+        skillName: "Call retrieval",
+        toolBindings: ["summarize_calls", "get_reference_packet"],
+        safetyPolicies: ["Read-only retrieval", "Capability truthfulness"],
+        safetyLevel: "read_only",
+        approvalRequirement: "none",
+        allowed: true,
+        blockedReason: null,
+        limitedReason: "Topic retrieval is not a full transcript search product yet.",
+      },
+    },
+  };
+}
+
 function taskEvents(index: number, title: string): [AgentEvent, AgentEvent] {
   const step: TaskStep = { id: `step_${index}`, title: "Create draft", status: "complete", summary: "Saved locally." };
   const task: Task = {
@@ -166,6 +194,24 @@ test("hydrated session restores run phase QA state", async () => {
     assert.deepEqual(snapshot?.thread.runPhases.map((phase) => phase.name), ["observe", "retrieve", "critic_check", "final"]);
     assert.equal(snapshot?.thread.runPhases.find((phase) => phase.name === "critic_check")?.qa?.passed, true);
     assert.match(snapshot?.thread.runPhases.find((phase) => phase.name === "final")?.finalAnswer ?? "", /Final answer/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hydrated session preserves selected capability and skill phase metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-sessions-capability-plan-"));
+  try {
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_capability", title: "Capability route", event: userMessage(1, "What topics came up in recent calls?") });
+    await appendWorkspaceLocalSessionEvent({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_capability", title: "Capability route", event: capabilityRunPhaseEvent(2) });
+    const snapshot = await hydrateWorkspaceLocalSession({ root, project: "undeniable-os", room: "workspace-demo", sessionId: "session_capability" });
+    const observe = snapshot?.thread.runPhases.find((phase) => phase.name === "observe");
+
+    assert.equal(observe?.capabilityPlan?.capabilityId, "recent-call-topic-retrieval");
+    assert.equal(observe?.capabilityPlan?.skillId, "call-retrieval");
+    assert.equal(observe?.capabilityPlan?.allowed, true);
+    assert.deepEqual(observe?.capabilityPlan?.toolBindings, ["summarize_calls", "get_reference_packet"]);
+    assert.doesNotMatch(JSON.stringify(observe), /\/Users\/atlasai|\.openclaw|SLACK_|OPENAI_API_KEY/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

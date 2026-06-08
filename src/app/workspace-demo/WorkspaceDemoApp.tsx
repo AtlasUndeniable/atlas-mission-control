@@ -1522,6 +1522,7 @@ function RunQaCard({ phases }: { phases: WorkspaceRunPhase[] }) {
   const retrieve = latestByName.get("retrieve");
   const critic = latestByName.get("critic_check");
   const final = latestByName.get("final");
+  const capabilityPlan = [...phases].reverse().find((phase) => phase.capabilityPlan)?.capabilityPlan ?? null;
   const checked = [...new Set([...(observe?.checked ?? []), ...(retrieve?.checked ?? []), ...(critic?.checked ?? [])])].slice(0, 5);
   const categories = [...new Set([...(retrieve?.sourceCategories ?? []), ...(critic?.sourceCategories ?? [])])].slice(0, 6);
   const qaPassed = critic?.qa?.passed;
@@ -1537,6 +1538,17 @@ function RunQaCard({ phases }: { phases: WorkspaceRunPhase[] }) {
         </span>
       </div>
       <div className={styles.runQaGrid}>
+        {capabilityPlan ? (
+          <RunQaBlock
+            title="Capability route"
+            chips={[
+              capabilityPlan.allowed ? "allowed" : "blocked",
+              capabilityPlan.capabilityName,
+              capabilityPlan.skillName ?? "no skill",
+              capabilityPlan.safetyLevel.replaceAll("_", " "),
+            ]}
+          />
+        ) : null}
         <RunQaBlock title="What Atlas checked" items={checked.length ? checked : ["Prompt observed; retrieval pending."]} />
         <RunQaBlock title="Evidence/source categories" chips={categories.length ? categories : ["none checked"]} />
         <RunQaBlock title="QA result" items={[critic?.summary ?? "Critic check pending."]} />

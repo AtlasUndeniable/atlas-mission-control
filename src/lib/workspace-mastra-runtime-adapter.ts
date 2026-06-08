@@ -14,7 +14,11 @@ import {
   prepareWorkspaceAgentToolExecutions,
   runtimeReferencePacketFromToolExecutions,
 } from "./workspace-agent-tools.ts";
-import { createWorkspaceReferenceInspectorPacket, type WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
+import {
+  createEmptyWorkspaceReferencePacket,
+  createWorkspaceReferenceInspectorPacket,
+  type WorkspaceReferencePacket,
+} from "./workspace-reference-resolver.ts";
 import {
   maybeWriteWorkspaceDraftArtifact,
   summarizeWorkspaceDraftArtifactForChat,
@@ -27,6 +31,11 @@ import {
   runWorkspaceAnalyticalQa,
 } from "./workspace-agentic-qa.ts";
 import type { WorkspaceRunPhase, WorkspaceRunPhaseName, WorkspaceRunPhaseStatus } from "./workspace-demo-events.ts";
+import {
+  buildBlockedCapabilityAnswer,
+  routeWorkspaceCapability,
+  type WorkspaceCapabilityPlan,
+} from "./workspace-capability-router.ts";
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -71,21 +80,27 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
   async *runTask(input: WorkspaceLocalRuntimeInput, ctx: WorkspaceLocalRuntimeContext): AsyncIterable<AgentEvent> {
     const checkedInput = validateLocalRuntimeInput(input);
     const eventCtx = createEventContext(ctx, "run_mastra");
-    const toolExecutions = await prepareWorkspaceAgentToolExecutions(checkedInput, {
-      now: eventCtx.now,
-      referenceResolver: (toolInput) => {
-        if (ctx.referenceResolver) {
-          return ctx.referenceResolver({ prompt: toolInput.prompt, title: checkedInput.title });
-        }
-        return resolveRuntimeReferences({ prompt: toolInput.prompt, title: checkedInput.title });
-      },
-    });
+    const capabilityPlan = routeWorkspaceCapability(checkedInput);
+    const toolExecutions = capabilityPlan.allowed
+      ? await prepareWorkspaceAgentToolExecutions(checkedInput, {
+        now: eventCtx.now,
+        referenceResolver: (toolInput) => {
+          if (ctx.referenceResolver) {
+            return ctx.referenceResolver({ prompt: toolInput.prompt, title: checkedInput.title });
+          }
+          return resolveRuntimeReferences({ prompt: toolInput.prompt, title: checkedInput.title });
+        },
+      })
+      : [];
     const referencePacket = runtimeReferencePacketFromToolExecutions(toolExecutions)
-      ?? await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput);
+      ?? (capabilityPlan.allowed
+        ? await (ctx.referenceResolver ?? resolveRuntimeReferences)(checkedInput)
+        : emptyRuntimeReferences());
     const runtimeContext = buildWorkspaceRuntimeContext(checkedInput, {
       provider: "mastra",
       referencePacket,
       agentTools: toolExecutions,
+      capabilityPlan,
     });
     const messageId = `${eventCtx.runId}_assistant`;
     const steps: TaskStep[] = [
@@ -95,21 +110,75 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
     ];
 
     yield messageComplete(eventCtx, `${eventCtx.runId}_user`, "user", checkedInput.prompt);
-    const shouldRunQaLoop = isWorkspaceAnalyticalMemoryQuestion(checkedInput.prompt);
-    if (shouldRunQaLoop) {
-      yield runPhaseEvent(eventCtx, {
-        name: "observe",
-        title: "Observe request",
-        status: "complete",
-        summary: "Classified as an analytical Workspace question; artifact creation remains gated by explicit deliverable intent.",
-        checked: ["Prompt intent", "Artifact intent boundary", "Read-only retrieval eligibility"],
-        sourceCategories: [],
-        qa: null,
-        finalAnswer: null,
-        nextAction: "Retrieve safe local evidence before drafting.",
-      });
-    }
+    const shouldRunQaLoop = capabilityPlan.allowed && (
+      isWorkspaceAnalyticalMemoryQuestion(checkedInput.prompt) ||
+      capabilityPlan.intent === "call_memory_analysis" ||
+      capabilityPlan.intent === "recent_call_topic_retrieval" ||
+      capabilityPlan.intent === "memory_recall"
+    );
+    yield runPhaseEvent(eventCtx, {
+      name: "observe",
+      title: "Plan capability route",
+      status: capabilityPlan.allowed ? capabilityPlan.capabilityStatus === "limited" ? "warning" : "complete" : "warning",
+      summary: capabilityPlan.allowed
+        ? `Selected ${capabilityPlan.capabilityName}${capabilityPlan.skillName ? ` via ${capabilityPlan.skillName}` : ""}.`
+        : capabilityPlan.blockedReason ?? `${capabilityPlan.capabilityName} is not available.`,
+      checked: [
+        `Intent: ${capabilityPlan.intent}.`,
+        `Capability: ${capabilityPlan.capabilityName} (${capabilityPlan.capabilityStatus}).`,
+        capabilityPlan.skillName ? `Skill: ${capabilityPlan.skillName}.` : "Skill: none selected.",
+        `Safety: ${capabilityPlan.safetyLevel}; approval: ${capabilityPlan.approvalRequirement}.`,
+      ],
+      sourceCategories: capabilityPlan.toolBindingNames,
+      capabilityPlan: phaseCapabilityPlan(capabilityPlan),
+      qa: null,
+      finalAnswer: null,
+      nextAction: capabilityPlan.allowed ? "Use the selected capability route." : "Return a clear capability boundary without fake execution.",
+    });
     yield taskStep(eventCtx, steps[0]);
+
+    if (!capabilityPlan.allowed) {
+      const presentationText = buildBlockedCapabilityAnswer(capabilityPlan);
+      yield {
+        ...baseEvent(eventCtx),
+        id: eventCtx.nextId("evt_internal"),
+        kind: "tool.result",
+        visibility: "internal",
+        toolName: "workspace.capability-router",
+        label: "Capability route blocked",
+        resultSummary: `capability_blocked=${capabilityPlan.capabilityId}; ${runtimeContext.internalSummary}`,
+      };
+      steps[0] = { ...steps[0], status: "complete", summary: "Capability route resolved before provider execution." };
+      steps[1] = { ...steps[1], status: "complete", summary: "Skipped provider execution for blocked capability." };
+      steps[2] = { ...steps[2], status: "complete", summary: "Rendered blocked capability response without artifact creation." };
+      yield taskStep(eventCtx, steps[0]);
+      yield taskStep(eventCtx, steps[1]);
+      yield runPhaseEvent(eventCtx, {
+        name: "final",
+        title: "Final answer",
+        status: "warning",
+        summary: `${capabilityPlan.capabilityName} is blocked by the Atlas capability registry.`,
+        checked: [
+          `Selected capability: ${capabilityPlan.capabilityName}.`,
+          `Allowed: ${String(capabilityPlan.allowed)}.`,
+          `Safety: ${capabilityPlan.safetyLevel}.`,
+        ],
+        sourceCategories: capabilityPlan.toolBindingNames.length ? capabilityPlan.toolBindingNames : ["none checked"],
+        capabilityPlan: phaseCapabilityPlan(capabilityPlan),
+        qa: {
+          passed: true,
+          issues: [capabilityPlan.blockedReason ?? "Capability blocked by registry."],
+          revised: false,
+        },
+        finalAnswer: presentationText,
+        nextAction: "Use an available Workspace retrieval or local draft capability.",
+      });
+      yield* streamAssistantText(eventCtx, messageId, presentationText);
+      yield messageComplete(eventCtx, messageId, "assistant", presentationText);
+      yield taskStep(eventCtx, steps[2]);
+      yield taskComplete(eventCtx, checkedInput.title ?? "Run Mastra AI SDK workspace task", steps);
+      return;
+    }
 
     const env = ctx.env ?? process.env;
     const dependencyCheck = await resolveMastraDependencies(env);
@@ -240,6 +309,7 @@ export class MastraAiSdkRuntimeAdapter implements WorkspaceLocalRuntimeAdapter {
           draftText: content,
           runtimeContext,
           artifactPlanned: false,
+          capabilityPlan,
         });
         content = qaResult.finalText;
         const issueMessages = qaResult.initialIssues.map((issue) => `${issue.code}: ${issue.message}`);
@@ -516,6 +586,24 @@ function draftArtifactInspectorEvent(ctx: AdapterEventContext, draftArtifact: Wo
   };
 }
 
+function phaseCapabilityPlan(plan: WorkspaceCapabilityPlan): WorkspaceRunPhase["capabilityPlan"] {
+  return {
+    intent: plan.intent,
+    capabilityId: plan.capabilityId,
+    capabilityName: plan.capabilityName,
+    capabilityStatus: plan.capabilityStatus,
+    skillId: plan.skillId,
+    skillName: plan.skillName,
+    toolBindings: plan.toolBindingNames,
+    safetyPolicies: plan.safetyPolicyNames,
+    safetyLevel: plan.safetyLevel,
+    approvalRequirement: plan.approvalRequirement,
+    allowed: plan.allowed,
+    blockedReason: plan.blockedReason,
+    limitedReason: plan.limitedReason,
+  };
+}
+
 function runPhaseEvent(
   ctx: AdapterEventContext,
   phase: Omit<WorkspaceRunPhase, "id"> & {
@@ -533,6 +621,15 @@ function runPhaseEvent(
       ...phase,
       checked: phase.checked.map(redactPresentationPath),
       sourceCategories: phase.sourceCategories.map((item) => item.replace(/[^a-zA-Z0-9 _.-]+/g, "").slice(0, 80)),
+      capabilityPlan: phase.capabilityPlan
+        ? {
+          ...phase.capabilityPlan,
+          toolBindings: phase.capabilityPlan.toolBindings.map(redactPresentationPath),
+          safetyPolicies: phase.capabilityPlan.safetyPolicies.map(redactPresentationPath),
+          blockedReason: phase.capabilityPlan.blockedReason ? redactPresentationPath(phase.capabilityPlan.blockedReason) : null,
+          limitedReason: phase.capabilityPlan.limitedReason ? redactPresentationPath(phase.capabilityPlan.limitedReason) : null,
+        }
+        : undefined,
       finalAnswer: phase.finalAnswer ? redactPresentationPath(phase.finalAnswer) : null,
     },
   };
@@ -549,7 +646,9 @@ function taskStep(ctx: AdapterEventContext, step: TaskStep): AgentEvent {
 }
 
 function redactPresentationPath(text: string): string {
-  return text.replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]");
+  return text
+    .replace(/(?:\/Users\/[^\s"'`),;]+|\/private\/[^\s"'`),;]+|\/tmp\/[^\s"'`),;]+|\.openclaw\/[^\s"'`),;]+)/g, "[Workspace internal path]")
+    .replace(/(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|SLACK_|MONDAY_|TYPEFORM_)/gi, "[secret]");
 }
 
 function taskComplete(ctx: AdapterEventContext, title: string, steps: TaskStep[]): AgentEvent {
@@ -579,6 +678,15 @@ async function* streamAssistantText(ctx: AdapterEventContext, messageId: string,
     yield messageDelta(ctx, messageId, delta);
     await pause(18);
   }
+}
+
+function emptyRuntimeReferences(): WorkspaceReferencePacket {
+  return createEmptyWorkspaceReferencePacket({
+    prompt: "Blocked capability route.",
+    workspaceId: "workspace_undeniable_demo",
+    project: "Undeniable",
+    room: "workspace-demo",
+  });
 }
 
 function splitStreamingText(text: string): string[] {

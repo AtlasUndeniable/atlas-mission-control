@@ -6,6 +6,7 @@ import {
   isWorkspaceAnalyticalMemoryQuestion,
   runWorkspaceAnalyticalQa,
 } from "../src/lib/workspace-agentic-qa.ts";
+import { routeWorkspaceCapability } from "../src/lib/workspace-capability-router.ts";
 import { buildWorkspaceRuntimeContext } from "../src/lib/workspace-runtime-context.ts";
 import type { WorkspaceReferencePacket } from "../src/lib/workspace-reference-resolver.ts";
 
@@ -114,4 +115,49 @@ test("critic requires corrected weekly math for 40 client model prompts", () => 
   assert.equal(result.revised, true);
   assert.ok(result.initialIssues.some((issue) => issue.code === "number_inconsistency"));
   assert.match(result.finalText, /\$10,000\/week/);
+});
+
+test("critic catches capability mismatch", () => {
+  const wrongPlan = routeWorkspaceCapability({
+    prompt: "Create a polished branded PDF for this model.",
+    title: "PDF route",
+  });
+  const critique = critiqueWorkspaceAnalyticalAnswer({
+    prompt: "What topics came up in recent calls?",
+    draftText: [
+      "## What I checked",
+      "Sources: [call-transcript: Saad x Rhys]",
+      "## What I found",
+      "Recent call topics are available as source-labelled retrieval.",
+      "## Confidence / coverage",
+      "Medium.",
+      "## What I would check next",
+      "Check the next call batch.",
+    ].join("\n"),
+    runtimeContext: matchedRuntimeContext(),
+    capabilityPlan: wrongPlan,
+  });
+
+  assert.equal(critique.passed, false);
+  assert.ok(critique.issues.some((issue) => issue.code === "capability_mismatch"));
+});
+
+test("critic catches blocked capability claims", () => {
+  const critique = critiqueWorkspaceAnalyticalAnswer({
+    prompt: "Use available knowledge to summarize the model.",
+    draftText: [
+      "## What I checked",
+      "Sources: [call-transcript: Saad x Rhys]",
+      "## What I found",
+      "I sent this to Slack and generated a branded PDF.",
+      "## Confidence / coverage",
+      "Medium.",
+      "## What I would check next",
+      "Review sends.",
+    ].join("\n"),
+    runtimeContext: matchedRuntimeContext(),
+  });
+
+  assert.equal(critique.passed, false);
+  assert.ok(critique.issues.some((issue) => issue.code === "blocked_capability_claim"));
 });

@@ -141,6 +141,21 @@ export interface WorkspaceRunPhase {
   summary: string;
   checked: string[];
   sourceCategories: string[];
+  capabilityPlan?: {
+    intent: string;
+    capabilityId: string;
+    capabilityName: string;
+    capabilityStatus: string;
+    skillId: string | null;
+    skillName: string | null;
+    toolBindings: string[];
+    safetyPolicies: string[];
+    safetyLevel: string;
+    approvalRequirement: string;
+    allowed: boolean;
+    blockedReason: string | null;
+    limitedReason: string | null;
+  };
   qa: {
     passed: boolean;
     issues: string[];

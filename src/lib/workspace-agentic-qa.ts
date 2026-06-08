@@ -1,4 +1,9 @@
 import type { WorkspaceRuntimeContextPacket } from "./workspace-runtime-context.ts";
+import {
+  capabilityPlanMatchesPrompt,
+  routeWorkspaceCapability,
+  type WorkspaceCapabilityPlan,
+} from "./workspace-capability-router.ts";
 
 export type WorkspaceQaIssueCode =
   | "unsupported_claims"
@@ -7,7 +12,9 @@ export type WorkspaceQaIssueCode =
   | "accidental_artifact_creation"
   | "local_path_leak"
   | "unnecessary_followup"
-  | "missing_answer_shape";
+  | "missing_answer_shape"
+  | "blocked_capability_claim"
+  | "capability_mismatch";
 
 export interface WorkspaceQaCritiqueIssue {
   code: WorkspaceQaIssueCode;
@@ -23,6 +30,7 @@ export interface WorkspaceAnalyticalQaInput {
   prompt: string;
   draftText: string;
   runtimeContext: WorkspaceRuntimeContextPacket;
+  capabilityPlan?: WorkspaceCapabilityPlan;
   artifactPlanned?: boolean;
 }
 
@@ -55,6 +63,25 @@ export function critiqueWorkspaceAnalyticalAnswer(input: WorkspaceAnalyticalQaIn
   const lower = text.toLowerCase();
   const evidenceAvailable = hasWorkspaceEvidence(input.runtimeContext);
   const sourceLabels = sourceLabelList(input.runtimeContext);
+  const capabilityPlan = input.capabilityPlan ?? input.runtimeContext.capabilityPlan ?? routeWorkspaceCapability({
+    prompt: input.prompt,
+    title: input.runtimeContext.task.title,
+  });
+
+  if (!capabilityPlanMatchesPrompt(capabilityPlan, input.prompt, input.runtimeContext.task.title)) {
+    issues.push({
+      code: "capability_mismatch",
+      message: `Selected capability ${capabilityPlan.capabilityId} does not match prompt intent.`,
+    });
+  }
+
+  const blockedClaim = blockedCapabilityClaim(lower);
+  if (blockedClaim) {
+    issues.push({
+      code: "blocked_capability_claim",
+      message: blockedClaim,
+    });
+  }
 
   const missingHeadings = REQUIRED_ANALYTICAL_HEADINGS.filter((heading) => !lower.includes(heading));
   if (missingHeadings.length) {
@@ -78,10 +105,17 @@ export function critiqueWorkspaceAnalyticalAnswer(input: WorkspaceAnalyticalQaIn
     });
   }
 
-  if (input.artifactPlanned) {
+  if (
+    input.artifactPlanned &&
+    (
+      !capabilityPlan.allowed ||
+      !capabilityPlan.artifactIntent.explicit ||
+      !["internal-markdown-draft", "ricky-pdf-package-retrieval"].includes(capabilityPlan.capabilityId)
+    )
+  ) {
     issues.push({
       code: "accidental_artifact_creation",
-      message: "Analytical prompt would create an artifact without explicit deliverable intent.",
+      message: "Artifact creation does not match the selected capability route or explicit artifact intent.",
     });
   }
 
@@ -282,6 +316,27 @@ function nextBestAction(runtimeContext: WorkspaceRuntimeContextPacket): string {
     return "Pull the strongest labelled excerpts into a small evidence table before turning this into a client-facing recommendation.";
   }
   return "Run a narrower source query against call transcripts or playbooks before making source-backed recommendations.";
+}
+
+function blockedCapabilityClaim(lowerText: string): string | null {
+  if (/\b(i\s+)?(?:sent|posted|delivered)\b[\s\S]{0,80}\b(slack|dm|channel|thread)\b/.test(lowerText) ||
+    /\b(i\s+can|i'll|i will|able to)\b[\s\S]{0,80}\b(send|post|deliver)\b[\s\S]{0,80}\b(slack|dm|channel)\b/.test(lowerText)) {
+    return "Answer claims Slack send capability even though Slack send is blocked in Workspace.";
+  }
+  if (/\b(?:created|generated|rendered|exported|made)\b[\s\S]{0,80}\b(?:branded|custom|arbitrary)?\s*pdf\b/.test(lowerText) &&
+    !/\bricky\b|\bcalder\b|\bsupported\b/.test(lowerText)) {
+    return "Answer claims arbitrary PDF generation even though that capability is blocked.";
+  }
+  if (/\b(?:updated|mutated|changed|created|deleted)\b[\s\S]{0,80}\bmonday\b/.test(lowerText)) {
+    return "Answer claims Monday mutation even though Monday mutation is blocked in Workspace.";
+  }
+  if (/\b(?:updated|mutated|changed|created|deleted)\b[\s\S]{0,80}\btypeform\b/.test(lowerText)) {
+    return "Answer claims Typeform mutation even though Typeform mutation is blocked in Workspace.";
+  }
+  if (/\b(?:launched|changed|created|updated)\b[\s\S]{0,80}\b(?:google|meta|facebook)\b[\s\S]{0,40}\bads?\b/.test(lowerText)) {
+    return "Answer claims ads mutation even though Google/Meta ads mutation is blocked in Workspace.";
+  }
+  return null;
 }
 
 function hasWorkspaceEvidence(runtimeContext: WorkspaceRuntimeContextPacket): boolean {

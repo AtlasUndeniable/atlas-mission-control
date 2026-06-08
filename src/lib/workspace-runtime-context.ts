@@ -16,6 +16,7 @@ import {
   type AtlasSkill,
   type AtlasToolBinding,
 } from "./workspace-capabilities.ts";
+import { formatCapabilityPlanForPrompt, type WorkspaceCapabilityPlan } from "./workspace-capability-router.ts";
 import type { WorkspaceReferencePacket } from "./workspace-reference-resolver.ts";
 
 export type WorkspaceRuntimeContextProvider = "mock" | "local-codex" | "mastra";
@@ -49,6 +50,7 @@ export interface WorkspaceRuntimeContextPacket {
   skills: AtlasSkill[];
   toolBindings: AtlasToolBinding[];
   safetyPolicies: AtlasSafetyPolicy[];
+  capabilityPlan: WorkspaceCapabilityPlan | null;
   provider: WorkspaceRuntimeContextProvider;
   internalSummary: string;
   systemPrompt: string;
@@ -103,6 +105,7 @@ export function buildWorkspaceRuntimeContext(
     provider: WorkspaceRuntimeContextProvider;
     referencePacket?: WorkspaceReferencePacket;
     agentTools?: WorkspaceAgentToolExecution[];
+    capabilityPlan?: WorkspaceCapabilityPlan;
   },
 ): WorkspaceRuntimeContextPacket {
   const taskTitle = input.title?.trim() || "Workspace runtime task";
@@ -129,6 +132,7 @@ export function buildWorkspaceRuntimeContext(
   const toolBindings = capabilityRegistry.toolBindings;
   const safetyPolicies = capabilityRegistry.safetyPolicies;
   const capabilitySummary = capabilityRegistry.summary;
+  const capabilityPlan = options.capabilityPlan ?? null;
   const internalSummary = [
     `workspace=${WORKSPACE_ID}`,
     `project=${PROJECT}`,
@@ -138,6 +142,7 @@ export function buildWorkspaceRuntimeContext(
     `librarian_handles=${librarianHandles}`,
     agentToolSummary ? `agent_tools=${agentToolSummary}` : "agent_tools=none",
     `capabilities=available:${capabilitySummary.available},limited:${capabilitySummary.limited},blocked:${capabilitySummary.blocked},planned:${capabilitySummary.planned}`,
+    capabilityPlan ? `capability_plan=${capabilityPlan.capabilityId}:${capabilityPlan.capabilityStatus}:allowed=${String(capabilityPlan.allowed)}` : "capability_plan=none",
     `cognition=${workspaceAgentCognition.id}`,
     referencePacket.internalSummary,
   ].join("; ");
@@ -169,6 +174,8 @@ export function buildWorkspaceRuntimeContext(
     "",
     "Atlas capability registry:",
     ...capabilityPromptSummary(capabilities),
+    capabilityPlan ? "Selected capability route:" : "Selected capability route:",
+    ...(capabilityPlan ? formatCapabilityPlanForPrompt(capabilityPlan) : ["- none selected before context build"]),
     "Discovered skills and bindings:",
     ...skills.map((skillItem) => `- ${skillItem.name}: ${skillItem.status}; capabilities=${skillItem.capabilityIds.join(",")}`),
     "Safety policies:",
@@ -184,6 +191,11 @@ export function buildWorkspaceRuntimeContext(
     "Do not narrate process repeatedly. One short acknowledgement is enough.",
     "Truthfulness boundary: local Markdown drafts are wired, and explicitly requested local PDF drafts are wired. Do not claim DOCX, export packages, external file delivery, Slack return, or share links. Do not list unavailable formats unless the user asks for them.",
     "Capability truthfulness: do not present blocked or planned capabilities as available. If asked about Slack sends, Monday/Typeform mutations, Google/Meta ads mutations, arbitrary branded PDFs, shared Supabase persistence, or user-created skills, state the current limitation plainly.",
+    capabilityPlan && !capabilityPlan.allowed
+      ? `Selected capability is blocked: ${capabilityPlan.blockedReason ?? "not available"}. Do not execute, imply execution, or offer this as available.`
+      : capabilityPlan
+        ? `Selected capability is ${capabilityPlan.capabilityStatus}: ${capabilityPlan.capabilityName}. Stay inside that route and do not claim a different capability.`
+        : "No selected capability route was provided; rely on the registry truthfulness rules.",
     referencePacket.coverage === "none"
       ? "No matching Workspace references were resolved. Do not claim memory search; mark missing facts as needing confirmation."
       : referencePacket.coverage === "thin"
@@ -220,6 +232,7 @@ export function buildWorkspaceRuntimeContext(
     skills,
     toolBindings,
     safetyPolicies,
+    capabilityPlan,
     provider: options.provider,
     internalSummary,
     systemPrompt,

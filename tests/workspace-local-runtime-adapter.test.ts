@@ -623,6 +623,120 @@ test("explicit real runner failure fails closed with command details internal on
   }
 });
 
+test("runtime emits selected capability and skill for recent call prompts", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter({ forcedMode: "mock" }), {
+    input: {
+      prompt: "What topics came up in my recent calls and call logs?",
+      title: "Recent call memory",
+    },
+    referencePacket: matchedReferencePacket(),
+  });
+  const observe = events.find((event): event is Extract<AgentEvent, { kind: "run.phase" }> =>
+    event.kind === "run.phase" && event.phase.name === "observe"
+  );
+
+  assert.equal(observe?.phase.capabilityPlan?.capabilityId, "recent-call-topic-retrieval");
+  assert.equal(observe?.phase.capabilityPlan?.skillId, "call-retrieval");
+  assert.equal(observe?.phase.capabilityPlan?.allowed, true);
+  assert.ok(observe?.phase.capabilityPlan?.toolBindings.includes("summarize_calls"));
+});
+
+test("runtime blocks generic branded PDF prompt without creating fake artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-router-branded-pdf-"));
+  try {
+    const events = await collectEvents(new TerminalLocalRuntimeAdapter({ forcedMode: "mock" }), {
+      input: {
+        prompt: "Create a polished branded PDF for this new client model.",
+        title: "Client model PDF",
+      },
+      draftArtifactRoot: root,
+    });
+    const observe = events.find((event): event is Extract<AgentEvent, { kind: "run.phase" }> =>
+      event.kind === "run.phase" && event.phase.name === "observe"
+    );
+    const presentationText = events
+      .filter((event): event is Extract<AgentEvent, { kind: "message.complete" }> => event.kind === "message.complete" && event.role === "assistant")
+      .map((event) => event.content)
+      .join("\n");
+
+    assert.equal(observe?.phase.capabilityPlan?.capabilityId, "arbitrary-branded-pdf-generation");
+    assert.equal(observe?.phase.capabilityPlan?.allowed, false);
+    assert.match(presentationText, /Arbitrary branded PDF generation is blocked/);
+    assert.equal(events.some((event) => event.kind === "artifact.created"), false);
+    assert.doesNotMatch(presentationText, /PDF draft saved|\/Users\/atlasai|\.openclaw/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime blocks Slack send prompts before external execution", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter({ forcedMode: "mock" }), {
+    input: {
+      prompt: "Send this summary to Rhys in Slack.",
+      title: "Slack send",
+    },
+  });
+  const observe = events.find((event): event is Extract<AgentEvent, { kind: "run.phase" }> =>
+    event.kind === "run.phase" && event.phase.name === "observe"
+  );
+  const presentationText = events
+    .filter((event): event is Extract<AgentEvent, { kind: "message.complete" }> => event.kind === "message.complete" && event.role === "assistant")
+    .map((event) => event.content)
+    .join("\n");
+
+  assert.equal(observe?.phase.capabilityPlan?.capabilityId, "slack-send");
+  assert.equal(observe?.phase.capabilityPlan?.allowed, false);
+  assert.match(presentationText, /Slack send is blocked/);
+  assert.equal(events.some((event) => event.kind === "artifact.created"), false);
+});
+
+test("runtime keeps Ricky PDF package retrieval allowed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "atlas-workspace-router-ricky-pdf-"));
+  try {
+    const events = await collectEvents(new TerminalLocalRuntimeAdapter({ forcedMode: "mock" }), {
+      input: {
+        prompt: "Update the Ricky Calder coach hire pay model handover and return it as a PDF.",
+        title: "Ricky Calder pay structure handover",
+      },
+      referencePacket: matchedReferencePacket(),
+      draftArtifactRoot: root,
+    });
+    const observe = events.find((event): event is Extract<AgentEvent, { kind: "run.phase" }> =>
+      event.kind === "run.phase" && event.phase.name === "observe"
+    );
+    const artifact = events.find((event): event is Extract<AgentEvent, { kind: "artifact.created" }> => event.kind === "artifact.created");
+    const presentationText = events
+      .filter((event): event is Extract<AgentEvent, { kind: "message.complete" }> => event.kind === "message.complete" && event.role === "assistant")
+      .map((event) => event.content)
+      .join("\n");
+
+    assert.equal(observe?.phase.capabilityPlan?.capabilityId, "ricky-pdf-package-retrieval");
+    assert.equal(observe?.phase.capabilityPlan?.allowed, true);
+    assert.equal(artifact?.artifact.type, "pdf");
+    assert.match(presentationText, /PDF draft saved/);
+    assert.match(presentationText, /existing Atlas\/Rhys Ricky handover package/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("analytical prompt mentioning pdf and playbooks creates no artifact", async () => {
+  const events = await collectEvents(new TerminalLocalRuntimeAdapter({ forcedMode: "mock" }), {
+    input: {
+      prompt: "Predictable strategies and models to make them first 10k. Use all learned knowledge, call logs, playbooks, and pdf.",
+      title: "Undeniable OS workspace session",
+    },
+    referencePacket: matchedReferencePacket(),
+  });
+  const observe = events.find((event): event is Extract<AgentEvent, { kind: "run.phase" }> =>
+    event.kind === "run.phase" && event.phase.name === "observe"
+  );
+
+  assert.equal(observe?.phase.capabilityPlan?.capabilityId, "call-memory-answer");
+  assert.equal(observe?.phase.capabilityPlan?.allowed, true);
+  assert.equal(events.some((event) => event.kind === "artifact.created"), false);
+});
+
 test("mastra ai sdk runtime fails closed when Claude env is missing", async () => {
   const events = await collectRuntimeEvents(new MastraAiSdkRuntimeAdapter(), { env: {} });
   const presentationText = events
