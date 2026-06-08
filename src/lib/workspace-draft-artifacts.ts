@@ -125,7 +125,7 @@ function normalizeIntentText(value: string): string {
 
 function hasExplicitPdfArtifactIntent(text: string): boolean {
   return (
-    /\b(?:render|create|draft|build|generate|write|prepare|save|download|produce)\b.{0,80}\bpdfs?\b/.test(text) ||
+    /\b(?:do|redo|render|create|draft|build|generate|write|prepare|save|download|produce)\b.{0,80}\bpdfs?\b/.test(text) ||
     /\b(?:return|send|bring|give|provide)\s+(?:this|it|that|the\s+\w+)?\s*(?:back\s+)?as\s+a\s+pdf\b/.test(text) ||
     /\bdownloadable\s+pdf\b/.test(text) ||
     /\bexport\s+(?:this|it|that|the\s+\w+)?\s*(?:to|as)\s+(?:a\s+)?pdf\b/.test(text) ||

@@ -417,10 +417,14 @@ function reduceEvent(state: ThreadState, event: AgentEvent): ThreadState {
 }
 
 function dedupeThreadTasks(tasks: Task[], currentTask: Task | null = null): Task[] {
-  const byId = new Map<string, Task>();
-  for (const task of tasks) byId.set(task.id, task);
-  if (currentTask) byId.set(currentTask.id, currentTask);
-  return [...byId.values()];
+  const byTitle = new Map<string, Task>();
+  for (const task of tasks) byTitle.set(normalizeTaskTitle(task.title), task);
+  if (currentTask) byTitle.set(normalizeTaskTitle(currentTask.title), currentTask);
+  return [...byTitle.values()];
+}
+
+function normalizeTaskTitle(title: string): string {
+  return title.toLowerCase().replace(/\s+/g, " ").trim() || "workspace task";
 }
 
 function readLatestReferencePacket(events: AgentEvent[]): ReferenceInspectorPacket | null {

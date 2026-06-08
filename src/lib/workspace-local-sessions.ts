@@ -343,10 +343,13 @@ export function buildWorkspaceLocalSessionThread(events: AgentEvent[]): Workspac
 function dedupeWorkspaceThreadTasks(tasks: Task[]): Task[] {
   const byKey = new Map<string, Task>();
   for (const task of tasks) {
-    const key = `${task.id}::${task.title.toLowerCase().replace(/\s+/g, " ").trim()}`;
-    byKey.set(key, task);
+    byKey.set(normalizeWorkspaceTaskTitle(task.title), task);
   }
   return [...byKey.values()];
+}
+
+function normalizeWorkspaceTaskTitle(title: string): string {
+  return title.toLowerCase().replace(/\s+/g, " ").trim() || "workspace task";
 }
 
 async function sanitizeWorkspaceLocalSessionSnapshotArtifacts(
