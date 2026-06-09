@@ -13,18 +13,40 @@ interface QueueItem {
   draftReply: string | null;
   timestamp: number;
   messageTs: string;
-  status: "pending" | "needs_draft" | "approved" | "denied";
+  status:
+    | "pending"
+    | "needs_draft"
+    | "drafted"
+    | "approving"
+    | "approved"
+    | "denied"
+    | "send_failed";
+  lastSendError?: string;
+  sendFailedAt?: string;
 }
 
+const ACTIONABLE_STATUSES = new Set(["pending", "needs_draft", "drafted"]);
+// send_failed must stay VISIBLE to the operator, but it is NOT in
+// ACTIONABLE_STATUSES so the approve route 409s it — it can never be directly
+// re-sent without a separate explicit action (deny, or a future re-queue).
+const VISIBLE_STATUSES = new Set([...ACTIONABLE_STATUSES, "send_failed"]);
+
 function toApproval(item: QueueItem) {
+  const hasDraft = !!item.draftReply && item.draftReply !== "None";
+  const failed = item.status === "send_failed";
   return {
     id: item.id,
     type: "slack" as const,
-    tier: item.draftReply ? ("yellow" as const) : ("red" as const),
+    tier: hasDraft ? ("yellow" as const) : ("red" as const),
     channel: item.channelName,
     replyingTo: item.senderName,
-    draft: item.draftReply || `[No draft — original: "${item.originalMessage.slice(0, 120)}"]`,
+    draft: hasDraft ? item.draftReply! : null,
+    originalMessage: item.originalMessage || "",
     createdAt: new Date(item.timestamp).toISOString(),
+    status: item.status,
+    sendable: !failed,
+    lastSendError: failed ? item.lastSendError ?? null : null,
+    sendFailedAt: failed ? item.sendFailedAt ?? null : null,
   };
 }
 
@@ -37,7 +59,7 @@ export async function GET() {
     const raw = readFileSync(QUEUE_FILE, "utf-8");
     const items: QueueItem[] = JSON.parse(raw);
     const pending = items
-      .filter((a) => a.status === "pending" || a.status === "needs_draft")
+      .filter((a) => VISIBLE_STATUSES.has(a.status))
       .map(toApproval);
     return NextResponse.json({ approvals: pending });
   } catch {
