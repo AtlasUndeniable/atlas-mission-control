@@ -229,29 +229,29 @@ export function findLatestDeliveryCandidate({ channel, userId, excludeId, maxAge
 
 export function summarizeSlackDmJob(job) {
   if (!job) return null;
-  const assetJobId = job.assetJobId || makeSlackAssetJobId(job.id || "unknown");
   const ageMinutes = Math.max(0, Math.floor((Date.now() - Date.parse(job.createdAt || new Date().toISOString())) / 60000));
   const files = Array.isArray(job.artifactPaths) && job.artifactPaths.length
     ? job.artifactPaths.map((path) => basename(path)).join(", ")
     : null;
-  const statePrefix = `Asset job ${assetJobId} is state=${job.status}.`;
   if (job.status === "delivered") {
-    const receipt = job.deliveryResult?.fileId || job.deliveryResult?.messageTs || "recorded";
-    return `That file has been sent here. Slack receipt: ${receipt}.`;
+    return "That file has been sent here. Slack confirmed the delivery.";
   }
   if (job.status === "queued") {
-    return `${statePrefix} It is queued from your Slack request, but no verified file exists yet.`;
+    return "I have it queued from your Slack request, but no verified file exists yet.";
   }
   if (job.status === "building") {
-    return `${statePrefix} I am using ${job.workflowKey || "the selected verified artifact workflow"}; no delivery receipt exists yet.`;
+    return `I'm building it with ${job.workflowKey || "the selected verified artifact workflow"}. I won't mark it done until the file is actually sent here.`;
   }
-  if (job.status === "artifact_ready" || job.status === "blocked_needs_approval") {
-    return `${statePrefix} The file is ready, but it is not delivered until Slack returns a file/message receipt. Draft: ${files || job.title || "generated file"}.`;
+  if (job.status === "artifact_ready") {
+    return `The file is ready, but it has not been sent here yet. Draft: ${files || job.title || "generated file"}.`;
+  }
+  if (job.status === "blocked_needs_approval") {
+    return `The file is ready, but it needs approval before it can be sent here. Draft: ${files || job.title || "generated file"}.`;
   }
   if (job.status === "delivery_requested") {
     return files
-      ? `${statePrefix} Delivery is requested for ${files}; I will only mark it delivered after Slack returns a file/message receipt.`
-      : `${statePrefix} Delivery is requested, but no verified file exists yet. I should not call this done until an artifact exists.`;
+      ? `I'm sending ${files} here now, and I won't mark it done until Slack confirms the upload.`
+      : "Delivery has been requested, but no verified file exists yet. I won't call it done until an artifact exists.";
   }
   if (job.status === "answered" || job.status === "completed") {
     return [
@@ -260,7 +260,7 @@ export function summarizeSlackDmJob(job) {
     ].filter(Boolean).join("\n");
   }
   if (job.status === "received") {
-    return `I have that request logged as ${assetJobId}. It started ${ageMinutes}m ago with state=received.`;
+    return `I have that request logged. It started ${ageMinutes}m ago and has not entered the build queue yet.`;
   }
   if (job.status === "needs_workspace") {
     return "I have that request logged, but no verified file exists yet. I should not have promised delivery until a real artifact or worker existed.";
@@ -278,7 +278,7 @@ export function summarizeSlackDmJob(job) {
     return `That request failed locally and needs review. Summary: ${job.safeErrorSummary || "unknown failure"}.`;
   }
   if (job.status === "blocked") {
-    return `${statePrefix} Summary: ${job.safeErrorSummary || "operator review required"}.`;
+    return `I'm blocked on that request. Summary: ${job.safeErrorSummary || "operator review required"}.`;
   }
-  return `That request is tracked locally as ${job.id} with status=${job.status}.`;
+  return `That request is tracked locally and is currently ${job.status}.`;
 }

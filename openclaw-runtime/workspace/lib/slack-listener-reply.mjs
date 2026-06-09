@@ -92,15 +92,15 @@ export function isLikelyLongRunningRequest(text = "") {
 }
 
 export function workspaceAckForRequest({ jobId, state = "queued" } = {}) {
-  if (jobId) {
-    return `I have this logged as asset job ${jobId} (state=${state}), but no verified file exists yet. I won't call it done until I return the actual file here.`;
-  }
-  return "I have this logged as an asset request, but no verified file exists yet. I won't call it done until I return the actual file here.";
+  void jobId;
+  void state;
+  return "Got it. I'm creating the asset now. No verified file exists yet, and I won't call it done until the actual file is returned here.";
 }
 
 export function assetWorkflowBlockedText({ jobId, state = "blocked", reason } = {}) {
-  const prefix = jobId ? `Asset job ${jobId} is state=${state}.` : `This asset request is state=${state}.`;
-  return `${prefix} ${reason || "I do not have a verified workflow for it yet, so I am not inventing a generic file."}`;
+  void jobId;
+  void state;
+  return `I'm blocked on this asset. ${reason || "I do not have a verified workflow for it yet, so I am not inventing a generic file."}`;
 }
 
 export function liveTimeoutHandoffText() {

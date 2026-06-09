@@ -99,9 +99,9 @@ test("asset job ack records queued state without treating ack as done", () => {
 
     const [queued] = listSlackDmJobs({ filePath: t.filePath });
     assert.equal(queued.status, "queued");
-    assert.match(queued.ackText, new RegExp(job.assetJobId));
-    assert.match(queued.ackText, /state=queued/);
-    assert.doesNotMatch(queued.ackText, /Done\.|sent here|Slack receipt/i);
+    assert.match(queued.ackText, /creating the asset now/);
+    assert.doesNotMatch(queued.ackText, new RegExp(job.assetJobId));
+    assert.doesNotMatch(queued.ackText, /state=queued|asset job|Done\.|sent here|Slack receipt/i);
     assert.doesNotMatch(queued.ackText, /when it's ready|bring .*back.*ready/i);
   } finally {
     t.cleanup();
@@ -142,7 +142,8 @@ test("known asset workflow ledger reaches delivered only after Slack receipt", (
     const [delivered] = listSlackDmJobs({ filePath: t.filePath });
     assert.equal(delivered.status, "delivered");
     assert.equal(delivered.deliveryResult.fileId, "F_TEST");
-    assert.match(summarizeSlackDmJob(delivered), /Slack receipt: F_TEST/);
+    assert.match(summarizeSlackDmJob(delivered), /Slack confirmed the delivery/);
+    assert.doesNotMatch(summarizeSlackDmJob(delivered), /F_TEST|Slack receipt|asset job|state=/i);
   } finally {
     t.cleanup();
   }
@@ -172,7 +173,7 @@ test("unknown asset workflow blocks honestly from the ledger", () => {
     const [blocked] = listSlackDmJobs({ filePath: t.filePath });
     assert.equal(blocked.status, "blocked");
     assert.match(blocked.replyText, /do not have a verified workflow/);
-    assert.doesNotMatch(blocked.replyText, /Done|attached|sent here/i);
+    assert.doesNotMatch(blocked.replyText, /asset-|asset job|state=|Done|attached|sent here/i);
   } finally {
     t.cleanup();
   }
@@ -190,13 +191,13 @@ test("status follow-up summaries report current asset job state immediately", ()
     }, { filePath: t.filePath });
 
     transitionSlackDmJob(job.id, "queued", {}, { filePath: t.filePath });
-    assert.match(summarizeSlackDmJob(listSlackDmJobs({ filePath: t.filePath })[0]), /state=queued/);
+    assert.match(summarizeSlackDmJob(listSlackDmJobs({ filePath: t.filePath })[0]), /queued from your Slack request/);
 
     transitionSlackDmJob(job.id, "building", { workflowKey: "first-10k-online-coach" }, { filePath: t.filePath });
     const summary = summarizeSlackDmJob(listSlackDmJobs({ filePath: t.filePath })[0]);
-    assert.match(summary, /state=building/);
+    assert.match(summary, /building it with/);
     assert.match(summary, /first-10k-online-coach/);
-    assert.doesNotMatch(summary, /live Slack reply window|operator review/i);
+    assert.doesNotMatch(summary, /asset job|state=|live Slack reply window|operator review/i);
   } finally {
     t.cleanup();
   }
