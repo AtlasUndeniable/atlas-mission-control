@@ -12,6 +12,7 @@ export const SLACK_RUNTIME_FILES = [
   "lib/queue-writer.mjs",
   "lib/artifact-delivery.mjs",
   "lib/slack-rhys-dm-artifact.mjs",
+  "lib/error-redaction-patterns.mjs",
   "lib/slack-gates.mjs",
   "lib/slack-gate-actions.mjs",
   "lib/slack-asset-workflows.mjs",

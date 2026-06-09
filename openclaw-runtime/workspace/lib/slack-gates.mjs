@@ -37,6 +37,27 @@ export const INTERNAL_CHANNELS = new Set([
   "atlas-alerts",
 ]);
 
+export const RHYS_DM_CHANNEL_ID = "D0AM2R3H6SE";
+
+function isApprovalPrompt(text) {
+  if (!text) return false;
+  if (/\bReply Y to approve\b/i.test(text)) return true;
+  return /tagged you\b/i.test(text)
+    && /\bAsk:\s*/i.test(text)
+    && /\bDraft:\s*/i.test(text);
+}
+
+export function gate0_approvalDmRouting({ text, channelId }) {
+  if (!channelId || !channelId.startsWith("D")) return { pass: true };
+  if (channelId === RHYS_DM_CHANNEL_ID) return { pass: true };
+  if (!isApprovalPrompt(text)) return { pass: true };
+  return {
+    pass: false,
+    reason: "approval-style Rhys comms draft attempted to route to a non-Rhys DM",
+    sample: channelId,
+  };
+}
+
 // DM channels (start with "D") and ATLAS bot DMs are always internal.
 function isInternalByChannelName(channelName, channelId) {
   if (!channelName && !channelId) return false; // unknown → default-deny
@@ -214,7 +235,7 @@ export function gate4_deliverablePresence({ text, attachments, payload }) {
 // Phase 1 stub. Real implementation requires pdfjs-dist or shelling to
 // pdftotext/pdfinfo. Only invoked when caller passes kind === "pdf-attachment".
 // Returns pass with warning so the call path is wired but inert tonight.
-export function gate5_pdfPreflight({ pdfBuffer, markdown } = {}) {
+export function gate5_pdfPreflight({ pdfBuffer } = {}) {
   if (!pdfBuffer) {
     return {
       pass: false,
@@ -248,10 +269,14 @@ export function runGates({
   attachments,
   payload,
 }) {
+  const resolvedChannelId = channelId || channel || payload?.channel || payload?.channelId;
+  const routing = gate0_approvalDmRouting({ text, channelId: resolvedChannelId });
+  if (!routing.pass) return { pass: false, gate: 0, ...routing };
+
   // Resolve client-facing if not explicitly provided.
   const cfResolved = typeof isClientFacing === "boolean"
     ? isClientFacing
-    : !isInternalByChannelName(channelName || channel, channelId);
+    : !isInternalByChannelName(channelName || channel, resolvedChannelId);
 
   // Gate 1
   let r = gate1_subprocessLeak(text);
