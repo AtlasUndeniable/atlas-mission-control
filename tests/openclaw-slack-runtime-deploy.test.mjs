@@ -17,6 +17,13 @@ async function withTempRoots(fn) {
   const targetRoot = join(root, "target");
   try {
     await seedRuntimeTree(sourceRoot, {
+      "lib/queue-writer.mjs": "source queue writer\n",
+      "lib/artifact-delivery.mjs": "source artifact delivery\n",
+      "lib/slack-rhys-dm-artifact.mjs": "source rhys dm artifact\n",
+      "lib/slack-gates.mjs": "source slack gates\n",
+      "lib/slack-gate-actions.mjs": "source slack gate actions\n",
+      "lib/slack-asset-workflows.mjs": "source asset workflows\n",
+      "lib/slack-asset-workflows.test.mjs": "source asset workflows test\n",
       "lib/slack-listener-reply.mjs": "source reply\n",
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
@@ -24,6 +31,13 @@ async function withTempRoots(fn) {
       "services/slack-listener/listener.mjs": "source listener\n",
     });
     await seedRuntimeTree(targetRoot, {
+      "lib/queue-writer.mjs": "source queue writer\n",
+      "lib/artifact-delivery.mjs": "source artifact delivery\n",
+      "lib/slack-rhys-dm-artifact.mjs": "source rhys dm artifact\n",
+      "lib/slack-gates.mjs": "source slack gates\n",
+      "lib/slack-gate-actions.mjs": "source slack gate actions\n",
+      "lib/slack-asset-workflows.mjs": "source asset workflows\n",
+      "lib/slack-asset-workflows.test.mjs": "source asset workflows test\n",
       "lib/slack-listener-reply.mjs": "old reply\n",
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
@@ -54,14 +68,22 @@ test("buildRuntimePlan owns exactly the Slack listener runtime files", async () 
 
     assert.deepEqual(plan.map((item) => item.relativePath), SLACK_RUNTIME_FILES);
     assert.deepEqual(SLACK_RUNTIME_FILES, [
+      "lib/queue-writer.mjs",
+      "lib/artifact-delivery.mjs",
+      "lib/slack-rhys-dm-artifact.mjs",
+      "lib/slack-gates.mjs",
+      "lib/slack-gate-actions.mjs",
+      "lib/slack-asset-workflows.mjs",
+      "lib/slack-asset-workflows.test.mjs",
       "lib/slack-listener-reply.mjs",
       "lib/slack-listener-reply.test.mjs",
       "lib/slack-dm-jobs.mjs",
       "lib/slack-dm-jobs.test.mjs",
       "services/slack-listener/listener.mjs",
     ]);
-    assert.equal(plan[0].sourceSha256, sha256("source reply\n"));
-    assert.equal(plan[0].targetSha256, sha256("old reply\n"));
+    const replyPlan = plan.find((item) => item.relativePath === "lib/slack-listener-reply.mjs");
+    assert.equal(replyPlan.sourceSha256, sha256("source reply\n"));
+    assert.equal(replyPlan.targetSha256, sha256("old reply\n"));
   });
 });
 

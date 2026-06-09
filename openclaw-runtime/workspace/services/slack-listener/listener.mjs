@@ -7,19 +7,22 @@ import { runGates } from "../../lib/slack-gates.mjs";
 import { holdAndAlert } from "../../lib/slack-gate-actions.mjs";
 import { recordArtifactCreated, recordDeliveryState } from "../../lib/artifact-delivery.mjs";
 import { sendRhysDmArtifact, selectPreferredArtifactPath } from "../../lib/slack-rhys-dm-artifact.mjs";
+import { executeSlackAssetWorkflow, findSlackAssetWorkflowForRequest } from "../../lib/slack-asset-workflows.mjs";
 import {
   findLatestDeliveryCandidate,
   findRecentSlackDmJob,
+  recordSlackDmJobDelivered,
   summarizeSlackDmJob,
+  transitionSlackDmJob,
   upsertSlackDmJob,
   updateSlackDmJob,
 } from "../../lib/slack-dm-jobs.mjs";
 import {
   approvalBlockedArtifactText,
+  assetWorkflowBlockedText,
   deliveryRequestedText,
   extractGatewayReply,
   draftFailedHandoffText,
-  findKnownArtifactForRequest,
   formatGatewayFailureDetails,
   gatewayFailureDetails,
   gatewayFailureSummary,
@@ -385,9 +388,9 @@ async function handleMessage(event) {
             message: "Done. I attached the file here.",
             token: BOT_TOKEN,
           });
-          await updateSlackDmJob(deliveryJob.id, {
-            status: "delivered",
+          recordSlackDmJobDelivered(deliveryJob.id, {
             deliveredAt: now,
+            completedAt: now,
             deliveryRequestJobId: job.id,
             deliveryResult: {
               channelId: result.channelId,
@@ -396,13 +399,13 @@ async function handleMessage(event) {
               filename: result.filename,
             },
           });
-      await updateSlackDmJob(job.id, {
-        status: "delivered",
-        completedAt: now,
-        relatedJobId: deliveryJob.id,
-        replyText: "That file has been sent here.",
-        preferredDelivery: "slack_dm",
-      });
+          await updateSlackDmJob(job.id, {
+            status: "answered",
+            completedAt: now,
+            relatedJobId: deliveryJob.id,
+            replyText: "That file has been sent here.",
+            preferredDelivery: "slack_dm",
+          });
           log("✅", `Artifact delivered to Rhys DM via helper job=${deliveryJob.id} file=${result.fileId}`);
           return;
         } catch (sendErr) {
@@ -468,6 +471,8 @@ async function handleMessage(event) {
     : null;
   if (recentJob && [
     "answered",
+    "queued",
+    "building",
     "needs_workspace",
     "needs_workspace_job",
     "artifact_ready",
@@ -501,58 +506,11 @@ async function handleMessage(event) {
 
   if (job.kind === "request" && isLikelyLongRunningRequest(text)) {
     const handoffSummary = handoffSummaryForRequest({ text, classification: job.classification });
-    const knownArtifact = findKnownArtifactForRequest(text);
-    if (knownArtifact && deliveryPreference.preferredDelivery === "slack_dm") {
-      try {
-        const result = await sendRhysDmArtifact({
-          artifactPath: knownArtifact.artifactPath,
-          sourceChannel: channel,
-          requestedBy: userId,
-          title: knownArtifact.title,
-          message: knownArtifact.message,
-          token: BOT_TOKEN,
-        });
-        await updateSlackDmJob(job.id, {
-          status: "delivered",
-          completedAt: new Date().toISOString(),
-          replyText: result.text || knownArtifact.message,
-          artifactPaths: [knownArtifact.artifactPath],
-          deliveredAt: new Date().toISOString(),
-          deliveryResult: {
-            channelId: result.channelId,
-            fileId: result.fileId,
-            messageTs: result.messageTs,
-            filename: result.filename,
-          },
-          handoffSummary,
-          preferredDelivery: deliveryPreference.preferredDelivery,
-          preferredDeliveryReason: deliveryPreference.reason,
-        });
-        log("?", `Known artifact delivered to Rhys DM job=${job.id} key=${knownArtifact.key} file=${result.fileId}`);
-        return;
-      } catch (sendErr) {
-        const reply = approvalBlockedArtifactText({ artifactPaths: [knownArtifact.artifactPath] });
-        await updateSlackDmJob(job.id, {
-          status: "blocked_needs_approval",
-          completedAt: new Date().toISOString(),
-          replyText: reply,
-          artifactPaths: [knownArtifact.artifactPath],
-          safeErrorSummary: `Known artifact delivery failed: ${sendErr.message}`,
-          handoffSummary,
-          preferredDelivery: deliveryPreference.preferredDelivery,
-          preferredDeliveryReason: deliveryPreference.reason,
-        });
-        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "known-artifact-delivery-blocked" });
-        log("??", `Known artifact delivery blocked job=${job.id}: ${sendErr.message}`);
-        return;
-      }
-    }
-
-    const ack = workspaceAckForRequest();
+    const assetJobId = job.assetJobId;
+    const ack = workspaceAckForRequest({ jobId: assetJobId, state: "queued" });
     try {
-      await sendSlackMessage(channel, ack, threadTs, { kind: "summary", callerSite: "long-running-ack" });
-      await updateSlackDmJob(job.id, {
-        status: "needs_workspace",
+      await sendSlackMessage(channel, ack, threadTs, { kind: "summary", callerSite: "asset-job-queued-ack" });
+      await transitionSlackDmJob(job.id, "queued", {
         lastAckAt: new Date().toISOString(),
         ackText: ack,
         replyText: ack,
@@ -560,7 +518,7 @@ async function handleMessage(event) {
         preferredDelivery: deliveryPreference.preferredDelivery,
         preferredDeliveryReason: deliveryPreference.reason,
       });
-      log("✅", `Workspace handoff ack sent in ${channel} for ${userId}`);
+      log("?", `Asset job queued id=${assetJobId} in ${channel} for ${userId}`);
     } catch (ackErr) {
       await updateSlackDmJob(job.id, {
         status: "failed",
@@ -571,9 +529,167 @@ async function handleMessage(event) {
         preferredDelivery: deliveryPreference.preferredDelivery,
         preferredDeliveryReason: deliveryPreference.reason,
       });
-      log("❌", `ACK_SEND_FAILED channel=${channel} error="${ackErr.message}"`);
+      log("?", `ACK_SEND_FAILED channel=${channel} error="${ackErr.message}"`);
+      return;
     }
-    return;
+
+    const workflow = findSlackAssetWorkflowForRequest(text);
+    if (!workflow) {
+      const reply = assetWorkflowBlockedText({
+        jobId: assetJobId,
+        state: "blocked",
+        reason: "I checked the asset registry, but I do not have a verified workflow for that asset yet. I will not invent a generic PDF; this needs a real Atlas/Undeniable workflow or source package first.",
+      });
+      await transitionSlackDmJob(job.id, "blocked", {
+        completedAt: new Date().toISOString(),
+        replyText: reply,
+        safeErrorSummary: "No verified Slack asset workflow matched this request.",
+        handoffSummary,
+        preferredDelivery: deliveryPreference.preferredDelivery,
+        preferredDeliveryReason: deliveryPreference.reason,
+      });
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-workflow-blocked" });
+      log("??", `Asset job blocked id=${assetJobId}: no verified workflow matched`);
+      return;
+    }
+
+    await transitionSlackDmJob(job.id, "building", {
+      workflowKey: workflow.key,
+      workflowId: workflow.workflowId,
+      workflowAdapter: workflow.adapter || "existing-artifact-package",
+      buildStartedAt: new Date().toISOString(),
+      handoffSummary,
+      preferredDelivery: deliveryPreference.preferredDelivery,
+      preferredDeliveryReason: deliveryPreference.reason,
+    });
+
+    const workflowResult = await executeSlackAssetWorkflow({ text, workflow });
+    if (!workflowResult.ok) {
+      const status = workflowResult.status === "failed" ? "failed" : "blocked";
+      const reply = assetWorkflowBlockedText({
+        jobId: assetJobId,
+        state: status,
+        reason: workflowResult.userMessage,
+      });
+      await transitionSlackDmJob(job.id, status, {
+        failedAt: status === "failed" ? new Date().toISOString() : null,
+        completedAt: status === "blocked" ? new Date().toISOString() : null,
+        replyText: reply,
+        safeErrorSummary: workflowResult.safeErrorSummary,
+        workflowKey: workflowResult.workflowKey || workflow.key,
+        workflowId: workflowResult.workflowId || workflow.workflowId,
+        workflowAdapter: workflowResult.adapter || workflow.adapter || "existing-artifact-package",
+        handoffSummary,
+        preferredDelivery: deliveryPreference.preferredDelivery,
+        preferredDeliveryReason: deliveryPreference.reason,
+      });
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-workflow-failed" });
+      log("??", `Asset workflow ${status} id=${assetJobId}: ${workflowResult.safeErrorSummary}`);
+      return;
+    }
+
+    const artifactRecord = await recordArtifactCreated({
+      artifactPaths: workflowResult.artifactPaths,
+      title: workflowResult.title,
+      requestedBy: userId,
+      targetUser: "Rhys",
+      source: `slack-asset-job:${job.id}`,
+      summary: handoffSummary,
+      explicitDeliveryApproval: deliveryPreference.preferredDelivery === "slack_dm",
+      queueReview: deliveryPreference.preferredDelivery !== "slack_dm",
+      suggestedDeliveryNote: "Verified asset is ready for Rhys DM delivery.",
+    });
+
+    await transitionSlackDmJob(job.id, "artifact_ready", {
+      title: workflowResult.title,
+      artifactPath: workflowResult.artifactPath,
+      artifactPaths: workflowResult.artifactPaths,
+      sourcePaths: workflowResult.sourcePaths,
+      deliveryId: artifactRecord?.deliveryId || null,
+      reviewQueueId: artifactRecord?.reviewQueueId || null,
+      artifactReadyAt: new Date().toISOString(),
+      workflowKey: workflowResult.workflowKey,
+      workflowId: workflowResult.workflowId,
+      workflowAdapter: workflowResult.adapter,
+      reusedExistingArtifact: workflowResult.reusedExistingArtifact,
+      handoffSummary,
+      preferredDelivery: deliveryPreference.preferredDelivery,
+      preferredDeliveryReason: deliveryPreference.reason,
+    });
+
+    if (deliveryPreference.preferredDelivery !== "slack_dm") {
+      const reply = approvalBlockedArtifactText({ artifactPaths: workflowResult.artifactPaths });
+      await transitionSlackDmJob(job.id, "blocked_needs_approval", {
+        completedAt: new Date().toISOString(),
+        replyText: reply,
+        safeErrorSummary: `Verified asset is ready, but preferred delivery is ${deliveryPreference.preferredDelivery}.`,
+        deliveryId: artifactRecord?.deliveryId || null,
+      });
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-delivery-preference-blocked" });
+      log("??", `Asset job ready but delivery preference blocked id=${assetJobId} preference=${deliveryPreference.preferredDelivery}`);
+      return;
+    }
+
+    await transitionSlackDmJob(job.id, "delivery_requested", {
+      deliveryRequestedAt: new Date().toISOString(),
+      deliveryId: artifactRecord?.deliveryId || null,
+    });
+
+    try {
+      const result = await sendRhysDmArtifact({
+        artifactPath: workflowResult.artifactPath,
+        sourceChannel: channel,
+        requestedBy: userId,
+        deliveryId: artifactRecord?.deliveryId,
+        title: workflowResult.title,
+        message: workflowResult.message,
+        token: BOT_TOKEN,
+      });
+      recordSlackDmJobDelivered(job.id, {
+        replyText: result.text || workflowResult.message,
+        artifactPath: workflowResult.artifactPath,
+        artifactPaths: workflowResult.artifactPaths,
+        deliveryId: artifactRecord?.deliveryId || null,
+        deliveryResult: {
+          channelId: result.channelId,
+          fileId: result.fileId,
+          messageTs: result.messageTs,
+          filename: result.filename,
+        },
+        handoffSummary,
+        preferredDelivery: deliveryPreference.preferredDelivery,
+        preferredDeliveryReason: deliveryPreference.reason,
+      });
+      log("?", `Asset job delivered id=${assetJobId} workflow=${workflowResult.workflowKey} file=${result.fileId}`);
+      return;
+    } catch (sendErr) {
+      if (artifactRecord?.deliveryId) {
+        try {
+          recordDeliveryState({
+            deliveryId: artifactRecord.deliveryId,
+            status: "failed_with_reason",
+            reason: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
+            channelId: channel,
+            messageTs: null,
+          });
+        } catch (ledgerErr) {
+          log("??", `Artifact delivery failure ledger record failed: ${ledgerErr.message}`);
+        }
+      }
+      const reply = approvalBlockedArtifactText({ artifactPaths: [workflowResult.artifactPath] });
+      await transitionSlackDmJob(job.id, "blocked_needs_approval", {
+        completedAt: new Date().toISOString(),
+        replyText: reply,
+        safeErrorSummary: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
+        deliveryId: artifactRecord?.deliveryId || null,
+        handoffSummary,
+        preferredDelivery: deliveryPreference.preferredDelivery,
+        preferredDeliveryReason: deliveryPreference.reason,
+      });
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-delivery-blocked" });
+      log("??", `Asset delivery blocked id=${assetJobId}: ${sendErr.message}`);
+      return;
+    }
   }
 
   const sessionId = job.sessionId || `slack-${userId}`;

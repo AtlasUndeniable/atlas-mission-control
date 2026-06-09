@@ -4,15 +4,20 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import {
+  canTransitionSlackAssetJob,
   classifySlackRequest,
   findLatestDeliveryCandidate,
+  hasSlackDeliveryReceipt,
   listSlackDmJobs,
+  recordSlackDmJobDelivered,
   summarizeSlackDmJob,
+  transitionSlackDmJob,
   updateSlackDmJob,
   upsertSlackDmJob,
 } from "./slack-dm-jobs.mjs";
 import {
   approvalBlockedArtifactText,
+  assetWorkflowBlockedText,
   deliveryRequestedText,
   handoffSummaryForRequest,
   workspaceAckForRequest,
@@ -72,6 +77,126 @@ test("Ricky Calder document request creates one needs_workspace ledger item and 
     assert.equal(repeat.created, false);
     assert.equal(listSlackDmJobs({ filePath: t.filePath }).length, 1);
     assert.equal(repeat.job.status, "needs_workspace");
+  } finally {
+    t.cleanup();
+  }
+});
+
+
+test("asset job ack records queued state without treating ack as done", () => {
+  const t = tempLedger();
+  try {
+    const { job } = upsertSlackDmJob({
+      channel: "D0AM2R3H6SE",
+      messageTs: "1781000000.000001",
+      userId: "U068FRX5423",
+      text: "create an asset for the first 10k month as an online coach and make it a pdf",
+      sessionId: "slack-U068FRX5423",
+    }, { filePath: t.filePath });
+
+    const ack = workspaceAckForRequest({ jobId: job.assetJobId, state: "queued" });
+    transitionSlackDmJob(job.id, "queued", { ackText: ack, replyText: ack }, { filePath: t.filePath });
+
+    const [queued] = listSlackDmJobs({ filePath: t.filePath });
+    assert.equal(queued.status, "queued");
+    assert.match(queued.ackText, new RegExp(job.assetJobId));
+    assert.match(queued.ackText, /state=queued/);
+    assert.doesNotMatch(queued.ackText, /Done\.|sent here|Slack receipt/i);
+    assert.doesNotMatch(queued.ackText, /when it's ready|bring .*back.*ready/i);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("known asset workflow ledger reaches delivered only after Slack receipt", () => {
+  const t = tempLedger();
+  try {
+    const { job } = upsertSlackDmJob({
+      channel: "D0AM2R3H6SE",
+      messageTs: "1781000000.000002",
+      userId: "U068FRX5423",
+      text: "create an asset for their first 10k as an online coach and return the pdf",
+      sessionId: "slack-U068FRX5423",
+    }, { filePath: t.filePath });
+
+    transitionSlackDmJob(job.id, "queued", {}, { filePath: t.filePath });
+    assert.equal(canTransitionSlackAssetJob("queued", "building"), true);
+    transitionSlackDmJob(job.id, "building", { workflowKey: "first-10k-online-coach" }, { filePath: t.filePath });
+    transitionSlackDmJob(job.id, "artifact_ready", {
+      artifactPaths: ["/Users/atlasai/.openclaw/workspace/exports/2026-05-20-first-10k-month-bible-branded.pdf"],
+    }, { filePath: t.filePath });
+    transitionSlackDmJob(job.id, "delivery_requested", {}, { filePath: t.filePath });
+
+    assert.equal(hasSlackDeliveryReceipt({ channelId: "D0AM2R3H6SE", fileId: "F_TEST" }), true);
+    assert.throws(() => updateSlackDmJob(job.id, { status: "delivered" }, { filePath: t.filePath }), /without a Slack file\/message receipt/);
+
+    recordSlackDmJobDelivered(job.id, {
+      deliveryResult: {
+        channelId: "D0AM2R3H6SE",
+        fileId: "F_TEST",
+        messageTs: "1781000000.123456",
+        filename: "first-10k.pdf",
+      },
+    }, { filePath: t.filePath });
+
+    const [delivered] = listSlackDmJobs({ filePath: t.filePath });
+    assert.equal(delivered.status, "delivered");
+    assert.equal(delivered.deliveryResult.fileId, "F_TEST");
+    assert.match(summarizeSlackDmJob(delivered), /Slack receipt: F_TEST/);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("unknown asset workflow blocks honestly from the ledger", () => {
+  const t = tempLedger();
+  try {
+    const { job } = upsertSlackDmJob({
+      channel: "D0AM2R3H6SE",
+      messageTs: "1781000000.000003",
+      userId: "U068FRX5423",
+      text: "create a generic branded PDF for a new offer we have never defined",
+      sessionId: "slack-U068FRX5423",
+    }, { filePath: t.filePath });
+
+    transitionSlackDmJob(job.id, "queued", {}, { filePath: t.filePath });
+    const reply = assetWorkflowBlockedText({
+      jobId: job.assetJobId,
+      reason: "I checked the asset registry, but I do not have a verified workflow for that asset yet.",
+    });
+    transitionSlackDmJob(job.id, "blocked", {
+      replyText: reply,
+      safeErrorSummary: "No verified Slack asset workflow matched this request.",
+    }, { filePath: t.filePath });
+
+    const [blocked] = listSlackDmJobs({ filePath: t.filePath });
+    assert.equal(blocked.status, "blocked");
+    assert.match(blocked.replyText, /do not have a verified workflow/);
+    assert.doesNotMatch(blocked.replyText, /Done|attached|sent here/i);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("status follow-up summaries report current asset job state immediately", () => {
+  const t = tempLedger();
+  try {
+    const { job } = upsertSlackDmJob({
+      channel: "D0AM2R3H6SE",
+      messageTs: "1781000000.000004",
+      userId: "U068FRX5423",
+      text: "create an asset for the first 10k month as an online coach",
+      sessionId: "slack-U068FRX5423",
+    }, { filePath: t.filePath });
+
+    transitionSlackDmJob(job.id, "queued", {}, { filePath: t.filePath });
+    assert.match(summarizeSlackDmJob(listSlackDmJobs({ filePath: t.filePath })[0]), /state=queued/);
+
+    transitionSlackDmJob(job.id, "building", { workflowKey: "first-10k-online-coach" }, { filePath: t.filePath });
+    const summary = summarizeSlackDmJob(listSlackDmJobs({ filePath: t.filePath })[0]);
+    assert.match(summary, /state=building/);
+    assert.match(summary, /first-10k-online-coach/);
+    assert.doesNotMatch(summary, /live Slack reply window|operator review/i);
   } finally {
     t.cleanup();
   }

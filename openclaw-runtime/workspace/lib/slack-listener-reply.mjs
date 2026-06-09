@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { findSlackAssetWorkflowForRequest } from "./slack-asset-workflows.mjs";
 
 const NON_USEFUL_PATTERNS = [
   /Atlas stalled mid-thought/i,
@@ -63,21 +64,18 @@ export function preferredDeliveryForSlackRequest({ text = "", isSlackDm = true }
 }
 
 export function findKnownArtifactForRequest(text = "") {
-  const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
-  const asksFirst10k = /\b(first|1st)?\s*\$?10k\b|\bfirst\s+ten\s+k\b|\bfirst\s+10\s*k\b/.test(normalized);
-  const asksOnlineCoach = /\b(online\s+coach|coach|coaching)\b/.test(normalized);
-  const asksAsset = /\b(asset|doc|document|pdf|playbook|strategy|strategic|model|pricing|offer|retention|sales)\b/.test(normalized);
-
-  if (asksFirst10k && asksOnlineCoach && asksAsset) {
-    return {
-      key: "first-10k-online-coach",
-      artifactPath: "/Users/atlasai/.openclaw/workspace/exports/2026-05-20-first-10k-month-bible-branded.pdf",
-      title: "First $10K Month coaching playbook",
-      message: "Done. I found the verified First $10K Month branded asset and attached it here. This is the existing Atlas/Undeniable artifact, not a fresh hallucinated draft.",
-    };
-  }
-
-  return null;
+  const workflow = findSlackAssetWorkflowForRequest(text);
+  if (!workflow) return null;
+  return {
+    key: workflow.key,
+    workflowId: workflow.workflowId,
+    adapter: workflow.adapter,
+    artifactPath: workflow.artifactPath,
+    artifactPaths: workflow.artifactPaths || [workflow.artifactPath].filter(Boolean),
+    sourcePaths: workflow.sourcePaths || [],
+    title: workflow.title,
+    message: workflow.message,
+  };
 }
 
 export function isLikelyLongRunningRequest(text = "") {
@@ -93,8 +91,16 @@ export function isLikelyLongRunningRequest(text = "") {
     || (hasResearchVerb && hasBuildVerb && /\b(call|calls|client|ricky|visual|recommendation|pay)\b/.test(normalized));
 }
 
-export function workspaceAckForRequest() {
+export function workspaceAckForRequest({ jobId, state = "queued" } = {}) {
+  if (jobId) {
+    return `I have this logged as asset job ${jobId} (state=${state}), but no verified file exists yet. I won't call it done until I return the actual file here.`;
+  }
   return "I have this logged as an asset request, but no verified file exists yet. I won't call it done until I return the actual file here.";
+}
+
+export function assetWorkflowBlockedText({ jobId, state = "blocked", reason } = {}) {
+  const prefix = jobId ? `Asset job ${jobId} is state=${state}.` : `This asset request is state=${state}.`;
+  return `${prefix} ${reason || "I do not have a verified workflow for it yet, so I am not inventing a generic file."}`;
 }
 
 export function liveTimeoutHandoffText() {

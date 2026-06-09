@@ -9,6 +9,13 @@ export const DEFAULT_SOURCE_ROOT = resolve(fileURLToPath(new URL("../openclaw-ru
 export const DEFAULT_TARGET_ROOT = "/Users/atlasai/.openclaw/workspace";
 
 export const SLACK_RUNTIME_FILES = [
+  "lib/queue-writer.mjs",
+  "lib/artifact-delivery.mjs",
+  "lib/slack-rhys-dm-artifact.mjs",
+  "lib/slack-gates.mjs",
+  "lib/slack-gate-actions.mjs",
+  "lib/slack-asset-workflows.mjs",
+  "lib/slack-asset-workflows.test.mjs",
   "lib/slack-listener-reply.mjs",
   "lib/slack-listener-reply.test.mjs",
   "lib/slack-dm-jobs.mjs",
