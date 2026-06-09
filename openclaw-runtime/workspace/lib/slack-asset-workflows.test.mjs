@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -117,20 +117,22 @@ test("generated workflow adapter builds and validates an artifact package before
   }
 });
 
-test("Jess Endure builder writes source markdown and invokes the Atlas converter package", async () => {
+test("Jess Endure builder writes branded HTML/CSS and uses separate PDF/DOCX paths", async () => {
   const t = tempArtifacts();
   try {
     const calls = [];
     const result = await buildJessEndureAdCtaPlaybook({
       workflow: { title: "Fixture Jess CTA Playbook" },
       exportsRoot: t.dir,
-      converterScript: "/tmp/fake-convert.sh",
-      runConverter: async ({ sourcePath, outputFilename, title }) => {
-        calls.push({ sourcePath, outputFilename, title });
-        const out = join(t.dir, outputFilename);
-        if (outputFilename.endsWith(".pdf")) writeFileSync(out, Buffer.from("%PDF-1.7\nfixture pdf\n"));
-        if (outputFilename.endsWith(".docx")) writeFileSync(out, Buffer.from("PK\x03\x04fixture docx\n"));
-        if (outputFilename.endsWith(".html")) writeFileSync(out, "<html><body>fixture</body></html>", "utf8");
+      weasyprintBin: "/tmp/fake-weasyprint",
+      pandocBin: "/tmp/fake-pandoc",
+      runPdfBuilder: async ({ weasyprintBin, htmlPath, pdfPath }) => {
+        calls.push({ type: "pdf", weasyprintBin, htmlPath, pdfPath });
+        writeFileSync(pdfPath, Buffer.from("%PDF-1.7\nfixture pdf\n"));
+      },
+      runDocxBuilder: async ({ pandocBin, sourcePath, docxPath, title }) => {
+        calls.push({ type: "docx", pandocBin, sourcePath, docxPath, title });
+        writeFileSync(docxPath, Buffer.from("PK\x03\x04fixture docx\n"));
       },
     });
 
@@ -140,14 +142,26 @@ test("Jess Endure builder writes source markdown and invokes the Atlas converter
       join(t.dir, "2026-06-09-jess-endure-ad-cta-dm-follow-up-playbook-branded.docx"),
       join(t.dir, "2026-06-09-jess-endure-ad-cta-dm-follow-up-playbook-branded.html"),
     ]);
-    assert.equal(calls.length, 3);
-    assert.deepEqual(calls.map((call) => call.outputFilename), [
-      "2026-06-09-jess-endure-ad-cta-dm-follow-up-playbook-branded.pdf",
-      "2026-06-09-jess-endure-ad-cta-dm-follow-up-playbook-branded.docx",
-      "2026-06-09-jess-endure-ad-cta-dm-follow-up-playbook-branded.html",
-    ]);
-    assert.equal(calls[0].title, "Fixture Jess CTA Playbook");
+    assert.deepEqual(calls.map((call) => call.type), ["pdf", "docx"]);
+    assert.match(calls[0].htmlPath, /jess-endure-ad-cta-dm-follow-up-playbook-branded\.html$/);
+    assert.match(calls[0].pdfPath, /jess-endure-ad-cta-dm-follow-up-playbook-branded\.pdf$/);
+    assert.match(calls[1].sourcePath, /jess-endure-ad-cta-dm-follow-up-playbook-branded\.md$/);
+    assert.match(calls[1].docxPath, /jess-endure-ad-cta-dm-follow-up-playbook-branded\.docx$/);
+    assert.equal(calls[1].title, "Fixture Jess CTA Playbook");
     assert.match(result.sourcePaths[0], /jess-endure-ad-cta-dm-follow-up-playbook-branded\.md$/);
+    assert.match(result.sourcePaths[1], /jess-endure-ad-cta-dm-follow-up-playbook-branded\.html$/);
+    assert.match(result.sourcePaths[2], /jess-endure-ad-cta-dm-follow-up-playbook-branded\.css$/);
+
+    const html = readFileSync(result.sourcePaths[1], "utf8");
+    const css = readFileSync(result.sourcePaths[2], "utf8");
+    const md = readFileSync(result.sourcePaths[0], "utf8");
+    assert.match(html, /cover-logo/);
+    assert.match(html, /undeniable-stacked-black\.png/);
+    assert.match(html, /brand-header/);
+    assert.match(html, /DM me the word <strong>START<\/strong>/);
+    assert.match(css, /Bebas Neue/);
+    assert.match(css, /UNDENIABLE MENTORING \| AD CTA/);
+    assert.match(md, /Source Context Used/);
   } finally {
     t.cleanup();
   }
