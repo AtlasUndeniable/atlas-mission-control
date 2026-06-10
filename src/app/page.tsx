@@ -17,12 +17,19 @@ import BootSequence from "@/components/BootSequence";
 import BriefingSequence from "@/components/BriefingSequence";
 import ConstellationCanvas from "@/components/ConstellationCanvas";
 import MuteToggle from "@/components/MuteToggle";
+import AmbientModeSelect from "@/components/AmbientModeSelect";
 import HeroBriefing from "@/components/HeroBriefing";
 import ApprovalQueue from "@/components/ApprovalQueue";
 import CommsToast from "@/components/CommsToast";
+import MeetingPrepPanel from "@/components/MeetingPrepPanel";
 import { useSoundContext } from "@/components/SoundEngine";
 
 interface OverviewData {
+  activeClients?: {
+    ghl: number | null;
+    monday: number;
+    source?: string;
+  };
   monday: {
     activeClients: number;
     highPriority: number;
@@ -54,6 +61,12 @@ interface OverviewData {
     servicesTotal: number;
   };
   generatedAt?: string;
+  metricsFreshness?: {
+    generatedAt: string | null;
+    ageMinutes: number | null;
+    stale: boolean;
+    reason: string | null;
+  };
 }
 
 interface HealthMap {
@@ -118,8 +131,9 @@ function useRotatingStatus(overview: OverviewData | null, servicesOnline: number
       if (overview?.fireflies?.callsThisWeek) {
         messages.push(`${overview.fireflies.callsThisWeek} calls processed this week`);
       }
-      if (overview?.monday?.activeClients) {
-        messages.push(`${overview.monday.activeClients} client boards active`);
+      const activeGhl = overview?.activeClients?.ghl;
+      if (typeof activeGhl === "number" && activeGhl > 0) {
+        messages.push(`${activeGhl} active clients in GHL`);
       }
       if (overview?.slack?.totalChannels) {
         messages.push(`Monitoring ${overview.slack.totalChannels} Slack channels`);
@@ -252,7 +266,7 @@ export default function Dashboard() {
   // ===== DERIVED STATE =====
   const briefingData = useMemo(() => ({
     callsBooked: overview?.fireflies?.callsThisWeek,
-    activeClients: overview?.monday?.activeClients,
+    activeClients: overview?.activeClients?.ghl ?? overview?.monday?.activeClients,
     callsProcessed: overview?.fireflies?.callsProcessed,
     servicesOnline,
     totalServices: servicesTotal,
@@ -274,7 +288,8 @@ export default function Dashboard() {
   }), [overview, servicesOnline, servicesTotal]);
 
   // Close rate from metrics engine KPIs
-  const closeRate = overview?.kpis?.closeRate != null ? `${overview.kpis.closeRate}%` : "—";
+  const rawCloseRate = overview?.kpis?.closeRate;
+  const closeRate = rawCloseRate != null && rawCloseRate > 0 ? `${rawCloseRate}%` : "—";
 
   const pr = useMemo(() => (i: number) =>
     dashboardReady ? `panel-reveal panel-reveal-${i}` : "opacity-0",
@@ -342,6 +357,16 @@ export default function Dashboard() {
             </div>
             <div style={{ width: "1px", height: "12px", background: "rgba(255,255,255,0.08)" }} />
             <span className="header-status-text">{rotatingStatus}</span>
+            {overview?.metricsFreshness?.stale && (
+              <span
+                className="stale-badge"
+                title={overview.metricsFreshness.reason ?? "Data may be outdated"}
+              >
+                {overview.metricsFreshness.ageMinutes != null
+                  ? `DATA STALE (${overview.metricsFreshness.ageMinutes}m)`
+                  : "DATA STALE"}
+              </span>
+            )}
           </div>
 
           {/* Right: Uptime + Lock + Volume + Refresh indicator */}
@@ -356,6 +381,7 @@ export default function Dashboard() {
             >
               {uptime}
             </span>
+            <AmbientModeSelect inline />
             <MuteToggle inline />
             {refreshing && <div className="refresh-dot" />}
           </div>
@@ -380,6 +406,11 @@ export default function Dashboard() {
           />
         </div>
 
+        {/* Row 0.5: Up Next — auto-brief 30 min before next calendar event */}
+        <div className={`meeting-prep-row ${pr(1)}`}>
+          <MeetingPrepPanel />
+        </div>
+
         {/* Row 1: Revenue Hero (3fr) + Constellation (1fr) */}
         <div className={`hero-row ${pr(1)}`}>
           <RevenueHero />
@@ -396,20 +427,24 @@ export default function Dashboard() {
           />
           <KpiCard
             label="Active Clients"
-            value={overview?.monday?.activeClients ?? "—"}
-            subtext="Monday boards"
+            value={overview?.activeClients?.ghl ?? "—"}
+            subtext={
+              overview?.activeClients?.ghl != null
+                ? "GHL Pipeline"
+                : "Awaiting GHL data"
+            }
             accentClass="kpi-accent-cyan"
           />
           <KpiCard
             label="Daily Ad Spend"
             value="—"
-            subtext="Awaiting Manus"
+            subtext="Awaiting Meta"
             accentClass="kpi-accent-amber"
           />
           <KpiCard
             label="ROAS"
             value="—"
-            subtext="Awaiting Manus"
+            subtext="Awaiting Meta"
             accentClass="kpi-accent-amber"
           />
           <KpiCard
@@ -421,12 +456,12 @@ export default function Dashboard() {
           <KpiCard
             label="Close Rate"
             value={closeRate}
-            subtext="SALES pipeline"
+            subtext={closeRate === "—" ? "Calibrating" : "SALES pipeline"}
             accentClass="kpi-accent-green"
           />
         </div>
 
-        {/* Row 3+: 4-Column Panel Grid (Manus layout) */}
+        {/* Row 3+: 4-Column Panel Grid */}
         <div className={`panel-grid ${pr(3)}`}>
           {/* Column 1: Meta Ads + Pipeline */}
           <div className="space-y-4">

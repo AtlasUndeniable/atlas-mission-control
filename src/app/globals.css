@@ -983,6 +983,7 @@ body {
 
 .full-width-row { width: 100%; }
 .hero-briefing-row { width: 100%; }
+.meeting-prep-row { width: 100%; }
 
 /* Hero: revenue left (wider) + constellation right */
 .hero-row {
@@ -997,7 +998,7 @@ body {
   gap: 16px;
 }
 
-/* 4-column panel grid — Manus density */
+/* 4-column panel grid */
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1199,6 +1200,25 @@ body {
   letter-spacing: 0.05em;
   white-space: nowrap;
   animation: statusFadeSwap 8s ease-in-out infinite;
+}
+
+/* ===== STALE BADGE ===== */
+.stale-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #1a1a1a;
+  background: #f5a623;
+  padding: 2px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  animation: stalePulse 3s ease-in-out infinite;
+}
+
+@keyframes stalePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 /* ===== BRIEFING KPI GRID ===== */

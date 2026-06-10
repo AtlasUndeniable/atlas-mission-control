@@ -90,7 +90,7 @@ export default function SystemPerformance() {
 
       {/* Summary metrics */}
       <div className="space-y-0.5 mb-3">
-        <MetricRow label="Model" value="Opus 4.6" color="#0088FF" />
+        <MetricRow label="Model" value="GPT-5.4" color="#0088FF" />
         <MetricRow label="Avg Response" value={`${avgLatency}ms`} color={latencyColor(avgLatency)} />
         <MetricRow label="Uptime" value={`${uptimePct}%`} color="#22C55E" />
       </div>
@@ -136,24 +136,6 @@ export default function SystemPerformance() {
         </div>
       </div>
 
-      {/* Credit usage placeholder */}
-      <div className="pt-3 mt-3" style={{ borderTop: "1px solid rgba(0,136,255,0.08)" }}>
-        <div className="flex justify-between items-center mb-2">
-          <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "#9CA3AF" }}>API Credits</span>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "rgba(255,255,255,0.35)" }}>
-            &mdash; / &mdash;
-          </span>
-        </div>
-        <div className="progress-bar" style={{ height: "4px" }}>
-          <div className="progress-bar-fill" style={{ width: "0%", background: "rgba(0,136,255,0.2)" }} />
-        </div>
-        <p
-          className="mt-1.5"
-          style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "rgba(255,255,255,0.15)", letterSpacing: "0.08em" }}
-        >
-          Credit tracking not connected
-        </p>
-      </div>
     </div>
   );
 }
