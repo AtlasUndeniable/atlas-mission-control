@@ -910,6 +910,38 @@ body {
   animation: bootSkipFade 0.3s ease-out 1.5s forwards;
 }
 
+/* ===== BOOT GLOW EFFECTS ===== */
+
+/* Pulsing blue glow on ATLAS title during boot (~1Hz) */
+@keyframes bootGlowPulse {
+  0%, 100% {
+    text-shadow:
+      0 0 10px rgba(0, 136, 255, 0.6),
+      0 0 40px rgba(0, 136, 255, 0.3);
+  }
+  50% {
+    text-shadow:
+      0 0 20px rgba(0, 136, 255, 0.9),
+      0 0 60px rgba(0, 136, 255, 0.5),
+      0 0 100px rgba(0, 136, 255, 0.15);
+  }
+}
+
+.boot-glow-pulse {
+  animation: bootGlowPulse 1s ease-in-out infinite;
+}
+
+/* Brief brightness flash when a boot line appears */
+@keyframes bootLineFlash {
+  0% { opacity: 0; filter: brightness(2.5); }
+  30% { opacity: 1; filter: brightness(1.8); }
+  100% { opacity: 1; filter: brightness(1); }
+}
+
+.boot-line-flash {
+  animation: bootLineFlash 400ms ease-out forwards;
+}
+
 /* ===== STAGGERED DASHBOARD REVEAL (post-boot) ===== */
 /* These override the .reveal classes when boot completes */
 @keyframes panelReveal {

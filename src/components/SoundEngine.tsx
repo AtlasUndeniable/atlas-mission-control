@@ -10,6 +10,27 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  AmbientEngine,
+  getAmbientEngine,
+  disposeAmbientEngine,
+  AMBIENT_SOUND_LABELS,
+  type AmbientSound,
+} from "@/lib/audio/ambient-engine";
+export type { AmbientSound };
+export { AMBIENT_SOUND_LABELS };
+
+const AMBIENT_SOUND_STORAGE_KEY = "mc-ambient-sound";
+const VALID_AMBIENT_SOUNDS: readonly AmbientSound[] = ["off", "hum", "hum+sputnik", "radar", "hum+radar"];
+
+function loadStoredSound(): AmbientSound {
+  if (typeof window === "undefined") return "off";
+  const stored = window.localStorage.getItem(AMBIENT_SOUND_STORAGE_KEY);
+  if (stored && (VALID_AMBIENT_SOUNDS as readonly string[]).includes(stored)) {
+    return stored as AmbientSound;
+  }
+  return "off";
+}
 
 // ===== PUBLIC INTERFACE =====
 export interface SoundEngine {
@@ -17,10 +38,15 @@ export interface SoundEngine {
   isMuted: boolean;
   toggleMute: () => void;
   setMasterVolume: (v: number) => void;
-  // Ambient
+  // Ambient — single selectable sound, controlled by dropdown only.
+  // startAmbient/stopAmbient kept as no-op legacy hooks for boot/briefing callers.
   startAmbient: () => void;
   stopAmbient: () => void;
   isAmbientPlaying: boolean;
+  /** Current ambient sound selection. */
+  ambientSound: AmbientSound;
+  /** Swap the ambient sound. "off" stops all output. Persists to localStorage. */
+  setAmbientSound: (sound: AmbientSound) => void;
   // One-shots
   playBoot: () => void;
   playInitLine: () => void;
@@ -57,19 +83,14 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     }
     return false;
   });
-  const [isAmbientPlaying, setIsAmbientPlaying] = useState(false);
+  const [ambientSound, setAmbientSoundState] = useState<AmbientSound>(() => loadStoredSound());
+  const isAmbientPlaying = ambientSound !== "off";
 
   // Refs for Web Audio objects
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
-  const ambientNodesRef = useRef<{
-    baseOsc: OscillatorNode;
-    lfoOsc: OscillatorNode;
-    noiseSource: AudioBufferSourceNode;
-    pingInterval: ReturnType<typeof setInterval>;
-    allNodes: AudioNode[];
-  } | null>(null);
+  const ambientEngineRef = useRef<AmbientEngine | null>(null);
   const masterVolumeRef = useRef(0.22);
   const mutedRef = useRef(isMuted);
   const lastRefreshRef = useRef(0);
@@ -137,123 +158,66 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // ===== AMBIENT SYNTH =====
-  const startAmbient = useCallback(() => {
-    if (ambientNodesRef.current) return; // already playing
-    if (reducedMotionRef.current) return; // respect reduced motion
+  // ===== AMBIENT ENGINE (delegated to lib/audio/ambient-engine.ts) =====
+  // One selectable sound at a time. Dropdown-driven. Default: "off".
 
+  const applySound = useCallback((sound: AmbientSound) => {
     try {
+      if (sound === "off") {
+        ambientEngineRef.current?.setSound("off");
+        return;
+      }
       const ctx = getCtx();
       const master = getMaster();
-      const now = ctx.currentTime;
-      const allNodes: AudioNode[] = [];
-
-      // --- Layer 1: Sub-bass hum (55Hz sine, very quiet) ---
-      const baseOsc = ctx.createOscillator();
-      const baseGain = ctx.createGain();
-      baseOsc.type = "sine";
-      baseOsc.frequency.value = 55;
-      baseGain.gain.setValueAtTime(0, now);
-      baseGain.gain.linearRampToValueAtTime(0.03, now + 2);
-      baseOsc.connect(baseGain);
-      baseGain.connect(master);
-      baseOsc.start(now);
-      allNodes.push(baseOsc, baseGain);
-
-      // --- Layer 2: Filtered noise with LFO breathing ---
-      // Create noise buffer (2 seconds, loopable)
-      const noiseDuration = 2;
-      const bufferSize = ctx.sampleRate * noiseDuration;
-      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const noiseData = noiseBuffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        noiseData[i] = Math.random() * 2 - 1;
-      }
-      const noiseSource = ctx.createBufferSource();
-      noiseSource.buffer = noiseBuffer;
-      noiseSource.loop = true;
-
-      // Low-pass filter on noise
-      const noiseFilter = ctx.createBiquadFilter();
-      noiseFilter.type = "lowpass";
-      noiseFilter.frequency.value = 400;
-      noiseFilter.Q.value = 0.7;
-
-      // LFO to modulate noise gain (breathing)
-      const lfoOsc = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      const noiseGain = ctx.createGain();
-      lfoOsc.type = "sine";
-      lfoOsc.frequency.value = 0.05; // very slow
-      lfoGain.gain.value = 0.008; // modulation depth
-      noiseGain.gain.value = 0.012; // base noise level
-
-      lfoOsc.connect(lfoGain);
-      lfoGain.connect(noiseGain.gain); // modulate the gain parameter
-      noiseSource.connect(noiseFilter);
-      noiseFilter.connect(noiseGain);
-      noiseGain.connect(master);
-      lfoOsc.start(now);
-      noiseSource.start(now);
-      allNodes.push(noiseSource, noiseFilter, noiseGain, lfoOsc, lfoGain);
-
-      // --- Layer 3: Random pings ---
-      const schedulePing = () => {
-        if (!ctxRef.current || !ambientNodesRef.current) return;
-        try {
-          const ac = ctxRef.current;
-          const m = masterRef.current!;
-          const t = ac.currentTime;
-          const freq = 800 + Math.random() * 1200; // 800-2000Hz
-
-          const osc = ac.createOscillator();
-          const gain = ac.createGain();
-          osc.type = "sine";
-          osc.frequency.value = freq;
-          gain.gain.setValueAtTime(0, t);
-          gain.gain.linearRampToValueAtTime(0.02, t + 0.1);
-          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
-          osc.connect(gain);
-          gain.connect(m);
-          osc.start(t);
-          osc.stop(t + 0.5);
-        } catch { /* ignore */ }
-      };
-
-      const pingInterval = setInterval(() => {
-        schedulePing();
-      }, (8 + Math.random() * 7) * 1000); // 8-15s
-
-      ambientNodesRef.current = { baseOsc, lfoOsc, noiseSource, pingInterval, allNodes };
-      setIsAmbientPlaying(true);
+      const engine = getAmbientEngine(ctx, master);
+      ambientEngineRef.current = engine;
+      engine.setSound(sound);
     } catch { /* ignore audio errors */ }
   }, [getCtx, getMaster]);
 
+  /** Legacy API — preserved as no-op so existing boot/briefing callers don't break.
+   *  Ambient is now dropdown-only; auto-starting would override user choice. */
+  const startAmbient = useCallback(() => { /* no-op: dropdown drives ambient */ }, []);
   const stopAmbient = useCallback(() => {
-    const ambient = ambientNodesRef.current;
-    if (!ambient) return;
-
-    clearInterval(ambient.pingInterval);
-    try {
-      ambient.baseOsc.stop();
-      ambient.lfoOsc.stop();
-      ambient.noiseSource.stop();
-    } catch { /* already stopped */ }
-    ambient.allNodes.forEach((n) => { try { n.disconnect(); } catch {} });
-    ambientNodesRef.current = null;
-    setIsAmbientPlaying(false);
+    ambientEngineRef.current?.setSound("off");
   }, []);
+
+  /** Swap the ambient sound. Persists across reloads. */
+  const setAmbientSound = useCallback((sound: AmbientSound) => {
+    setAmbientSoundState(sound);
+    try { localStorage.setItem(AMBIENT_SOUND_STORAGE_KEY, sound); } catch {}
+    applySound(sound);
+  }, [applySound]);
+
+  // Play the stored/current sound after the user's first gesture has
+  // unlocked the AudioContext. We don't try to create the context here
+  // (autoplay policy blocks it); we wait for the user to click Unmute or
+  // any other gesture-wired interaction, then fire the current sound.
+  useEffect(() => {
+    if (ambientSound === "off") {
+      ambientEngineRef.current?.setSound("off");
+      return;
+    }
+    // Only attempt to apply if context is already unlocked; otherwise this
+    // is a no-op and the next user gesture (toggleMute, dropdown change)
+    // will call applySound itself.
+    if (ctxRef.current && ctxRef.current.state === "running") {
+      applySound(ambientSound);
+    }
+  }, [ambientSound, applySound]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopAmbient();
+      ambientEngineRef.current?.setSound("off");
+      disposeAmbientEngine();
+      ambientEngineRef.current = null;
       if (ctxRef.current) {
         ctxRef.current.close();
         ctxRef.current = null;
       }
     };
-  }, [stopAmbient]);
+  }, []);
 
   // ===== BOOT SOUNDS =====
 
@@ -716,6 +680,8 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     startAmbient,
     stopAmbient,
     isAmbientPlaying,
+    ambientSound,
+    setAmbientSound,
     playBoot,
     playInitLine,
     playBootComplete,
@@ -734,7 +700,7 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     notification,
     boot,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [isMuted, isAmbientPlaying]);
+  }), [isMuted, isAmbientPlaying, ambientSound]);
 
   return (
     <SoundContext.Provider value={engine}>

@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { SoundEngine } from "@/components/SoundEngine";
+import { startBootAudio, stopBootAudio } from "@/utils/bootAudio";
 
-// ===== INIT LINES — military/sci-fi style =====
+// ===== INIT LINES — built from live API data =====
 interface InitLine {
   prefix: string;
   text: string;
@@ -11,13 +12,61 @@ interface InitLine {
   status: string;
 }
 
-const INIT_LINES: InitLine[] = [
-  { prefix: "[CORE]", text: " Initializing neural bridge", dots: "..............", status: "OK" },
-  { prefix: "[SYNC]", text: " Connecting data streams", dots: ".................", status: "OK" },
-  { prefix: "[AUTH]", text: " Validating credentials", dots: "..................", status: "OK" },
-  { prefix: "[GRID]", text: " Loading dashboard modules", dots: "...............", status: "OK" },
-  { prefix: "[NET]",  text: " Establishing service mesh", dots: "...............", status: "OK" },
+// Pad dots to align status text at a consistent column
+function padDots(text: string, targetLen: number = 48): string {
+  const contentLen = text.length;
+  const dotsNeeded = Math.max(4, targetLen - contentLen);
+  return " " + ".".repeat(dotsNeeded) + " ";
+}
+
+// Fallback lines if API is completely unreachable
+const FALLBACK_LINES: InitLine[] = [
+  { prefix: "[GATEWAY]", text: " Connecting to Atlas gateway", dots: padDots("[GATEWAY] Connecting to Atlas gateway"), status: "STANDBY" },
+  { prefix: "[MONDAY]", text: " Loading client boards", dots: padDots("[MONDAY] Loading client boards"), status: "STANDBY" },
+  { prefix: "[GHL]", text: " Syncing pipeline", dots: padDots("[GHL] Syncing pipeline"), status: "STANDBY" },
+  { prefix: "[SLACK]", text: " Monitoring channels", dots: padDots("[SLACK] Monitoring channels"), status: "STANDBY" },
+  { prefix: "[COMMS]", text: " Messages queued", dots: padDots("[COMMS] Messages queued"), status: "STANDBY" },
+  { prefix: "[KNOWLEDGE]", text: " Files indexed", dots: padDots("[KNOWLEDGE] Files indexed"), status: "STANDBY" },
 ];
+
+interface OverviewData {
+  monday?: { activeClients?: number };
+  opportunities?: number;
+  slack?: { totalChannels?: number };
+  pendingApprovals?: number;
+  knowledge?: { totalFiles?: number };
+  health?: { online?: number; total?: number };
+}
+
+function buildInitLines(data: OverviewData): InitLine[] {
+  const ok = (val: number | undefined) => val !== undefined && val !== null;
+
+  const line = (prefix: string, text: string, hasData: boolean): InitLine => {
+    const full = prefix + text;
+    return {
+      prefix,
+      text,
+      dots: padDots(full),
+      status: hasData ? "OK" : "STANDBY",
+    };
+  };
+
+  const clients = data.monday?.activeClients;
+  const opps = data.opportunities;
+  const channels = data.slack?.totalChannels;
+  const pending = data.pendingApprovals;
+  const knowledge = data.knowledge?.totalFiles;
+  const healthOn = data.health?.online;
+
+  return [
+    line("[GATEWAY]", ` Connecting to Atlas gateway`, ok(healthOn)),
+    line("[MONDAY]", ` Loading ${ok(clients) ? clients : "\u2014"} client boards`, ok(clients)),
+    line("[GHL]", ` Syncing pipeline \u2014 ${ok(opps) ? opps : "\u2014"} opps`, ok(opps)),
+    line("[SLACK]", ` Monitoring ${ok(channels) ? channels : "\u2014"} channels`, ok(channels)),
+    line("[COMMS]", ` ${ok(pending) ? pending : "\u2014"} messages queued`, ok(pending)),
+    line("[KNOWLEDGE]", ` ${ok(knowledge) ? knowledge : "\u2014"} files indexed`, ok(knowledge)),
+  ];
+}
 
 interface BootSequenceProps {
   onComplete: () => void;           // Called on skip — goes straight to dashboard
@@ -37,11 +86,34 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
   const [fadeOutBoot, setFadeOutBoot] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [skipped, setSkipped] = useState(false);
+  const [initLines, setInitLines] = useState<InitLine[]>(FALLBACK_LINES);
 
   const beepRef = useRef(0);
   const cancelledRef = useRef(false);
   const soundRef = useRef(soundEngine);
   soundRef.current = soundEngine;
+
+  // ===== BOOT HUM — starts on mount, stops on completion =====
+  useEffect(() => {
+    startBootAudio();
+    return () => stopBootAudio();
+  }, []);
+
+  // ===== FETCH REAL DATA ON MOUNT =====
+  useEffect(() => {
+    fetch("/api/overview")
+      .then((res) => {
+        if (!res.ok) throw new Error("API error");
+        return res.json();
+      })
+      .then((data: OverviewData) => {
+        setInitLines(buildInitLines(data));
+      })
+      .catch(() => {
+        // Graceful degradation — use fallback lines
+        setInitLines(FALLBACK_LINES);
+      });
+  }, []);
 
   // ===== PHASE TIMELINE =====
   useEffect(() => {
@@ -90,10 +162,10 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
 
   // ===== INIT LINE TYPEWRITER =====
   useEffect(() => {
-    if (initLineIndex < 0 || initLineIndex >= INIT_LINES.length || skipped) return;
+    if (initLineIndex < 0 || initLineIndex >= initLines.length || skipped) return;
     cancelledRef.current = false;
 
-    const line = INIT_LINES[initLineIndex];
+    const line = initLines[initLineIndex];
     const fullText = line.prefix + line.text + " " + line.dots + " " + line.status;
     let charIdx = 0;
 
@@ -108,12 +180,13 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
         // 200ms pause then next line
         setTimeout(() => {
           if (cancelledRef.current) return;
-          if (initLineIndex < INIT_LINES.length - 1) {
+          if (initLineIndex < initLines.length - 1) {
             setInitLineIndex((prev) => prev + 1);
             setInitCharIndex(0);
           } else {
-            // All lines done — play system online chime
+            // All lines done — play system online chime, stop boot hum
             soundRef.current.playSystemOnline();
+            stopBootAudio();
             // 500ms pause then fade out boot, hand off to briefing
             setTimeout(() => {
               if (cancelledRef.current) return;
@@ -144,13 +217,14 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
 
     return () => { cancelledRef.current = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initLineIndex, skipped]);
+  }, [initLineIndex, skipped, initLines]);
 
   // ===== SKIP =====
   const handleSkip = useCallback(() => {
     cancelledRef.current = true;
     setSkipped(true);
     setShowDashboard(true);
+    stopBootAudio();
     onConstellationFadeIn?.();
     soundEngine.startAmbient();
     soundEngine.playClick();
@@ -208,7 +282,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
           }}
         >
           <h1
-            className="text-glow-strong"
+            className={`text-glow-strong${!fadeOutBoot ? " boot-glow-pulse" : ""}`}
             style={{
               fontFamily: "var(--font-heading)",
               fontSize: "clamp(36px, 10vw, 64px)",
@@ -243,7 +317,7 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
             fontSize: "12px",
             lineHeight: 2.0,
           }}>
-            {INIT_LINES.map((line, i) => {
+            {initLines.map((line, i) => {
               if (i > initLineIndex) return null;
 
               const fullText = line.prefix + line.text + " " + line.dots + " " + line.status;
@@ -255,9 +329,10 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
               // Parse the displayed text to colour segments
               const prefixLen = line.prefix.length;
               const statusStart = fullText.length - line.status.length;
+              const isStandby = line.status === "STANDBY";
 
               return (
-                <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", position: "relative" }}>
+                <div key={i} className="boot-line-flash" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", position: "relative" }}>
                   {/* Prefix — blue */}
                   <span style={{ color: "rgba(0,136,255,0.5)" }}>
                     {displayText.slice(0, Math.min(displayText.length, prefixLen))}
@@ -268,9 +343,12 @@ export default function BootSequence({ onComplete, onInitLinesComplete, soundEng
                       {displayText.slice(prefixLen, Math.min(displayText.length, statusStart))}
                     </span>
                   )}
-                  {/* Status — bright blue */}
+                  {/* Status — bright blue for OK, amber for STANDBY */}
                   {displayText.length > statusStart && (
-                    <span style={{ color: "#0088FF", fontWeight: 600 }}>
+                    <span style={{
+                      color: isStandby ? "#FFAA00" : "#0088FF",
+                      fontWeight: 600,
+                    }}>
                       {displayText.slice(statusStart)}
                     </span>
                   )}
