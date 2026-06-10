@@ -149,6 +149,53 @@ export default function WorkspaceLocalJobControls({
       </div>
 
       <form onSubmit={saveLocalChanges} className="mt-4 grid gap-3">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-white/10 pb-3 sm:gap-2">
+          <button
+            type="submit"
+            disabled={!canSave}
+            className="rounded-md bg-stone-100 px-2.5 py-1.5 text-xs font-semibold text-stone-950 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-stone-500 sm:px-3"
+          >
+            {state === "saving" ? "Saving..." : (
+              <>
+                <span className="sm:hidden">Save</span>
+                <span className="hidden sm:inline">Save local changes</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={archiveLocalJob}
+            disabled={state === "archiving" || state === "deleting"}
+            className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-stone-300 disabled:cursor-not-allowed disabled:text-stone-600 sm:px-3"
+          >
+            {state === "archiving" ? "Archiving..." : (
+              <>
+                <span className="sm:hidden">Archive</span>
+                <span className="hidden sm:inline">Archive locally</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={deleteLocalJob}
+            disabled={state === "deleting" || state === "archiving"}
+            className="rounded-md border border-rose-300/20 bg-rose-400/10 px-2.5 py-1.5 text-xs font-semibold text-rose-200 disabled:cursor-not-allowed disabled:text-rose-400/50 sm:px-3"
+          >
+            {state === "deleting" ? "Deleting..." : (
+              <>
+                <span className="sm:hidden">Delete</span>
+                <span className="hidden sm:inline">Delete locally</span>
+              </>
+            )}
+          </button>
+          <p className={classNames(
+            "min-w-0 basis-full text-xs sm:flex-1 sm:basis-auto",
+            state === "error" ? "text-rose-300" : state === "saved" ? "text-emerald-300" : "text-stone-500",
+          )}>
+            {message}
+          </p>
+        </div>
+
         <label className="grid gap-1">
           <span className="text-[11px] font-medium uppercase text-stone-500">Name</span>
           <input
@@ -206,38 +253,6 @@ export default function WorkspaceLocalJobControls({
               ))}
             </select>
           </label>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
-          <button
-            type="submit"
-            disabled={!canSave}
-            className="rounded-md bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-950 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-stone-500"
-          >
-            {state === "saving" ? "Saving..." : "Save local changes"}
-          </button>
-          <button
-            type="button"
-            onClick={archiveLocalJob}
-            disabled={state === "archiving" || state === "deleting"}
-            className="rounded-md border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-stone-300 disabled:cursor-not-allowed disabled:text-stone-600"
-          >
-            {state === "archiving" ? "Archiving..." : "Archive locally"}
-          </button>
-          <button
-            type="button"
-            onClick={deleteLocalJob}
-            disabled={state === "deleting" || state === "archiving"}
-            className="rounded-md border border-rose-300/20 bg-rose-400/10 px-3 py-1.5 text-xs font-semibold text-rose-200 disabled:cursor-not-allowed disabled:text-rose-400/50"
-          >
-            {state === "deleting" ? "Deleting..." : "Delete locally"}
-          </button>
-          <p className={classNames(
-            "min-w-0 basis-full text-xs sm:flex-1 sm:basis-auto",
-            state === "error" ? "text-rose-300" : state === "saved" ? "text-emerald-300" : "text-stone-500",
-          )}>
-            {message}
-          </p>
         </div>
       </form>
     </section>
