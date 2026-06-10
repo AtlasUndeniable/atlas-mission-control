@@ -1,14 +1,14 @@
 "use client";
 
 const METRICS = [
-  { label: "CTR", placeholder: "—%" },
-  { label: "CPL", placeholder: "$—" },
-  { label: "Conversions", placeholder: "—" },
-  { label: "Active Campaigns", placeholder: "—" },
-  { label: "Ad Sets", placeholder: "—" },
-  { label: "Frequency", placeholder: "—" },
-  { label: "Impressions (7D)", placeholder: "—" },
-  { label: "Reach (7D)", placeholder: "—" },
+  { label: "CTR", placeholder: "Awaiting Meta connection" },
+  { label: "CPL", placeholder: "Awaiting Meta connection" },
+  { label: "Conversions", placeholder: "Awaiting Meta connection" },
+  { label: "Active Campaigns", placeholder: "Awaiting Meta connection" },
+  { label: "Ad Sets", placeholder: "Awaiting Meta connection" },
+  { label: "Frequency", placeholder: "Awaiting Meta connection" },
+  { label: "Impressions (7D)", placeholder: "Awaiting Meta connection" },
+  { label: "Reach (7D)", placeholder: "Awaiting Meta connection" },
 ];
 
 export default function MetaAdsPanel() {
@@ -57,7 +57,7 @@ export default function MetaAdsPanel() {
           borderTop: "1px solid rgba(0,136,255,0.06)",
         }}
       >
-        AWAITING MANUS INTEGRATION
+        AWAITING META CONNECTION
       </p>
     </div>
   );

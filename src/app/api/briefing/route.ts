@@ -53,7 +53,18 @@ interface Metrics {
   version?: string;
   generatedAt?: string;
   activeClients?: { ghl?: number; salesLeads?: number; monday?: number };
-  revenue?: { ghlClosedWon?: number; ghlClosedCount?: number };
+  revenue?: {
+    ghlClosedWon?: number;
+    ghlClosedCount?: number;
+    totalRevenue?: number | null;
+    mrr?: number | null;
+    activeSubscribers?: number | null;
+    paymentsCount?: number | null;
+    currency?: string;
+    source?: string;
+    stale?: boolean;
+  };
+  revenueTarget?: number;
   monday?: {
     activeBoardCount?: number;
     totalTasks?: number;
@@ -122,6 +133,7 @@ function buildBriefing(m: Metrics) {
   const mon = m.monday ?? {};
   const ghl = m.ghl ?? {};
   const calls = m.calls?.coaching ?? {};
+  const breakTarget = m.revenueTarget ?? 850000;
   const health = m.health ?? {};
   const kpis = m.kpis ?? {};
   const approvals = readApprovals();
@@ -166,7 +178,14 @@ function buildBriefing(m: Metrics) {
       closedCount: m.revenue?.ghlClosedCount ?? 0,
       mtd: m.revenue?.ghlClosedWon ?? 0,
       projected: 0,
-      breakTarget: 850000,
+      breakTarget: breakTarget,
+      // Preserve null (unknown) so UI can show "—" rather than $0
+      totalRevenue: m.revenue?.totalRevenue ?? null,
+      mrr: m.revenue?.mrr ?? null,
+      activeSubscribers: m.revenue?.activeSubscribers ?? null,
+      paymentsCount: m.revenue?.paymentsCount ?? null,
+      source: m.revenue?.source ?? "unknown",
+      stale: m.revenue?.stale ?? false,
     },
     kpis: {
       callsBooked: calls.thisWeek ?? kpis.callsCoachingThisWeek ?? 0,
@@ -237,7 +256,7 @@ export async function GET() {
         }),
         dayOfWeek: new Date().toLocaleDateString("en-AU", { weekday: "long" }),
         todaysMeetings: 0,
-        revenue: { closedWon: 0, closedCount: 0, mtd: 0, projected: 0, breakTarget: 850000 },
+        revenue: { closedWon: 0, closedCount: 0, mtd: 0, projected: 0, breakTarget: 850000, totalRevenue: 0, mrr: 0, activeSubscribers: 0, paymentsCount: 0 },
         kpis: {
           callsBooked: 0, activeClients: 0, dailyAdSpend: 0, roas: 0,
           slackChannels: 0, closeRate: 0, totalContacts: 0, totalOpportunities: 0,

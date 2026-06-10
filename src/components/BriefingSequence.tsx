@@ -10,6 +10,10 @@ interface BriefingRevenue {
   mtd: number;
   projected: number;
   breakTarget: number;
+  totalRevenue: number | null;
+  mrr: number | null;
+  activeSubscribers: number | null;
+  paymentsCount: number | null;
 }
 
 interface BriefingKpis {
@@ -236,12 +240,13 @@ const KPI_CARDS: KpiDef[] = [
 
 // ===== REVENUE HERO =====
 function RevenueHero({ revenue, visible }: { revenue: BriefingRevenue; visible: boolean }) {
+  const ytd = (revenue.totalRevenue ?? 0) > 0 ? (revenue.totalRevenue as number) : revenue.mtd;
   const [animatedValue, setAnimatedValue] = useState(0);
-  const targetRef = useRef(revenue.mtd);
+  const targetRef = useRef(ytd);
 
   useEffect(() => {
     if (!visible) return;
-    targetRef.current = revenue.mtd;
+    targetRef.current = ytd;
     const duration = 1500;
     const start = performance.now();
     let raf: number;
@@ -253,13 +258,13 @@ function RevenueHero({ revenue, visible }: { revenue: BriefingRevenue; visible: 
     }
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [visible, revenue.mtd]);
+  }, [visible, ytd]);
 
   const progress = revenue.breakTarget > 0
-    ? Math.min((revenue.mtd / revenue.breakTarget) * 100, 100)
+    ? Math.min((ytd / revenue.breakTarget) * 100, 100)
     : 0;
 
-  const hasRevenue = revenue.mtd > 0;
+  const hasRevenue = ytd > 0;
 
   return (
     <div
@@ -280,7 +285,7 @@ function RevenueHero({ revenue, visible }: { revenue: BriefingRevenue; visible: 
           color: "rgba(255,255,255,0.35)",
           textTransform: "uppercase",
         }}>
-          Revenue MTD
+          Year-to-Date Revenue
         </span>
         {!hasRevenue && (
           <span style={{
@@ -571,7 +576,7 @@ export default function BriefingSequence({
   if (!ready) return null;
 
   const timestamp = briefing?.timestamp ?? "";
-  const revenue = briefing?.revenue ?? { closedWon: 0, closedCount: 0, mtd: 0, projected: 0, breakTarget: 850000 };
+  const revenue = briefing?.revenue ?? { closedWon: 0, closedCount: 0, mtd: 0, projected: 0, breakTarget: 850000, totalRevenue: 0, mrr: 0, activeSubscribers: 0, paymentsCount: 0 };
   const kpis = briefing?.kpis ?? { callsBooked: 0, activeClients: 0, dailyAdSpend: 0, roas: 0, slackChannels: 0, closeRate: 0, totalContacts: 0, totalOpportunities: 0, tasksInProgress: 0, taskCompletion: 0 };
 
   return (
@@ -586,7 +591,6 @@ export default function BriefingSequence({
         transform: fadeOut ? "translateY(-20px)" : "translateY(0)",
         transition: "opacity 1s ease-out, transform 1s ease-out",
         pointerEvents: fadeOut ? "none" : "auto",
-        overflow: "hidden",
       }}
     >
       {/* Backdrop */}
@@ -609,14 +613,13 @@ export default function BriefingSequence({
           zIndex: 1,
           flex: 1,
           overflowY: "auto",
-          display: "flex",
-          justifyContent: "center",
+          WebkitOverflowScrolling: "touch",
           cursor: typingDone ? "default" : "pointer",
           paddingTop: "clamp(32px, 4vh, 60px)",
-          paddingBottom: "120px",
+          paddingBottom: "60px",
         }}
       >
-        <div style={{ maxWidth: "820px", width: "100%", padding: "0 32px" }}>
+        <div style={{ maxWidth: "820px", width: "100%", padding: "0 32px", margin: "0 auto" }}>
 
           {/* ===== HEADER: ATLAS + timestamp ===== */}
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
@@ -733,50 +736,44 @@ export default function BriefingSequence({
               }} />
             )}
           </div>
+
+          {/* ===== ENTER DASHBOARD BUTTON (inline, after content) ===== */}
+          {typingDone && !fadeOut && (
+            <div style={{
+              display: "flex",
+              justifyContent: "center",
+              padding: "40px 0 24px",
+              animation: "briefingButtonFadeIn 0.8s ease-out",
+            }}>
+              <button
+                onClick={handleEnter}
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  letterSpacing: "0.2em",
+                  color: "#0088FF",
+                  background: "transparent",
+                  border: "1px solid rgba(0,136,255,0.3)",
+                  padding: "14px 40px",
+                  cursor: "pointer",
+                  transition: "border-color 0.3s, background 0.3s, color 0.3s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "rgba(0,136,255,0.6)";
+                  e.currentTarget.style.background = "rgba(0,136,255,0.08)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "rgba(0,136,255,0.3)";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {"ENTER DASHBOARD \u2192"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* ===== ENTER DASHBOARD BUTTON ===== */}
-      {typingDone && !fadeOut && (
-        <div style={{
-          position: "fixed",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          display: "flex",
-          justifyContent: "center",
-          padding: "32px 0 40px",
-          background: "linear-gradient(transparent, rgba(5,5,16,0.95) 40%)",
-          zIndex: 2,
-          animation: "briefingButtonFadeIn 0.8s ease-out",
-        }}>
-          <button
-            onClick={handleEnter}
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "12px",
-              fontWeight: 600,
-              letterSpacing: "0.2em",
-              color: "#0088FF",
-              background: "transparent",
-              border: "1px solid rgba(0,136,255,0.3)",
-              padding: "14px 40px",
-              cursor: "pointer",
-              transition: "border-color 0.3s, background 0.3s, color 0.3s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = "rgba(0,136,255,0.6)";
-              e.currentTarget.style.background = "rgba(0,136,255,0.08)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = "rgba(0,136,255,0.3)";
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            {"ENTER DASHBOARD \u2192"}
-          </button>
-        </div>
-      )}
 
       {/* ===== SKIP HINT ===== */}
       {!fadeOut && !typingDone && (

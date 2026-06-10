@@ -51,6 +51,9 @@ export default function KpiCard({
   accentClass = "kpi-accent-cyan",
 }: KpiCardProps) {
   const isDash = value === "—" || value === "";
+  const strValue = String(value);
+  const isLongText = typeof value === "string" && strValue.length > 6 && !/^\$?[\d,.]+%?$/.test(strValue);
+  const valueFontSize = isLongText ? "22px" : "42px";
 
   return (
     <div className={`glass-card hud-corners p-5 ${accentClass}`} style={{ position: "relative" }}>
@@ -75,11 +78,11 @@ export default function KpiCard({
 
       <p style={{
         fontFamily: "var(--font-mono)",
-        fontSize: "42px",
+        fontSize: valueFontSize,
         fontWeight: 700,
         lineHeight: 1,
         color: isDash ? "#374151" : "#FFFFFF",
-        letterSpacing: "-0.02em",
+        letterSpacing: isLongText ? "0.02em" : "-0.02em",
         marginBottom: "6px",
       }}>
         {connecting ? (
