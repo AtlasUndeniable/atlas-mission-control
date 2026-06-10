@@ -1,7 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const AUTH_USER = process.env.MISSION_CONTROL_AUTH_USER;
 const AUTH_PASSWORD = process.env.MISSION_CONTROL_AUTH_PASSWORD;
+
+// ===== CLOUDFLARE ACCESS JWT =====
+// Both env vars must be set or the JWT path stays OFF (Basic Auth only).
+// Values come from the Cloudflare Zero Trust dashboard (.env.local).
+const CF_ACCESS_TEAM_DOMAIN = process.env.CF_ACCESS_TEAM_DOMAIN;
+const CF_ACCESS_AUD = process.env.CF_ACCESS_AUD;
+
+const cfAccessIssuer = CF_ACCESS_TEAM_DOMAIN
+  ? `https://${CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, "").replace(/\/+$/, "")}`
+  : null;
+
+// Module-scoped so jose's built-in JWKS cache survives across requests.
+let cfAccessJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+async function checkCfAccessJwt(request: NextRequest): Promise<boolean> {
+  if (!cfAccessIssuer || !CF_ACCESS_AUD) return false;
+
+  // Only the signed assertion counts. Cf-Access-* identity headers
+  // (e.g. Cf-Access-Authenticated-User-Email) are client-forgeable and
+  // must never be trusted without this signature check.
+  const token = request.headers.get("cf-access-jwt-assertion");
+  if (!token) return false;
+
+  try {
+    cfAccessJwks ??= createRemoteJWKSet(
+      new URL(`${cfAccessIssuer}/cdn-cgi/access/certs`),
+    );
+    await jwtVerify(token, cfAccessJwks, {
+      issuer: cfAccessIssuer,
+      audience: CF_ACCESS_AUD,
+      algorithms: ["RS256"],
+      requiredClaims: ["exp", "iat"],
+    });
+    return true;
+  } catch (error) {
+    // Bad signature, wrong aud/iss, expired, malformed, or JWKS fetch
+    // failure — all fail closed to the Basic Auth fallback. Log the error
+    // class only (never the token) so a JWKS outage is distinguishable
+    // from a forged token in the logs.
+    const reason =
+      error instanceof Error ? `${error.name}: ${error.message}` : "unknown error";
+    console.warn(`[middleware] Cf-Access JWT rejected — ${reason}`);
+    return false;
+  }
+}
 
 // ===== BASIC AUTH =====
 function checkBasicAuth(request: NextRequest): boolean {
@@ -27,13 +73,19 @@ function unauthorizedResponse(): NextResponse {
 }
 
 // ===== MIDDLEWARE =====
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   // Fail closed if auth env vars are not configured
   if (!AUTH_USER || !AUTH_PASSWORD) {
     return new NextResponse("Mission Control auth not configured", { status: 503 });
   }
 
-  // Basic Auth on every request — no bypass. The Host header is
+  // Cloudflare tunnel traffic (W1c) authenticates with a verified Access
+  // JWT and never sees the Basic Auth dialog.
+  if (await checkCfAccessJwt(request)) {
+    return NextResponse.next();
+  }
+
+  // Basic Auth on every other request — no bypass. The Host header is
   // client-supplied and must never gate auth or network restrictions;
   // network-level restriction belongs at the bind address (package.json).
   if (!checkBasicAuth(request)) {
