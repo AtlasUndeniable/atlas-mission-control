@@ -96,10 +96,14 @@ function useGreeting(): string {
 // ===== UPTIME COUNTER =====
 function useUptime(): string {
   const [uptime, setUptime] = useState("UP 0d 00:00:00");
-  const startRef = useRef(Date.now());
+  const startRef = useRef<number | null>(null);
   useEffect(() => {
+    // Start time is captured on first effect run (not during render, which
+    // must stay pure) and survives StrictMode effect re-runs via the ref.
+    if (startRef.current === null) startRef.current = Date.now();
+    const start = startRef.current;
     const update = () => {
-      const elapsed = Date.now() - startRef.current;
+      const elapsed = Date.now() - start;
       const totalSec = Math.floor(elapsed / 1000);
       const days = Math.floor(totalSec / 86400);
       const hrs = Math.floor((totalSec % 86400) / 3600);

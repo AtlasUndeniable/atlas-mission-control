@@ -391,11 +391,16 @@ export default function ApprovalQueue() {
   }, []);
 
   useEffect(() => {
-    fetchApprovals();
-    fetchSlackActivity();
+    // Initial poll is deferred a tick so no state update runs synchronously
+    // inside the effect body (react-hooks/set-state-in-effect).
+    const initialPoll = setTimeout(() => {
+      fetchApprovals();
+      fetchSlackActivity();
+    }, 0);
     const interval1 = setInterval(fetchApprovals, 10000);
     const interval2 = setInterval(fetchSlackActivity, 10000);
     return () => {
+      clearTimeout(initialPoll);
       clearInterval(interval1);
       clearInterval(interval2);
     };

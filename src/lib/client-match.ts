@@ -23,7 +23,7 @@ export function extractClientName(sourceCall: string | null | undefined): string
   // Skip obvious non-client labels (pure dates, etc.)
   if (/^[A-Z][a-z]{2}\s+\d/.test(sourceCall)) return null;
 
-  let cleaned = sourceCall
+  const cleaned = sourceCall
     .replace(/\s*\(.*?\)/g, "")
     .replace(/^undeniable\s+\w+\s*:\s*/i, "")
     .replace(/\b(L2|call|session|coaching|mentoring|check.?in|catch.?up)\b/gi, "")
