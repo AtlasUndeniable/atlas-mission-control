@@ -308,11 +308,12 @@ Acceptance:
 
 ## UI And Design Requirements
 
-Use the design sprint plan and ATLAS UI Soul as the visual source material, but do not let visual sprint work bypass product safety.
+Workspace design follows docs/design/atlas-workspace-design-pass.md (approved): chat-first Manus-style. Conversation as the main canvas, composer as front door, sidebar = projects/tasks, collapsible task chips, inline artifact cards, status as iconography not pills, restrained dark palette. The design sprint plan and ATLAS UI Soul are visual source material ONLY for the Mission Control dashboard, never the Workspace. Do not let visual work on either surface bypass product safety.
 
 Required UI principles:
 
-- Command-centre feel with dense useful information.
+- Workspace: chat-first canvas per the design pass; no status pills, no dashboard cards.
+- Mission Control dashboard: command-centre feel with dense useful information.
 - No fake dashboard numbers.
 - "Connecting" states for missing integrations.
 - Visible job/run progress.

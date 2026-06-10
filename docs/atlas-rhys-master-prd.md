@@ -6,6 +6,14 @@ Audience: implementation agent, Dante/operator, and future Atlas product reviewe
 
 This document supersedes the narrower Slack-baseline PRD as the product north star. The Slack-baseline docs remain source material for the proven intake/status/delivery spine.
 
+## Canon Map
+
+This document is the canonical implementation requirements on the Mac. Engagement-level architecture and execution sequencing live in the Vader atlas-client namespace (manus-emulation blueprint plus build orchestration plan). On conflict:
+
+- Design: the design pass (docs/design/atlas-workspace-design-pass.md) wins.
+- Runtime architecture: the agent architecture doc wins.
+- Execution order: the orchestration plan wins.
+
 ## Executive Summary
 
 Atlas must become the operating workspace Rhys and his team can actually use every day. Slack should feel reliable again, but Slack is not the product centre. Slack is the intake, status, and delivery edge. Workspace is the Manus-grade workbench where jobs, artifacts, approvals, source context, team lanes, and access controls live.
@@ -169,7 +177,7 @@ Acceptance:
 - Run timeline shows meaningful progress without leaking internals.
 - Plan cards, source chips, artifact cards, revision actions, and approval actions are visible.
 - Empty/loading/error states are polished and honest.
-- Design follows ATLAS UI Soul and the design sprint plan: command-centre feel, dense but usable, not generic SaaS cards.
+- Workspace design follows docs/design/atlas-workspace-design-pass.md (approved): chat-first Manus-style. Conversation as the main canvas, composer as front door, sidebar = projects/tasks, collapsible task chips, inline artifact cards, status as iconography not pills, restrained dark palette. ATLAS UI Soul / design-sprint command-centre styling applies ONLY to the Mission Control dashboard (see PRD-7), never the Workspace.
 - Mobile/responsive layouts do not overlap or clip text.
 
 ### PRD-7: Mission Control Dashboard Supports The Workspace, Not The Reverse
