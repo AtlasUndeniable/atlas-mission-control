@@ -30,6 +30,7 @@ async function withTempRoots(fn) {
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
       "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
       "services/slack-listener/listener.mjs": "source listener\n",
+      "services/workspace-worker/worker.mjs": "source workspace worker\n",
     });
     await seedRuntimeTree(targetRoot, {
       "lib/queue-writer.mjs": "source queue writer\n",
@@ -45,6 +46,7 @@ async function withTempRoots(fn) {
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
       "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
       "services/slack-listener/listener.mjs": "old listener\n",
+      "services/workspace-worker/worker.mjs": "source workspace worker\n",
     });
     await fn({ sourceRoot, targetRoot });
   } finally {
@@ -83,6 +85,7 @@ test("buildRuntimePlan owns exactly the Slack listener runtime files", async () 
       "lib/slack-dm-jobs.mjs",
       "lib/slack-dm-jobs.test.mjs",
       "services/slack-listener/listener.mjs",
+      "services/workspace-worker/worker.mjs",
     ]);
     const replyPlan = plan.find((item) => item.relativePath === "lib/slack-listener-reply.mjs");
     assert.equal(replyPlan.sourceSha256, sha256("source reply\n"));

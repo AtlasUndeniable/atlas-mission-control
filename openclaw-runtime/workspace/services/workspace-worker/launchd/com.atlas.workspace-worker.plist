@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PROPOSED — NOT INSTALLED. Install path: ~/Library/LaunchAgents/
+  SLACK_BOT_TOKEN is a placeholder: inject the real value at install time with
+  PlistBuddy (mirror the existing com.atlas.slack-listener.plist env block).
+  Never commit a real token into this file.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.workspace-worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>/Users/atlasai/.openclaw/workspace/services/workspace-worker/worker.mjs</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/atlasai</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>SLACK_BOT_TOKEN</key>
+        <string>REPLACE_AT_INSTALL</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/atlasai/.openclaw/logs/workspace-worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/atlasai/.openclaw/logs/workspace-worker.log</string>
+</dict>
+</plist>
