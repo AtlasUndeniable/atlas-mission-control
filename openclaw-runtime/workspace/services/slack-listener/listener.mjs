@@ -5,9 +5,10 @@ import { WebSocket } from "ws";
 import { execFile, execFileSync } from "node:child_process";
 import { runGates } from "../../lib/slack-gates.mjs";
 import { holdAndAlert } from "../../lib/slack-gate-actions.mjs";
-import { recordArtifactCreated, recordDeliveryState } from "../../lib/artifact-delivery.mjs";
+import { recordArtifactCreated, recordDeliveryState, readDeliveryLedger, scanExportArtifactGroups } from "../../lib/artifact-delivery.mjs";
 import { sendRhysDmArtifact, selectPreferredArtifactPath } from "../../lib/slack-rhys-dm-artifact.mjs";
 import { executeSlackAssetWorkflow, findSlackAssetWorkflowForRequest } from "../../lib/slack-asset-workflows.mjs";
+import { runRetrievalLane } from "../../lib/slack-retrieval.mjs";
 import {
   findLatestDeliveryCandidate,
   findRecentSlackDmJob,
@@ -31,6 +32,7 @@ import {
   isMisdirectedDeliveryReply,
   isLikelyLongRunningRequest,
   isRetrievalIntentRequest,
+  isRetrievalRequest,
   isStatusFollowup,
   isTimeoutDebugFollowup,
   isUsefulGatewayReply,
@@ -373,6 +375,97 @@ async function handleMessage(event) {
     preferredDelivery: deliveryPreference.preferredDelivery,
     preferredDeliveryReason: deliveryPreference.reason,
   });
+
+  // Read-only retrieval lane — AHEAD of the delivery-followup lane. A request
+  // that names a referent to find ("find the VSL framework I sent before and
+  // send it to me") resolves against files that already exist; it must never
+  // fall into the produce-or-block asset lane (the over-block) nor be hijacked
+  // by findLatestDeliveryCandidate (which would deliver a different recent
+  // job's file). Bare "send it to me here" has no retrieval verb and falls
+  // through to the delivery-followup lane below. Status follow-ups phrased
+  // with a retrieval verb ("any update — did you find the doc?") keep their
+  // status_check kind and go to the status lane, not here.
+  if (job.kind !== "status_check" && isRetrievalRequest(text)) {
+    const now = new Date().toISOString();
+    try {
+      const result = await runRetrievalLane({
+        text,
+        channel,
+        userId,
+        scanExports: () => scanExportArtifactGroups(),
+        readLedger: () => readDeliveryLedger(),
+        listBotFiles: async () => {
+          // files.list needs files:read; if the token lacks it Slack returns
+          // ok:false (missing_scope) → degrade to exports+ledger. Slack files
+          // only confirm existence — the resolver never surfaces a Slack-only
+          // file as deliverable (the gated send needs a local on-disk path).
+          const res = await slackApi("files.list", { count: 100 });
+          if (res?.ok) return { ok: true, files: res.files || [] };
+          return { ok: false, scope_missing: res?.error === "missing_scope" };
+        },
+        selectArtifactPath: selectPreferredArtifactPath,
+        sendArtifact: ({ artifactPath, title, message }) => sendRhysDmArtifact({
+          artifactPath, sourceChannel: channel, requestedBy: userId, title, message, token: BOT_TOKEN,
+        }),
+      });
+
+      if (result.kind === "delivered") {
+        await updateSlackDmJob(job.id, {
+          status: "delivered",
+          completedAt: now,
+          deliveredAt: now,
+          replyText: result.receipt?.text || "Found it. I attached it here.",
+          preferredDelivery: "slack_dm",
+          deliveryResult: {
+            channelId: result.receipt.channelId,
+            fileId: result.receipt.fileId,
+            messageTs: result.receipt.messageTs,
+            filename: result.receipt.filename,
+          },
+          retrievalResolved: "match",
+        });
+        log("✅", `Retrieval delivered job=${job.id} file=${result.receipt.fileId}`);
+        return;
+      }
+      if (result.kind === "ambiguous") {
+        await updateSlackDmJob(job.id, {
+          status: "answered",
+          completedAt: now,
+          replyText: result.reply,
+          retrievalResolved: "ambiguous",
+          preferredDelivery: "slack_dm",
+        });
+        await sendSlackMessage(channel, result.reply, threadTs, { kind: "summary", callerSite: "retrieval-ambiguous" });
+        log("✅", `Retrieval ambiguous job=${job.id} candidates=${result.candidates.length}`);
+        return;
+      }
+      // not_found — honest, never fabricates.
+      await updateSlackDmJob(job.id, {
+        status: "answered",
+        completedAt: now,
+        replyText: result.reply,
+        retrievalResolved: "not_found",
+        safeErrorSummary: "Retrieval found no existing file matching the request; offered to build instead.",
+        preferredDelivery: "slack_dm",
+      });
+      await sendSlackMessage(channel, result.reply, threadTs, { kind: "summary", callerSite: "retrieval-not-found" });
+      log("ℹ️", `Retrieval no-match job=${job.id}${result.slackScopeMissing ? " (files:read scope missing)" : ""}`);
+      return;
+    } catch (retrErr) {
+      // Retrieval failure must not fabricate or fall through to produce-or-block.
+      const reply = "I couldn't search for that just now. Want me to try again or build one?";
+      await updateSlackDmJob(job.id, {
+        status: "answered",
+        completedAt: now,
+        replyText: reply,
+        retrievalResolved: "error",
+        safeErrorSummary: "Retrieval lane error; no file sent.",
+      });
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-error" });
+      log("⚠️", `Retrieval error job=${job.id}: ${retrErr.message}`);
+      return;
+    }
+  }
 
   if (isDeliveryRequestFollowup(text)) {
     const deliveryJob = findLatestDeliveryCandidate({ channel, userId, excludeId: job.id, maxAgeMinutes: 720 });

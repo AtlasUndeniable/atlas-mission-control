@@ -357,7 +357,11 @@ test("misrouted gateway replies stay visible as workspace job with Slack DM pref
 
 test("classification covers main Slack request families", () => {
   assert.equal(classifySlackRequest(RICKY_REQUEST), "document_request");
-  assert.equal(classifySlackRequest("send me a client brief"), "document_request");
+  // "send me <doc-kind>" with no build verb resolves against EXISTING files
+  // first (honest build offer on miss) — the retrieval taxonomy, not
+  // produce-or-block document_request.
+  assert.equal(classifySlackRequest("send me a client brief"), "retrieval");
+  assert.equal(classifySlackRequest("build me a client brief pdf"), "document_request");
   assert.equal(classifySlackRequest("run an audit for this Typeform"), "audit_request");
   assert.equal(classifySlackRequest("make 10 content hooks"), "content_request");
   assert.equal(classifySlackRequest("look up the latest notes"), "general_research");

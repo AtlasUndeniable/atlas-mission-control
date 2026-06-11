@@ -39,7 +39,7 @@ export const VERIFIED_SLACK_ASSET_WORKFLOWS = Object.freeze([
     match(text) {
       const normalized = normalizeRequestText(text);
       const asksFirst10k = /\b(first|1st)?\s*\$?10k\b|\bfirst\s+ten\s+k\b|\bfirst\s+10\s*k\b/.test(normalized);
-      const asksOnlineCoach = /\b(online\s+coach|coach|coaching)\b/.test(normalized);
+      const asksOnlineCoach = /\b(online\s+coach(?:es)?|coach(?:es)?|coaching)\b/.test(normalized);
       const asksAsset = /\b(asset|doc|document|pdf|playbook|strategy|strategic|model|pricing|offer|retention|sales)\b/.test(normalized);
       return asksFirst10k && asksOnlineCoach && asksAsset;
     },

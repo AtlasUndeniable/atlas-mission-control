@@ -29,6 +29,7 @@ async function withTempRoots(fn) {
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
       "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
+      "lib/slack-retrieval.mjs": "source retrieval\n",
       "services/slack-listener/listener.mjs": "source listener\n",
       "services/workspace-worker/worker.mjs": "source workspace worker\n",
     });
@@ -45,6 +46,7 @@ async function withTempRoots(fn) {
       "lib/slack-listener-reply.test.mjs": "source reply test\n",
       "lib/slack-dm-jobs.mjs": "source dm jobs\n",
       "lib/slack-dm-jobs.test.mjs": "source dm jobs test\n",
+      "lib/slack-retrieval.mjs": "source retrieval\n",
       "services/slack-listener/listener.mjs": "old listener\n",
       "services/workspace-worker/worker.mjs": "source workspace worker\n",
     });
@@ -84,6 +86,7 @@ test("buildRuntimePlan owns exactly the Slack listener runtime files", async () 
       "lib/slack-listener-reply.test.mjs",
       "lib/slack-dm-jobs.mjs",
       "lib/slack-dm-jobs.test.mjs",
+      "lib/slack-retrieval.mjs",
       "services/slack-listener/listener.mjs",
       "services/workspace-worker/worker.mjs",
     ]);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { mutateQueueSync } from "./queue-writer.mjs";
+import { isRetrievalRequest } from "./slack-listener-reply.mjs";
 
 export const SLACK_DM_JOBS_PATH = "/Users/atlasai/.openclaw/data/slack-dm-jobs.json";
 
@@ -70,6 +71,9 @@ export function hasSlackDeliveryReceipt(deliveryResult = {}) {
 
 export function classifySlackRequest(text = "") {
   const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+  // Retrieval is checked FIRST: "find the doc I sent before" must not be
+  // swallowed by the document_request branch and routed to produce-or-block.
+  if (isRetrievalRequest(normalized)) return "retrieval";
   if (/\b(asset|playbook|workbook|worksheet|guide)\b/.test(normalized) && /\b(create|make|build|generate|pdf|doc|document|deck)\b/.test(normalized)) return "asset_request";
   if (/\b(audit|typeform|executive audit)\b/.test(normalized)) return "audit_request";
   if (/\b(doc|document|pdf|deck|brief|transcript|transcripts|call library|all the calls|every call)\b/.test(normalized)) return "document_request";

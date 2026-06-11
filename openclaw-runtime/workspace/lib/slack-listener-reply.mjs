@@ -83,27 +83,62 @@ export function isLikelyLongRunningRequest(text = "") {
   const hasResearchVerb = /\b(find|search|look for|pull|gather|source|research|examples?)\b/.test(normalized);
   const hasBuildVerb = /\b(add|create|make|build|generate|turn it into|update|revise)\b/.test(normalized);
   const hasArtifactCue = /\b(doc|document|pdf|brief|audit|report|transcript|deck|visual|diagram|pyramid|recommendation|recommendations|pay structure|pay bands|client bands|per client|calls?|source-backed)\b/.test(normalized);
-  return /\b(doc|document|pdf|deck|brief|audit|report|transcript|transcripts|call library|all the calls|every call)\b/.test(normalized)
-    || /\b(build|generate|create|make)\b.*\b(doc|document|pdf|brief|audit|report|transcript|deck)\b/.test(normalized)
+  return /\b(doc|document|pdf|deck|brief|audit|report|transcript|transcripts|call library|all the calls|every call|framework|playbook)\b/.test(normalized)
+    || /\b(build|generate|create|make)\b.*\b(doc|document|pdf|brief|audit|report|transcript|deck|framework|playbook)\b/.test(normalized)
     || /\bwith links to every call\b/.test(normalized)
     || /\bexamples in other calls\b/.test(normalized)
     || (hasResearchVerb && hasArtifactCue)
     || (hasResearchVerb && hasBuildVerb && /\b(call|calls|client|ricky|visual|recommendation|pay)\b/.test(normalized));
 }
 
-// Retrieval intent: the request asks Atlas to FIND something that already
-// exists (sent/shared before), not to build a new asset. Used only to pick
-// the honest acknowledgement copy; it never changes job routing.
+// Retrieval intent — same predicate as the routing decision so the asset
+// lane's fall-through ack can never call a retrieval a "can't build".
 export function isRetrievalIntentRequest(text = "") {
+  return isRetrievalRequest(text);
+}
+
+// Document referents that name an EXISTING deliverable kind. Used to tell a
+// retrieve-existing request apart from a build-new one.
+const RETRIEVAL_REFERENT = /\b(vsl|framework|handover|hand-?over|playbook|sop|template|script|doc|document|pdf|file|guide|brief|deck|audit|report)\b/;
+const RETRIEVAL_VERB = /\b(find|locate|look for|search for|search|dig up|pull up|resend|re-send|fetch|grab|get me|send me)\b/;
+const EXISTING_REFERENT_CUE = /\b(again|before|previous|previously|earlier|existing|original|already|last time|last week|yesterday|the one|that doc|that file)\b/;
+// Past-tense send against a recipient — "i sent the client", "shared with
+// clients", "gave a client" — marks the referent as already existing even
+// without a "before/already" temporal cue.
+const PAST_SEND_CUE = /\b(sent|shared|gave|made|created)\b.{0,80}\b((to|with|for)\s+)?(a|the|my|our)?\s*clients?\b|\b(sent|shared|gave)\b.{0,40}\b(in slack|over slack|via slack)\b|\b(i|we)\s+(have\s+)?(sent|shared|gave|made|created)\b/;
+
+/**
+ * ROUTING predicate: should this request enter the read-only retrieval lane
+ * (ahead of the produce-or-block asset lane AND ahead of the bare
+ * delivery-followup lane)? Fires on a retrieval verb against an existing
+ * referent — anaphoric ("find it and send it"), temporally cued ("...I sent
+ * before"), past-sent ("...I shared with clients"), or a plainly named doc
+ * kind with no build ask ("pull up the vsl framework"). A bare "send it to
+ * me here" with no retrieval verb is NOT retrieval and falls through to the
+ * delivery-followup lane. "find the top objections and build a summary doc"
+ * is a build, not retrieval.
+ */
+export function isRetrievalRequest(text = "") {
   const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
-  // "resend" can only refer to something that already exists.
   if (/\bresend\b/.test(normalized)) return true;
-  // "find it/that" is anaphoric retrieval; "find the X" alone is not enough
-  // (e.g. "find the top objections and build a summary doc" is a build).
-  return /\b(find|locate|look for|search for|dig up|pull up)\b/.test(normalized)
-    && (/\b(again|before|previous|previously|earlier|existing|original|already|last time|last week|yesterday)\b/.test(normalized)
-      || /\bfind (it|that)\b/.test(normalized)
-      || /\b(sent|shared|gave|made)\b.{0,60}\b(before|already|previously|in slack|to (a )?client)/.test(normalized));
+  if (!RETRIEVAL_VERB.test(normalized)) return false;
+  // A build verb anywhere means the request wants something NEW created —
+  // never capture it into the read-only lane.
+  const asksToBuild = /\b(build|create|make|generate|draft|write|turn it into)\b/.test(normalized);
+  const anaphoric = /\b(find|locate|fetch|grab|pull up|dig up)\s+(it|that|this)\b/.test(normalized);
+  const existing = EXISTING_REFERENT_CUE.test(normalized) || PAST_SEND_CUE.test(normalized);
+  const named = RETRIEVAL_REFERENT.test(normalized);
+  // Strong retrieval signals capture even alongside a build verb — a mixed
+  // "find the X I sent before and build a new one" delivers the existing
+  // file now; the lane appends an honest note that the build is a separate
+  // ask. Weak signals defer to the build lane.
+  if (anaphoric) return true;
+  if (existing && named) return true;
+  if (existing && !asksToBuild) return true;
+  // Named doc kind + retrieval verb + no build ask: "pull up the vsl
+  // framework", "can you locate the onboarding sop".
+  if (named && !asksToBuild) return true;
+  return false;
 }
 
 export function workspaceAckForRequest({ jobId, state = "queued" } = {}) {
