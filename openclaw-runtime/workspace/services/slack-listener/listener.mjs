@@ -1,18 +1,23 @@
 import https from "node:https";
 import http from "node:http";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { WebSocket } from "ws";
 import { execFile, execFileSync } from "node:child_process";
 import { runGates } from "../../lib/slack-gates.mjs";
 import { holdAndAlert } from "../../lib/slack-gate-actions.mjs";
-import { recordArtifactCreated, recordDeliveryState, readDeliveryLedger, scanExportArtifactGroups } from "../../lib/artifact-delivery.mjs";
-import { sendRhysDmArtifact, selectPreferredArtifactPath } from "../../lib/slack-rhys-dm-artifact.mjs";
+// SINGLE-OWNER DELIVERY (2026-06-11 race fix): the listener deliberately does
+// NOT import sendRhysDmArtifact or recordSlackDmJobDelivered any more. Every
+// artifact upload to Rhys goes through the workspace worker; the listener only
+// queues delivery (delivery_requested + deliveryMessage) and acks in text.
+import { recordArtifactCreated, readDeliveryLedger, scanExportArtifactGroups } from "../../lib/artifact-delivery.mjs";
+import { RHYS_USER_ID, selectPreferredArtifactPath } from "../../lib/slack-rhys-dm-artifact.mjs";
 import { executeSlackAssetWorkflow, findSlackAssetWorkflowForRequest } from "../../lib/slack-asset-workflows.mjs";
 import { runRetrievalLane } from "../../lib/slack-retrieval.mjs";
 import {
+  findCarrierJobForArtifactGroup,
   findLatestDeliveryCandidate,
   findRecentSlackDmJob,
-  recordSlackDmJobDelivered,
+  listSlackDmJobs,
   summarizeSlackDmJob,
   transitionSlackDmJob,
   upsertSlackDmJob,
@@ -21,6 +26,7 @@ import {
 import {
   approvalBlockedArtifactText,
   assetWorkflowBlockedText,
+  deliveryQueuedText,
   deliveryRequestedText,
   extractGatewayReply,
   draftFailedHandoffText,
@@ -42,6 +48,7 @@ import {
   prepareSlackReply,
   preferredDeliveryForSlackRequest,
   retrievalAckText,
+  retrievalQueuedText,
   splitProviderModel,
   workspaceAckForRequest,
 } from "../../lib/slack-listener-reply.mjs";
@@ -325,6 +332,14 @@ async function notifyRhysFallback(senderId, channel, messageSnippet, reason) {
   }
 }
 
+// Delivery may only be QUEUED for the Rhys DM — the worker filters on the
+// same pair, and the gated send enforces it again at upload time. Queueing
+// anything else would strand a job in delivery_requested that no process is
+// allowed to deliver (the old inline send surfaced this by throwing).
+function canQueueRhysDmDelivery(channel, userId) {
+  return channel === RHYS_DM_CHANNEL && userId === RHYS_USER_ID;
+}
+
 // ── Handle Message ──
 async function handleMessage(event) {
   if (event.bot_id || event.subtype) return;
@@ -387,6 +402,7 @@ async function handleMessage(event) {
   // status_check kind and go to the status lane, not here.
   if (job.kind !== "status_check" && isRetrievalRequest(text)) {
     const now = new Date().toISOString();
+    let queuedCarrierId = null;
     try {
       const result = await runRetrievalLane({
         text,
@@ -394,6 +410,9 @@ async function handleMessage(event) {
         userId,
         scanExports: () => scanExportArtifactGroups(),
         readLedger: () => readDeliveryLedger(),
+        // Ledger rows can reference files deleted since; resolving a dead
+        // path would queue a delivery the worker can never perform.
+        fileExists: existsSync,
         listBotFiles: async () => {
           // files.list needs files:read; if the token lacks it Slack returns
           // ok:false (missing_scope) → degrade to exports+ledger. Slack files
@@ -404,27 +423,78 @@ async function handleMessage(event) {
           return { ok: false, scope_missing: res?.error === "missing_scope" };
         },
         selectArtifactPath: selectPreferredArtifactPath,
-        sendArtifact: ({ artifactPath, title, message }) => sendRhysDmArtifact({
-          artifactPath, sourceChannel: channel, requestedBy: userId, title, message, token: BOT_TOKEN,
-        }),
+        // SINGLE-OWNER DELIVERY (2026-06-11 race fix): retrieval resolves the
+        // file but never uploads it — the workspace worker owns ALL uploads.
+        // A resolved file can belong to a still-pending ledger job the worker
+        // also targets; an inline send here is the double-DM race again.
+        sendArtifact: async ({ artifactPath, title, message }) => ({ queued: true, artifactPath, title, message }),
       });
 
       if (result.kind === "delivered") {
-        await updateSlackDmJob(job.id, {
-          status: "delivered",
-          completedAt: now,
-          deliveredAt: now,
-          replyText: result.receipt?.text || "Found it. I attached it here.",
-          preferredDelivery: "slack_dm",
-          deliveryResult: {
-            channelId: result.receipt.channelId,
-            fileId: result.receipt.fileId,
-            messageTs: result.receipt.messageTs,
-            filename: result.receipt.filename,
-          },
-          retrievalResolved: "match",
+        const queued = result.receipt; // { queued, artifactPath, title, message }
+        if (!canQueueRhysDmDelivery(channel, userId)) {
+          const reply = approvalBlockedArtifactText({ artifactPaths: [queued.artifactPath] });
+          await updateSlackDmJob(job.id, {
+            status: "blocked_needs_approval",
+            completedAt: now,
+            replyText: reply,
+            safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
+            retrievalResolved: "match",
+          });
+          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-not-rhys-dm" });
+          log("⚠️", `Retrieval delivery blocked (not Rhys DM) job=${job.id}`);
+          return;
+        }
+        // The file must exist NOW — queueing a dead path strands the job in
+        // delivery_requested forever (the worker requires the file on disk).
+        if (!existsSync(queued.artifactPath)) {
+          const reply = "I found a record of that doc, but the file itself isn't available any more. Want me to rebuild it?";
+          await updateSlackDmJob(job.id, {
+            status: "answered",
+            completedAt: now,
+            replyText: reply,
+            retrievalResolved: "missing_file",
+            safeErrorSummary: "Retrieval resolved an artifact whose file no longer exists on disk; nothing was queued.",
+          });
+          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-missing-file" });
+          log("⚠️", `Retrieval resolved a missing file job=${job.id} — not queued`);
+          return;
+        }
+        // If a pending ledger job already carries ANY file of this resolved
+        // group, queue THAT job. Matching the single preferred path missed
+        // sibling formats of the same asset (.md vs .pdf), letting a second
+        // job queue the SAME asset under another filename — the two-filename
+        // double-send. Counters reset: an explicit re-request earns fresh
+        // worker attempts instead of an instant re-park.
+        const groupPaths = [...new Set([queued.artifactPath, ...((result.match?.artifactPaths) || [])])].filter(Boolean);
+        const existingCarrier = findCarrierJobForArtifactGroup(listSlackDmJobs(), {
+          channel, userId, excludeId: job.id, groupPaths,
         });
-        log("✅", `Retrieval delivered job=${job.id} file=${result.receipt.fileId}`);
+        const carrier = existingCarrier || job;
+        await updateSlackDmJob(carrier.id, {
+          status: "delivery_requested",
+          preferredDelivery: "slack_dm",
+          deliveryRequestedAt: now,
+          artifactPaths: [...new Set([queued.artifactPath, ...((existingCarrier?.artifactPaths) || []).filter((p) => existsSync(p))])],
+          title: carrier.title || queued.title,
+          deliveryMessage: queued.message,
+          retrievalResolved: "match",
+          workerAttempts: 0,
+          workerVerifyFailures: 0,
+        });
+        queuedCarrierId = carrier.id;
+        if (existingCarrier) {
+          await updateSlackDmJob(job.id, {
+            status: "answered",
+            completedAt: now,
+            relatedJobId: existingCarrier.id,
+            replyText: retrievalQueuedText(),
+            preferredDelivery: "slack_dm",
+            retrievalResolved: "match",
+          });
+        }
+        await sendSlackMessage(channel, retrievalQueuedText(), threadTs, { kind: "summary", callerSite: "retrieval-queued" });
+        log("✅", `Retrieval resolved and queued for worker delivery job=${carrier.id}`);
         return;
       }
       if (result.kind === "ambiguous") {
@@ -452,6 +522,12 @@ async function handleMessage(event) {
       log("ℹ️", `Retrieval no-match job=${job.id}${result.slackScopeMissing ? " (files:read scope missing)" : ""}`);
       return;
     } catch (retrErr) {
+      // A failure AFTER the delivery was queued (e.g. the ack send threw)
+      // must never clobber the queued state — the worker will deliver it.
+      if (queuedCarrierId) {
+        log("⚠️", `Retrieval queued ${queuedCarrierId} but post-queue step failed: ${retrErr.message} — delivery stays queued`);
+        return;
+      }
       // Retrieval failure must not fabricate or fall through to produce-or-block.
       const reply = "I couldn't search for that just now. Want me to try again or build one?";
       await updateSlackDmJob(job.id, {
@@ -473,70 +549,75 @@ async function handleMessage(event) {
       const artifactPaths = Array.isArray(deliveryJob.artifactPaths) ? deliveryJob.artifactPaths : [];
       const now = new Date().toISOString();
       const artifactPath = selectPreferredArtifactPath(artifactPaths);
+      if (artifactPath && !existsSync(artifactPath)) {
+        // Queueing a dead path strands delivery_requested forever (the
+        // worker requires the file on disk). Honest answer instead.
+        const reply = "I have a record of that file, but it isn't available any more. Want me to rebuild it?";
+        await updateSlackDmJob(deliveryJob.id, {
+          safeErrorSummary: "Delivery follow-up matched this job, but its artifact no longer exists on disk.",
+        });
+        await updateSlackDmJob(job.id, {
+          status: "answered",
+          completedAt: now,
+          relatedJobId: deliveryJob.id,
+          replyText: reply,
+        });
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "delivery-request-missing-file" });
+        log("⚠️", `Delivery follow-up matched a missing file job=${deliveryJob.id} — not queued`);
+        return;
+      }
       if (artifactPath) {
-        try {
-          const result = await sendRhysDmArtifact({
-            artifactPath,
-            sourceChannel: channel,
-            requestedBy: userId,
-            deliveryId: deliveryJob.deliveryId,
-            title: deliveryJob.title || "Atlas artifact",
-            message: "Done. I attached the file here.",
-            token: BOT_TOKEN,
-          });
-          recordSlackDmJobDelivered(deliveryJob.id, {
-            deliveredAt: now,
-            completedAt: now,
-            deliveryRequestJobId: job.id,
-            deliveryResult: {
-              channelId: result.channelId,
-              fileId: result.fileId,
-              messageTs: result.messageTs,
-              filename: result.filename,
-            },
-          });
-          await updateSlackDmJob(job.id, {
-            status: "answered",
-            completedAt: now,
-            relatedJobId: deliveryJob.id,
-            replyText: "That file has been sent here.",
-            preferredDelivery: "slack_dm",
-          });
-          log("✅", `Artifact delivered to Rhys DM via helper job=${deliveryJob.id} file=${result.fileId}`);
-          return;
-        } catch (sendErr) {
-          if (deliveryJob.deliveryId) {
-            try {
-              recordDeliveryState({
-                deliveryId: deliveryJob.deliveryId,
-                status: "failed_with_reason",
-                reason: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
-                channelId: channel,
-                messageTs: null,
-              });
-            } catch (ledgerErr) {
-              log("⚠️", `Artifact delivery failure ledger record failed: ${ledgerErr.message}`);
-            }
-          }
+        if (!canQueueRhysDmDelivery(channel, userId)) {
           const reply = approvalBlockedArtifactText({ artifactPaths: [artifactPath] });
           await updateSlackDmJob(deliveryJob.id, {
             status: "blocked_needs_approval",
             deliveryRequestedAt: now,
             deliveryRequestJobId: job.id,
-            safeErrorSummary: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
+            safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
           });
-      await updateSlackDmJob(job.id, {
-        status: "blocked_needs_approval",
-        completedAt: now,
-        relatedJobId: deliveryJob.id,
-        replyText: reply,
-        safeErrorSummary: "Rhys DM artifact delivery blocked; operator approval or helper fix required.",
-        preferredDelivery: "slack_dm",
-      });
-          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "delivery-request-blocked" });
-          log("⚠️", `Artifact delivery blocked job=${deliveryJob.id}: ${sendErr.message}`);
+          await updateSlackDmJob(job.id, {
+            status: "blocked_needs_approval",
+            completedAt: now,
+            relatedJobId: deliveryJob.id,
+            replyText: reply,
+            safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
+          });
+          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "delivery-request-not-rhys-dm" });
+          log("⚠️", `Delivery follow-up blocked (not Rhys DM) job=${deliveryJob.id}`);
           return;
         }
+        // SINGLE-OWNER DELIVERY (2026-06-11 race fix): this follow-up no
+        // longer uploads the orphan's file itself — that inline send raced
+        // the workspace worker (which targets the same job) into a double
+        // DM. The follow-up is Rhys's explicit go-ahead: record it
+        // (slack_dm preference + delivery_requested) and the worker — the
+        // ONLY process that uploads to Rhys — delivers within its poll
+        // interval. updateSlackDmJob is used deliberately: the orphan may
+        // sit in states (building, needs_workspace_job) whose formal
+        // transition map predates worker-owned delivery.
+        const reply = deliveryQueuedText();
+        await updateSlackDmJob(deliveryJob.id, {
+          status: "delivery_requested",
+          preferredDelivery: "slack_dm",
+          deliveryRequestedAt: now,
+          deliveryRequestJobId: job.id,
+          deliveryMessage: "Done. I attached the file here.",
+          // Explicit re-request earns fresh worker attempts — without the
+          // reset, a previously parked job re-parks after a single attempt
+          // and Rhys loops on a promise that can never be kept.
+          workerAttempts: 0,
+          workerVerifyFailures: 0,
+        });
+        await updateSlackDmJob(job.id, {
+          status: "answered",
+          completedAt: now,
+          relatedJobId: deliveryJob.id,
+          replyText: reply,
+          preferredDelivery: "slack_dm",
+        });
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "delivery-request-queued" });
+        log("✅", `Delivery follow-up queued ${deliveryJob.id} for worker delivery in ${channel}`);
+        return;
       }
       const reply = artifactPaths.length
         ? approvalBlockedArtifactText({ artifactPaths })
@@ -747,66 +828,54 @@ async function handleMessage(event) {
       return;
     }
 
-    await transitionSlackDmJob(job.id, "delivery_requested", {
-      deliveryRequestedAt: new Date().toISOString(),
-      deliveryId: artifactRecord?.deliveryId || null,
-    });
-
-    try {
-      const result = await sendRhysDmArtifact({
-        artifactPath: workflowResult.artifactPath,
-        sourceChannel: channel,
-        requestedBy: userId,
-        deliveryId: artifactRecord?.deliveryId,
-        title: workflowResult.title,
-        message: workflowResult.message,
-        token: BOT_TOKEN,
-      });
-      recordSlackDmJobDelivered(job.id, {
-        replyText: result.text || workflowResult.message,
-        artifactPath: workflowResult.artifactPath,
-        artifactPaths: workflowResult.artifactPaths,
-        deliveryId: artifactRecord?.deliveryId || null,
-        deliveryResult: {
-          channelId: result.channelId,
-          fileId: result.fileId,
-          messageTs: result.messageTs,
-          filename: result.filename,
-        },
-        handoffSummary,
-        preferredDelivery: deliveryPreference.preferredDelivery,
-        preferredDeliveryReason: deliveryPreference.reason,
-      });
-      log("?", `Asset job delivered id=${assetJobId} workflow=${workflowResult.workflowKey} file=${result.fileId}`);
-      return;
-    } catch (sendErr) {
-      if (artifactRecord?.deliveryId) {
-        try {
-          recordDeliveryState({
-            deliveryId: artifactRecord.deliveryId,
-            status: "failed_with_reason",
-            reason: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
-            channelId: channel,
-            messageTs: null,
-          });
-        } catch (ledgerErr) {
-          log("??", `Artifact delivery failure ledger record failed: ${ledgerErr.message}`);
-        }
-      }
-      const reply = approvalBlockedArtifactText({ artifactPaths: [workflowResult.artifactPath] });
+    if (!canQueueRhysDmDelivery(channel, userId)) {
+      // Old behaviour parity: the inline send used to throw for non-Rhys
+      // requesters and land here-equivalent. Visible state, never a strand.
+      const reply = approvalBlockedArtifactText({ artifactPaths: workflowResult.artifactPaths });
       await transitionSlackDmJob(job.id, "blocked_needs_approval", {
         completedAt: new Date().toISOString(),
         replyText: reply,
-        safeErrorSummary: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
+        safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
         deliveryId: artifactRecord?.deliveryId || null,
-        handoffSummary,
-        preferredDelivery: deliveryPreference.preferredDelivery,
-        preferredDeliveryReason: deliveryPreference.reason,
       });
-      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-delivery-blocked" });
-      log("??", `Asset delivery blocked id=${assetJobId}: ${sendErr.message}`);
+      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-delivery-not-rhys-dm" });
+      log("??", `Asset delivery blocked (not Rhys DM) id=${assetJobId}`);
       return;
     }
+
+    // SINGLE-OWNER DELIVERY (2026-06-11 race fix): the listener's part ends
+    // at delivery_requested. The workspace worker is the ONLY process that
+    // uploads artifacts to Rhys — it claims this job and drives the upload
+    // through the gated send. The inline sendRhysDmArtifact that used to
+    // follow this transition raced the worker (delivery_requested is a
+    // worker-deliverable status) into double-DMing the same asset.
+    try {
+      await transitionSlackDmJob(job.id, "delivery_requested", {
+        deliveryRequestedAt: new Date().toISOString(),
+        deliveryId: artifactRecord?.deliveryId || null,
+        deliveryMessage: workflowResult.message,
+      });
+    } catch (transitionErr) {
+      // artifact_ready is already worker-deliverable: the worker may have
+      // claimed and DELIVERED between the artifact_ready transition above
+      // and here, making this transition illegal (delivered is terminal).
+      // The worker winning the window is success — never an error.
+      const current = listSlackDmJobs().find((j) => j.id === job.id);
+      if (current?.status === "delivered") {
+        log("?", `Asset job already delivered by the workspace worker id=${assetJobId} — no queueing needed`);
+        return;
+      }
+      throw transitionErr;
+    }
+    try {
+      await sendSlackMessage(channel, deliveryQueuedText(), threadTs, { kind: "summary", callerSite: "asset-delivery-queued" });
+    } catch (ackErr) {
+      // The queued job is durable — the worker delivers it whether or not
+      // this ack reached Slack. Never fail the job over ack copy.
+      log("??", `Delivery-queued ack send failed id=${assetJobId}: ${ackErr.message}`);
+    }
+    log("?", `Asset job queued for worker delivery id=${assetJobId} workflow=${workflowResult.workflowKey}`);
+    return;
   }
 
   const sessionId = job.sessionId || `slack-${userId}`;
@@ -934,55 +1003,28 @@ async function handleMessage(event) {
     });
 
     if (prepared.deliveryAction === "send_rhys_dm_artifact") {
-      const artifactPath = selectPreferredArtifactPath(prepared.mediaPaths);
-      try {
-        const result = await sendRhysDmArtifact({
-          artifactPath,
-          sourceChannel: channel,
-          requestedBy: userId,
-          deliveryId: artifactRecord?.deliveryId,
-          title: "Atlas artifact",
-          message: prepared.text || "Done. I attached the file here.",
-          token: BOT_TOKEN,
-        });
+      // MEDIA: lines in gateway free text are unvalidated — queueing a path
+      // that does not exist strands delivery_requested forever (the worker
+      // requires the file on disk). Honest handoff instead of a false
+      // "queued" promise.
+      const gatewayArtifactPath = selectPreferredArtifactPath(prepared.mediaPaths);
+      if (!gatewayArtifactPath || !existsSync(gatewayArtifactPath)) {
+        const reply = liveTimeoutHandoffText();
         await updateSlackDmJob(job.id, {
-          status: "delivered",
-          completedAt: new Date().toISOString(),
-          replyText: result.text || prepared.text,
+          status: "needs_workspace_job",
+          replyText: reply,
           artifactPaths: prepared.mediaPaths,
-          deliveryId: artifactRecord?.deliveryId || null,
-          artifactReadyAt: new Date().toISOString(),
-          deliveredAt: new Date().toISOString(),
-          deliveryResult: {
-            channelId: result.channelId,
-            fileId: result.fileId,
-            messageTs: result.messageTs,
-            filename: result.filename,
-          },
-          preferredDelivery: deliveryPreference.preferredDelivery,
-          preferredDeliveryReason: deliveryPreference.reason,
+          safeErrorSummary: "Gateway reply referenced a file that does not exist on disk; nothing was queued for delivery.",
+          preferredDelivery: "slack_dm",
           gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
           gatewayError: gatewayResult.error?.message || null,
-          brainProvider: gatewayResult.brain?.provider || null,
-          brainModel: gatewayResult.brain?.model || null,
         });
-        log("✅", `Gateway artifact delivered to Rhys DM via helper job=${job.id} file=${result.fileId}`);
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "gateway-artifact-missing" });
+        log("⚠️", `Gateway artifact path missing on disk job=${job.id} — not queued`);
         return;
-      } catch (sendErr) {
-        const reply = approvalBlockedArtifactText({ artifactPaths: [artifactPath] });
-        if (artifactRecord?.deliveryId) {
-          try {
-            recordDeliveryState({
-              deliveryId: artifactRecord.deliveryId,
-              status: "failed_with_reason",
-              reason: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
-              channelId: channel,
-              messageTs: null,
-            });
-          } catch (ledgerErr) {
-            log("⚠️", `Artifact delivery failure ledger record failed: ${ledgerErr.message}`);
-          }
-        }
+      }
+      if (!canQueueRhysDmDelivery(channel, userId)) {
+        const reply = approvalBlockedArtifactText({ artifactPaths: prepared.mediaPaths });
         await updateSlackDmJob(job.id, {
           status: "blocked_needs_approval",
           completedAt: new Date().toISOString(),
@@ -990,17 +1032,49 @@ async function handleMessage(event) {
           artifactPaths: prepared.mediaPaths,
           deliveryId: artifactRecord?.deliveryId || null,
           reviewQueueId: artifactRecord?.reviewQueueId || null,
+          safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
+        });
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "gateway-artifact-not-rhys-dm" });
+        log("⚠️", `Gateway artifact delivery blocked (not Rhys DM) job=${job.id}`);
+        return;
+      }
+      // SINGLE-OWNER DELIVERY (2026-06-11 race fix): the gateway lane stores
+      // the artifact on the job and queues delivery; the workspace worker —
+      // the ONLY process that uploads to Rhys — claims it and performs the
+      // gated send (roots/extension validation included) within its poll
+      // interval. updateSlackDmJob is deliberate: this job's current status
+      // predates the delivery_requested transition in the formal map.
+      const reply = deliveryQueuedText();
+      try {
+        await updateSlackDmJob(job.id, {
+          status: "delivery_requested",
+          completedAt: null,
+          replyText: reply,
+          artifactPaths: prepared.mediaPaths,
+          deliveryId: artifactRecord?.deliveryId || null,
+          reviewQueueId: artifactRecord?.reviewQueueId || null,
           artifactReadyAt: new Date().toISOString(),
-          safeErrorSummary: `Rhys DM artifact delivery blocked: ${sendErr.message}`,
-          preferredDelivery: deliveryPreference.preferredDelivery,
-          preferredDeliveryReason: deliveryPreference.reason,
+          deliveryRequestedAt: new Date().toISOString(),
+          deliveryMessage: prepared.text || "Done. I attached the file here.",
+          preferredDelivery: "slack_dm",
+          preferredDeliveryReason: "Gateway reply produced a Rhys DM artifact; queued for worker delivery.",
           gatewayTimedOut: !gatewayResult.ok && gatewayResult.timedOut,
           gatewayError: gatewayResult.error?.message || null,
           brainProvider: gatewayResult.brain?.provider || null,
           brainModel: gatewayResult.brain?.model || null,
         });
-        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "gateway-artifact-delivery-blocked" });
-        log("⚠️", `Gateway artifact delivery blocked job=${job.id}: ${sendErr.message}`);
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "gateway-artifact-queued" });
+        log("✅", `Gateway artifact queued for worker delivery job=${job.id}`);
+        return;
+      } catch (queueErr) {
+        await updateSlackDmJob(job.id, {
+          status: "needs_workspace_job",
+          replyText: liveTimeoutHandoffText(),
+          safeErrorSummary: `Gateway artifact could not be queued for delivery: ${String(queueErr.message).slice(0, 200)}`,
+          preferredDelivery: "slack_dm",
+        });
+        await sendSlackMessage(channel, liveTimeoutHandoffText(), threadTs, { kind: "summary", callerSite: "gateway-artifact-queue-failed" });
+        log("⚠️", `Gateway artifact delivery queueing failed job=${job.id}: ${queueErr.message}`);
         return;
       }
     }

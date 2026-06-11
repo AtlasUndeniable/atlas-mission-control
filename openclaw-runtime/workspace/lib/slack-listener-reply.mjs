@@ -173,6 +173,17 @@ export function deliveryRequestedText() {
   return "I don't have a verified file to send yet. I have the request logged, but delivery cannot happen until an artifact exists.";
 }
 
+// Single-owner delivery (race fix): the listener never uploads a file itself.
+// It queues the verified artifact for the workspace worker and says so
+// honestly — TR-6 clean, no ids, no states, no paths.
+export function deliveryQueuedText() {
+  return "The file is verified and queued for delivery. It will land in this DM shortly — I won't call it done until Slack confirms the upload.";
+}
+
+export function retrievalQueuedText() {
+  return "Found it. Sending it here now — it will land in this DM shortly.";
+}
+
 export function approvalBlockedArtifactText({ artifactPaths = [] } = {}) {
   const files = artifactPaths
     .map((path) => basename(path))

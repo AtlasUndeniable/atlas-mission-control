@@ -262,6 +262,26 @@ export function findLatestDeliveryCandidate({ channel, userId, excludeId, maxAge
     })[0] || null;
 }
 
+/**
+ * Find a non-terminal job already carrying ANY file of a resolved artifact
+ * group. Retrieval merges sibling formats of one asset (.md/.pdf, dated
+ * rebuilds) into a single group; matching carriers on the single preferred
+ * path missed siblings, which let a second job queue the SAME asset under a
+ * different filename — the two-filename double-send found in review.
+ * blocked_needs_approval is deliberately includable: an explicit Rhys
+ * re-request legally re-queues it (see SLACK_ASSET_JOB_TRANSITIONS).
+ */
+export function findCarrierJobForArtifactGroup(jobs, { channel, userId, excludeId, groupPaths = [] } = {}) {
+  const paths = new Set((groupPaths || []).filter(Boolean));
+  if (!paths.size) return null;
+  const TERMINAL = new Set(["delivered", "blocked", "failed"]);
+  return jobs
+    .filter((job) => job.id !== excludeId)
+    .filter((job) => (!channel || job.channel === channel) && (!userId || job.userId === userId))
+    .filter((job) => !TERMINAL.has(job.status))
+    .find((job) => Array.isArray(job.artifactPaths) && job.artifactPaths.some((p) => paths.has(p))) || null;
+}
+
 export function summarizeSlackDmJob(job) {
   if (!job) return null;
   const ageMinutes = Math.max(0, Math.floor((Date.now() - Date.parse(job.createdAt || new Date().toISOString())) / 60000));

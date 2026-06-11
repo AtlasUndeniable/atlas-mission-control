@@ -37,6 +37,27 @@
  *   6. FINALIZE under the lock only while our claim still owns the job; a
  *      superseded finalize after a real send is counted and logged loudly.
  *
+ * SINGLE-OWNER DELIVERY (2026-06-11 race fix): this worker is the ONLY
+ * process that uploads artifacts to Rhys. The listener never calls the gated
+ * send any more — it stops at `delivery_requested` (with the caption stashed
+ * in job.deliveryMessage) and this worker drives the upload. Hardened after
+ * the Codex review:
+ *   - POST-CLAIM DATA ONLY: every send input (artifact path, filename, title,
+ *     caption, attempt counters, deliveryId) derives from claimResult.job —
+ *     the record as it existed INSIDE the claim lock — never from the
+ *     pre-claim candidate snapshot, which the listener may have mutated in
+ *     the scan→claim window.
+ *   - SAME-ASSET GUARD: a delivered receipt for the same filename newer than
+ *     this job's creation finalizes the job WITHOUT a second upload (two
+ *     ledger jobs pointing at one file can never DM Rhys twice).
+ *   - VERIFY-FAILURE PARKING: repeated conversations.history verification
+ *     failures are counted (workerVerifyFailures) and the job PARKS visibly
+ *     in blocked_needs_approval after maxAttempts — never an infinite
+ *     silent retry loop.
+ *   - SCOPE PREFLIGHT: the daemon entrypoint refuses to run at all unless
+ *     the bot token carries REQUIRED_WORKER_SCOPES (history verification is
+ *     the resend safety net; sending without it is not safe).
+ *
  * Scope: delivery ONLY. The exports scan (findUndeliveredArtifacts) is an
  * AUDIT METRIC — the jobs ledger is the only delivery source. This worker
  * never builds, never generates, never touches client channels, never sends
@@ -82,6 +103,45 @@ export const WORKER_DELIVERABLE_STATUSES = new Set([
 export const DEFAULT_CLAIM_TTL_MS = 10 * 60_000;
 export const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 export const MAX_WORKER_ATTEMPTS = 3;
+
+// Scopes the delivery pipeline depends on. im:history is the resend safety
+// net (verifyPriorDeliveryViaHistory); im:write opens the Rhys DM;
+// files:write performs the upload. Without all three the worker must not run.
+export const REQUIRED_WORKER_SCOPES = ["im:history", "im:write", "files:write"];
+
+/**
+ * Read the bot token's granted scopes from the x-oauth-scopes header Slack
+ * returns on every Web API response (auth.test is the cheapest probe).
+ */
+export async function getWorkerTokenScopes({ token, fetchImpl = fetch, callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS } = {}) {
+  if (!token) throw new Error("Slack bot token is unavailable");
+  const resp = await fetchImpl("https://slack.com/api/auth.test", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(callTimeoutMs),
+  });
+  const data = await resp.json();
+  if (!data.ok) throw new Error(`auth.test failed: ${data.error || "unknown_error"}`);
+  const header = resp.headers?.get?.("x-oauth-scopes") || "";
+  return header.split(",").map((scope) => scope.trim()).filter(Boolean);
+}
+
+/**
+ * Startup preflight. Refuses (ok:false) when any required scope is missing
+ * OR when the scopes cannot be PROVEN (auth.test unreachable) — the
+ * history-verify safety net depends on im:history, and sending without
+ * proving it risks a resend Rhys would see twice.
+ */
+export async function preflightWorkerScopes({ token, getScopes, required = REQUIRED_WORKER_SCOPES, fetchImpl, callTimeoutMs } = {}) {
+  try {
+    const scopes = await (getScopes ? getScopes() : getWorkerTokenScopes({ token, fetchImpl, callTimeoutMs }));
+    const have = new Set(Array.isArray(scopes) ? scopes : []);
+    const missing = required.filter((scope) => !have.has(scope));
+    return missing.length ? { ok: false, scopes, missing } : { ok: true, scopes, missing: [] };
+  } catch (err) {
+    return { ok: false, scopes: null, missing: required.slice(), error: String(err?.message || err) };
+  }
+}
 
 class ClaimLostError extends Error {
   constructor(jobId) { super(`delivery claim lost for ${jobId}`); this.code = "CLAIM_LOST"; }
@@ -193,6 +253,35 @@ export function findLedgerReceipt(ledgerEvents, deliveryId) {
   return null;
 }
 
+/**
+ * SAME-ASSET GUARD: a REAL delivered receipt for this exact filename stamped
+ * at-or-after `sinceIso` (the claimed job's creation). Two ledger jobs can end
+ * up pointing at the same file (retrieval resolving an orphan's artifact, a
+ * re-ask while the original is still pending) — when the file already reached
+ * Rhys after this job was asked for, the job finalizes on that receipt instead
+ * of uploading a second copy. A receipt OLDER than the job never matches, so a
+ * genuine later re-ask ("send it again") still delivers.
+ */
+export function findRecentFilenameReceipt(ledgerEvents, filename, sinceIso) {
+  if (!filename) return null;
+  const since = Date.parse(sinceIso || "") || 0;
+  for (let i = ledgerEvents.length - 1; i >= 0; i -= 1) {
+    const event = ledgerEvents[i];
+    if (
+      event.eventType === "delivery_state"
+      && event.status === "delivered"
+      && event.metadata?.dryRun !== true
+      && event.fileId !== "mock-file-id"
+      && event.metadata?.filename === filename
+      && (Date.parse(event.eventAt || "") || 0) >= since
+      && hasSlackDeliveryReceipt({ channelId: event.channelId, fileId: event.fileId, messageTs: event.messageTs })
+    ) {
+      return { channelId: event.channelId, fileId: event.fileId, messageTs: event.messageTs, filename };
+    }
+  }
+  return null;
+}
+
 // ── Attempt journal: "a send may have started" marker, written before the
 // first Slack call. attempt-without-receipt ⇒ verify history before resend.
 export function attemptJournalPath(ledgerPath) {
@@ -253,6 +342,26 @@ function tr6Message(job) {
     : "Done. I attached the file here.";
 }
 
+// The listener stashes the workflow's intended caption in job.deliveryMessage
+// when it queues delivery; fall back to honest late-delivery copy. The gated
+// send sanitizes paths out of whatever is here before Rhys sees it.
+function deliveryCaption(job) {
+  const message = typeof job.deliveryMessage === "string" ? job.deliveryMessage.trim() : "";
+  return message || tr6Message(job);
+}
+
+// PARK NOTIFICATION: the listener's last message promised delivery; a silent
+// park leaves that promise standing forever. Best-effort text (TR-6: no ids,
+// no states, no paths) — never blocks the park itself, never required scopes.
+const PARK_NOTICE_TEXT = "I hit a snag delivering that file, so it has not been sent. It's flagged for operator review — I won't pretend it went through.";
+async function notifyRhysOfPark({ slackClient, token, log }) {
+  try {
+    await slackClient("chat.postMessage", { channel: RHYS_DM_CHANNEL_ID, text: PARK_NOTICE_TEXT }, { token });
+  } catch (notifyErr) {
+    log(`park notification failed (delivery state is still parked + visible in the ledger): ${notifyErr.message}`);
+  }
+}
+
 /**
  * One worker pass. Everything injectable so the proof harness runs entirely
  * against fixtures; production CLI passes nothing and gets live defaults.
@@ -272,6 +381,7 @@ export async function runWorkerPass({
   fileExists = existsSync,
   log = () => {},
   workerId = `wkr-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+  preflight = null,
 } = {}) {
   const summary = {
     scanned: 0,
@@ -283,9 +393,28 @@ export async function runWorkerPass({
     aborted: 0,
     failures: 0,
     parked: 0,
+    staleCandidates: 0,
     sentButSuperseded: 0,
     untrackedExportGroups: null,
+    preflight: null,
   };
+
+  // SCOPE PREFLIGHT (opt-in here; ALWAYS on at the daemon entrypoint): a
+  // refused preflight processes nothing — no claims, no sends, no writes.
+  if (preflight) {
+    const result = await preflightWorkerScopes({
+      token,
+      getScopes: preflight.getScopes,
+      fetchImpl: preflight.fetchImpl,
+      callTimeoutMs,
+    });
+    summary.preflight = result;
+    if (!result.ok) {
+      log(`PREFLIGHT REFUSED: missing Slack scopes [${(result.missing || []).join(", ")}]${result.error ? ` (${result.error})` : ""} — refusing to run the delivery pass`);
+      return summary;
+    }
+  }
+
   const journalPath = attemptJournalPath(ledgerPath);
   const baseSlack = slackClient || makeDefaultSlackClient(callTimeoutMs);
   const baseUpload = uploadFetch || ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(callTimeoutMs) }));
@@ -306,7 +435,6 @@ export async function runWorkerPass({
 
   for (const candidate of candidates) {
     const claimId = `${workerId}-${candidate.id}`;
-    const deliveryId = workerDeliveryIdForJob(candidate);
 
     // 1. CLAIM under the lock before anything else.
     let claimResult = null;
@@ -323,11 +451,26 @@ export async function runWorkerPass({
       continue;
     }
 
+    // POST-CLAIM DATA ONLY (P2): `job` is the record as it existed inside the
+    // claim lock. The pre-claim `candidate` snapshot is dead from here on —
+    // the listener mutates jobs in the scan→claim window (paths, captions,
+    // counters, deliveryId), and sending from stale fields is how a wrong or
+    // duplicate file reaches Rhys.
+    const job = claimResult.job;
+    const deliveryId = workerDeliveryIdForJob(job);
+
+    const releaseClaim = async (patch = {}) => {
+      await mutateQueue((queue) => {
+        guardQueue(queue);
+        return releaseJobClaim(queue, job.id, claimId, patch, now().toISOString()).jobs;
+      }, { queuePath: jobsPath });
+    };
+
     const finalizeDelivered = async (receipt, via) => {
       let applied = false;
       await mutateQueue((queue) => {
         guardQueue(queue);
-        const idx = queue.findIndex((j) => j.id === candidate.id);
+        const idx = queue.findIndex((j) => j.id === job.id);
         if (idx === -1) return null;
         if (via !== "reconcile" && queue[idx].deliveryClaim?.id !== claimId) return null;
         const finalizedAt = now().toISOString();
@@ -337,7 +480,7 @@ export async function runWorkerPass({
           status: "delivered",
           deliveryId,
           deliveryResult: receipt,
-          replyText: next[idx].replyText || tr6Message(candidate),
+          replyText: next[idx].replyText || deliveryCaption(job),
           deliveredAt: next[idx].deliveredAt || finalizedAt,
           completedAt: next[idx].completedAt || finalizedAt,
           deliveredBy: `workspace-worker:${via}`,
@@ -350,18 +493,47 @@ export async function runWorkerPass({
       return applied;
     };
 
+    const ledgerEvents = readDeliveryLedger({ ledgerPath });
+
     // 2. RECONCILE: receipt already in the send-side ledger (crash after
     //    send, before finalize) → finalize without sending.
-    const priorReceipt = findLedgerReceipt(readDeliveryLedger({ ledgerPath }), deliveryId);
+    const priorReceipt = findLedgerReceipt(ledgerEvents, deliveryId);
     if (priorReceipt) {
       await finalizeDelivered(priorReceipt, "reconcile");
       summary.reconciled += 1;
-      log(`reconciled job=${candidate.id} from ledger receipt (no send)`);
+      log(`reconciled job=${job.id} from ledger receipt (no send)`);
       continue;
     }
 
-    const artifactPath = selectPreferredArtifactPath(candidate.artifactPaths);
+    // POST-CLAIM REVALIDATION: the claim transform re-checks status and
+    // receipt under the lock; everything else in the candidate predicate is
+    // re-checked here against the claimed record. A job that drifted out of
+    // candidate shape is released untouched, never sent.
+    const artifactPath = selectPreferredArtifactPath(job.artifactPaths);
+    if (
+      job.channel !== RHYS_DM_CHANNEL_ID
+      || job.userId !== RHYS_USER_ID
+      || job.preferredDelivery !== "slack_dm"
+      || !artifactPath
+      || !fileExists(artifactPath)
+    ) {
+      await releaseClaim();
+      summary.staleCandidates += 1;
+      log(`released job=${job.id}: no longer candidate-shaped after claim (no send)`);
+      continue;
+    }
     const filename = basename(artifactPath);
+
+    // SAME-ASSET GUARD: this exact file already reached Rhys after this job
+    // was asked for (another job delivered it) → finalize on that receipt,
+    // never upload a second copy.
+    const duplicateReceipt = findRecentFilenameReceipt(ledgerEvents, filename, job.createdAt);
+    if (duplicateReceipt) {
+      await finalizeDelivered(duplicateReceipt, "duplicate-path-reconcile");
+      summary.reconciled += 1;
+      log(`reconciled job=${job.id}: ${filename} already delivered after this request (no second send)`);
+      continue;
+    }
 
     // 3. ATTEMPT JOURNAL: a prior attempt with no receipt means a send may
     //    have landed without its bookkeeping (SIGKILL window). Verify via
@@ -372,12 +544,23 @@ export async function runWorkerPass({
       try {
         recovered = await verifyPriorDeliveryViaHistory({ slackClient: baseSlack, token, filename, sinceIso: priorAttempt.at });
       } catch (err) {
-        log(`history verification failed job=${candidate.id}: ${err.message} — NOT resending this pass`);
-        await mutateQueue((queue) => {
-          guardQueue(queue);
-          return releaseJobClaim(queue, candidate.id, claimId, { lastWorkerError: `history verification failed: ${String(err.message).slice(0, 200)}` }, now().toISOString()).jobs;
-        }, { queuePath: jobsPath });
-        summary.failures += 1;
+        // VERIFY-FAILURE PARKING (P2): count the failure and park VISIBLY
+        // after maxAttempts. An un-counted verify failure (e.g. missing
+        // im:history scope) would otherwise retry silently forever.
+        const verifyFailures = (job.workerVerifyFailures || 0) + 1;
+        const park = verifyFailures >= maxAttempts;
+        log(`history verification failed job=${job.id} (failure ${verifyFailures}/${maxAttempts}): ${err.message} — NOT resending this pass${park ? "; PARKED for operator review" : ""}`);
+        await releaseClaim({
+          workerVerifyFailures: verifyFailures,
+          lastWorkerError: `history verification failed: ${String(err.message).slice(0, 200)}`,
+          lastWorkerAttemptAt: now().toISOString(),
+          ...(park ? {
+            status: "blocked_needs_approval",
+            safeErrorSummary: "Workspace worker could not verify whether an earlier send already reached Rhys (Slack history check failed repeatedly); operator review required before any resend.",
+          } : {}),
+        });
+        summary[park ? "parked" : "failures"] += 1;
+        if (park) await notifyRhysOfPark({ slackClient: baseSlack, token, log });
         continue;
       }
       if (recovered) {
@@ -386,16 +569,16 @@ export async function runWorkerPass({
             deliveryId, status: "delivered",
             reason: "Recovered via Slack history after an interrupted send (attempt journal had no receipt).",
             channelId: recovered.channelId, messageTs: recovered.messageTs, fileId: recovered.fileId,
-            metadata: { recoveredBy: "workspace-worker" },
+            metadata: { recoveredBy: "workspace-worker", filename },
           }, { ledgerPath });
         } catch { /* receipt persists on the job record below regardless */ }
         await finalizeDelivered(recovered, "history-recovery");
         summary.recoveredFromHistory += 1;
-        log(`recovered job=${candidate.id} from Slack history (no resend)`);
+        log(`recovered job=${job.id} from Slack history (no resend)`);
         continue;
       }
     }
-    journalAttempt(journalPath, { deliveryId, jobId: candidate.id, claimId, filename, at: now().toISOString() });
+    journalAttempt(journalPath, { deliveryId, jobId: job.id, claimId, filename, at: now().toISOString() });
 
     // 4. GUARDED SEND: heartbeat + ownership check before every Slack call;
     //    ledger re-check immediately before the user-visible completeUpload.
@@ -404,7 +587,7 @@ export async function runWorkerPass({
       let owned = false;
       await mutateQueue((queue) => {
         guardQueue(queue);
-        const idx = queue.findIndex((j) => j.id === candidate.id);
+        const idx = queue.findIndex((j) => j.id === job.id);
         if (idx === -1) return null;
         if (queue[idx].deliveryClaim?.id !== claimId) return null;
         owned = true;
@@ -412,12 +595,18 @@ export async function runWorkerPass({
         next[idx] = { ...next[idx], deliveryClaim: { id: claimId, at: now().toISOString() } };
         return next;
       }, { queuePath: jobsPath });
-      if (!owned) throw new ClaimLostError(candidate.id);
+      if (!owned) throw new ClaimLostError(job.id);
     };
     const guardedSlack = async (method, body, opts) => {
       await renewClaimOrAbort();
       if (method === "files.completeUploadExternal") {
-        const lateReceipt = findLedgerReceipt(readDeliveryLedger({ ledgerPath }), deliveryId);
+        // Re-check BOTH walls immediately before the only user-visible call:
+        // our own deliveryId (same job) AND the same-filename guard (a
+        // concurrent worker delivering a DIFFERENT job that carries this
+        // exact file — two jobs, one asset, must still be one upload).
+        const ledgerNow = readDeliveryLedger({ ledgerPath });
+        const lateReceipt = findLedgerReceipt(ledgerNow, deliveryId)
+          || findRecentFilenameReceipt(ledgerNow, filename, job.createdAt);
         if (lateReceipt) throw new AlreadyDeliveredError(lateReceipt);
       }
       const response = await baseSlack(method, body, opts);
@@ -439,8 +628,8 @@ export async function runWorkerPass({
         sourceChannel: RHYS_DM_CHANNEL_ID,
         requestedBy: RHYS_USER_ID,
         deliveryId,
-        title: candidate.title || "Atlas artifact",
-        message: tr6Message(candidate),
+        title: job.title || "Atlas artifact",
+        message: deliveryCaption(job),
         token,
         slackClient: guardedSlack,
         uploadFetch: baseUpload,
@@ -453,13 +642,13 @@ export async function runWorkerPass({
 
     if (sendError?.code === "CLAIM_LOST") {
       summary.aborted += 1;
-      log(`send aborted (claim lost before user-visible call) job=${candidate.id}`);
+      log(`send aborted (claim lost before user-visible call) job=${job.id}`);
       continue;
     }
     if (sendError?.code === "ALREADY_DELIVERED") {
       await finalizeDelivered(sendError.receipt, "reconcile");
       summary.reconciled += 1;
-      log(`receipt appeared mid-send job=${candidate.id} — finalized without completing upload`);
+      log(`receipt appeared mid-send job=${job.id} — finalized without completing upload`);
       continue;
     }
     if (sendError && completedReceipt) {
@@ -470,32 +659,29 @@ export async function runWorkerPass({
           deliveryId, status: "delivered",
           reason: "Delivered; receipt re-recorded by worker after post-upload bookkeeping failure.",
           channelId: completedReceipt.channelId, messageTs: completedReceipt.messageTs, fileId: completedReceipt.fileId,
-          metadata: { postCompleteRecovery: true },
+          metadata: { postCompleteRecovery: true, filename },
         }, { ledgerPath });
       } catch { /* job record below still carries the receipt */ }
       const applied = await finalizeDelivered(completedReceipt, "post-complete-recovery");
       if (applied) summary.delivered += 1; else summary.sentButSuperseded += 1;
-      log(`delivered with post-complete recovery job=${candidate.id} (bookkeeping error: ${String(sendError.message).slice(0, 120)})`);
+      log(`delivered with post-complete recovery job=${job.id} (bookkeeping error: ${String(sendError.message).slice(0, 120)})`);
       continue;
     }
     if (sendError) {
-      const attempts = (candidate.workerAttempts || 0) + 1;
+      const attempts = (job.workerAttempts || 0) + 1;
       const park = attempts >= maxAttempts;
-      await mutateQueue((queue) => {
-        guardQueue(queue);
-        const { jobs: nextJobs } = releaseJobClaim(queue, candidate.id, claimId, {
-          workerAttempts: attempts,
-          lastWorkerError: String(sendError.message || sendError).slice(0, 300),
-          lastWorkerAttemptAt: now().toISOString(),
-          ...(park ? {
-            status: "blocked_needs_approval",
-            safeErrorSummary: "Workspace worker could not deliver this artifact after repeated attempts; operator review required.",
-          } : {}),
-        }, now().toISOString());
-        return nextJobs;
-      }, { queuePath: jobsPath });
+      await releaseClaim({
+        workerAttempts: attempts,
+        lastWorkerError: String(sendError.message || sendError).slice(0, 300),
+        lastWorkerAttemptAt: now().toISOString(),
+        ...(park ? {
+          status: "blocked_needs_approval",
+          safeErrorSummary: "Workspace worker could not deliver this artifact after repeated attempts; operator review required.",
+        } : {}),
+      });
       summary[park ? "parked" : "failures"] += 1;
-      log(`send failed job=${candidate.id} attempt=${attempts}${park ? " -> parked for review" : ""}: ${sendError.message}`);
+      log(`send failed job=${job.id} attempt=${attempts}${park ? " -> parked for review" : ""}: ${sendError.message}`);
+      if (park) await notifyRhysOfPark({ slackClient: baseSlack, token, log });
       continue;
     }
 
@@ -509,10 +695,10 @@ export async function runWorkerPass({
     const applied = await finalizeDelivered(receipt, "send");
     if (applied) {
       summary.delivered += 1;
-      log(`delivered job=${candidate.id} file=${receipt.fileId} ts=${receipt.messageTs}`);
+      log(`delivered job=${job.id} file=${receipt.fileId} ts=${receipt.messageTs}`);
     } else {
       summary.sentButSuperseded += 1;
-      log(`WARN: send completed but finalize was superseded job=${candidate.id} — receipt is in the ledger; investigate for duplicate delivery`);
+      log(`WARN: send completed but finalize was superseded job=${job.id} — receipt is in the ledger; investigate for duplicate delivery`);
     }
   }
 
@@ -525,6 +711,14 @@ export { hasSlackDeliveryReceipt, recordSlackDmJobDelivered };
 
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
 if (isMain) {
-  const summary = await runWorkerPass({ log: (msg) => console.log(`[${new Date().toISOString()}] ${msg}`) });
-  console.log(`[${new Date().toISOString()}] pass complete ${JSON.stringify(summary)}`);
+  const logLine = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+  // STARTUP PREFLIGHT: refuse to run at all without the scopes the delivery
+  // pipeline depends on. EX_CONFIG keeps launchd logs unambiguous.
+  const pre = await preflightWorkerScopes({ token: process.env.SLACK_BOT_TOKEN });
+  if (!pre.ok) {
+    logLine(`REFUSING TO RUN: Slack token preflight failed — missing scopes [${pre.missing.join(", ")}]${pre.error ? ` (${pre.error})` : ""}. Required: ${REQUIRED_WORKER_SCOPES.join(", ")}.`);
+    process.exit(78);
+  }
+  const summary = await runWorkerPass({ log: logLine });
+  logLine(`pass complete ${JSON.stringify(summary)}`);
 }
