@@ -47,7 +47,17 @@ function acquireLock(lockPath) {
       try {
         const st = statSync(lockPath);
         if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          try { unlinkSync(lockPath); } catch {}
+          // Atomic steal: rename first, so exactly one contender wins. An
+          // in-place unlink is NOT safe — two contenders can both see the
+          // stale lock, and the slower unlink would delete the faster
+          // contender's FRESH lock, letting both writers in at once.
+          const stealPath = `${lockPath}.steal.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+          try {
+            renameSync(lockPath, stealPath);
+            try { unlinkSync(stealPath); } catch {}
+          } catch {
+            // Lost the steal race — another contender owns the cleanup.
+          }
           continue;
         }
       } catch {

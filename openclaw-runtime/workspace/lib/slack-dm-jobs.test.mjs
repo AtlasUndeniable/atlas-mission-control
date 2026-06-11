@@ -438,3 +438,78 @@ for (let i = 1; i <= ${ROUNDS}; i += 1) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("findLatestDeliveryCandidate skips jobs with a fresh worker delivery claim", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dm-jobs-claim-"));
+  try {
+    const filePath = join(dir, "jobs.json");
+    const base = {
+      channel: "D0AM2R3H6SE", userId: "U068FRX5423", kind: "request",
+      status: "artifact_ready", artifactPaths: ["/tmp/x.pdf"],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const { writeFileSync } = require_fs_shim();
+    writeFileSync(filePath, JSON.stringify([
+      { ...base, id: "job-fresh-claim", deliveryClaim: { id: "wkr-1", at: new Date().toISOString() } },
+      { ...base, id: "job-stale-claim", deliveryClaim: { id: "wkr-0", at: new Date(Date.now() - 20 * 60_000).toISOString() } },
+    ], null, 2));
+
+    const candidate = findLatestDeliveryCandidate({ channel: "D0AM2R3H6SE", userId: "U068FRX5423" }, { filePath });
+    assert.equal(candidate.id, "job-stale-claim", "fresh claim must be skipped; stale claim is eligible");
+
+    writeFileSync(filePath, JSON.stringify([
+      { ...base, id: "job-fresh-claim", deliveryClaim: { id: "wkr-1", at: new Date().toISOString() } },
+    ], null, 2));
+    assert.equal(findLatestDeliveryCandidate({ channel: "D0AM2R3H6SE", userId: "U068FRX5423" }, { filePath }), null,
+      "an in-flight worker delivery must never be re-picked by the listener");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function require_fs_shim() {
+  // node:test files here are ESM; tiny shim keeps the new test self-contained.
+  return { writeFileSync: (p, c) => { mkdirSync(dirname_shim(p), { recursive: true }); writeFileSyncReal(p, c); } };
+}
+import { writeFileSync as writeFileSyncReal, mkdirSync } from "node:fs";
+import { dirname as dirname_shim } from "node:path";
+
+test("cross-writer serialization survives a pre-seeded STALE lock (atomic steal, no double-acquire)", async () => {
+  const { execFile } = await import("node:child_process");
+  const { writeFileSync, readFileSync, utimesSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "dm-jobs-steal-"));
+  try {
+    const jobsPath = join(dir, "slack-dm-jobs.json");
+    const ROUNDS = 15;
+    writeFileSync(jobsPath, JSON.stringify([
+      { id: "job-a", status: "received", counter: 0 },
+      { id: "job-b", status: "received", counter: 0 },
+    ], null, 2));
+    // A dead holder's stale lock: both contenders will try to steal it.
+    const stale = new Date(Date.now() - 120_000);
+    writeFileSync(`${jobsPath}.lock`, "");
+    utimesSync(`${jobsPath}.lock`, stale, stale);
+
+    const libDir = fileURLToPath(new URL(".", import.meta.url));
+    const mkDriver = (name, body) => { const p = join(dir, name); writeFileSync(p, body); return p; };
+    const driverA = mkDriver("driver-a.mjs", `
+import { updateSlackDmJob } from ${JSON.stringify(join(libDir, "slack-dm-jobs.mjs"))};
+for (let i = 1; i <= ${ROUNDS}; i += 1) updateSlackDmJob("job-a", { counter: i }, { filePath: process.argv[2] });
+`);
+    const driverB = mkDriver("driver-b.mjs", `
+import { mutateQueue } from ${JSON.stringify(join(libDir, "queue-writer.mjs"))};
+for (let i = 1; i <= ${ROUNDS}; i += 1) await mutateQueue((q) => q.map((j) => j.id === "job-b" ? { ...j, counter: i } : j), { queuePath: process.argv[2] });
+`);
+    const run = (driver) => new Promise((res, rej) => {
+      execFile(process.execPath, [driver, jobsPath], { timeout: 60_000 }, (err, _o, stderr) => err ? rej(new Error(`${err.message}\n${stderr}`)) : res());
+    });
+    await Promise.all([run(driverA), run(driverB)]);
+
+    const final = JSON.parse(readFileSync(jobsPath, "utf8"));
+    assert.equal(final.find((j) => j.id === "job-a").counter, ROUNDS);
+    assert.equal(final.find((j) => j.id === "job-b").counter, ROUNDS);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -230,12 +230,22 @@ export function findLatestDeliveryCandidate({ channel, userId, excludeId, maxAge
     "needs_workspace",
     "needs_workspace_job",
   ]);
+  // The workspace worker claims a job (deliveryClaim {id, at}) before it
+  // sends. A fresh claim means a delivery is in flight RIGHT NOW — picking
+  // that job up here would race the worker into a double DM.
+  const CLAIM_FRESH_MS = 10 * 60_000;
+  const claimInFlight = (job) => Boolean(
+    job.deliveryClaim?.id
+    && Number.isFinite(Date.parse(job.deliveryClaim?.at))
+    && Date.now() - Date.parse(job.deliveryClaim.at) < CLAIM_FRESH_MS,
+  );
   return readJobs(options.filePath || SLACK_DM_JOBS_PATH)
     .filter((job) => job.id !== excludeId)
     .filter((job) => !channel || job.channel === channel)
     .filter((job) => !userId || job.userId === userId)
     .filter((job) => job.kind !== "status_check")
     .filter((job) => deliverableStatuses.has(job.status))
+    .filter((job) => !claimInFlight(job))
     .filter((job) => {
       const created = Date.parse(job.createdAt || "");
       return Number.isFinite(created) && created >= cutoff;
