@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { mutateQueueSync } from "./queue-writer.mjs";
 
 export const SLACK_DM_JOBS_PATH = "/Users/atlasai/.openclaw/data/slack-dm-jobs.json";
 
@@ -49,12 +50,10 @@ function readJobs(filePath = SLACK_DM_JOBS_PATH) {
   }
 }
 
-function writeJobs(jobs, filePath = SLACK_DM_JOBS_PATH) {
-  ensureDir(filePath);
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(jobs, null, 2));
-  renameSync(tmp, filePath);
-}
+// All mutations go through mutateQueueSync so EVERY writer to the jobs file
+// (these helpers AND the workspace worker\'s async mutateQueue) serialises on
+// the same advisory lock at <file>.lock. Unlocked whole-array rewrites are
+// the lost-update bug this replaces — do not reintroduce a bare write path.
 
 export function makeSlackDmJobId(channel, messageTs) {
   return `slackdm-${channel}-${messageTs}`.replace(/[^a-zA-Z0-9_.-]/g, "-");
@@ -91,11 +90,16 @@ export function sourceFields({ channel, messageTs, userId, text }) {
 
 export function upsertSlackDmJob({ channel, messageTs, userId, text, sessionId, kind = "request", status = "received" }, options = {}) {
   const filePath = options.filePath || SLACK_DM_JOBS_PATH;
-  const jobs = readJobs(filePath);
+  ensureDir(filePath);
   const id = makeSlackDmJobId(channel, messageTs);
-  const existing = jobs.find((job) => job.id === id);
-  if (existing) return { job: existing, created: false };
-  const job = {
+  let outcome = null;
+  mutateQueueSync((jobs) => {
+    const existing = jobs.find((job) => job.id === id);
+    if (existing) {
+      outcome = { job: existing, created: false };
+      return null;
+    }
+    const job = {
     id,
     assetJobId: makeSlackAssetJobId(id),
     ...sourceFields({ channel, messageTs, userId, text }),
@@ -116,10 +120,11 @@ export function upsertSlackDmJob({ channel, messageTs, userId, text, sessionId, 
     replyText: null,
     artifactPaths: [],
     error: null,
-  };
-  jobs.push(job);
-  writeJobs(jobs.slice(-200), filePath);
-  return { job, created: true };
+    };
+    outcome = { job, created: true };
+    return [...jobs, job].slice(-200);
+  }, { queuePath: filePath });
+  return outcome;
 }
 
 export function createSlackDmJob(args, options = {}) {
@@ -128,23 +133,23 @@ export function createSlackDmJob(args, options = {}) {
 
 export function updateSlackDmJob(id, patch, options = {}) {
   const filePath = options.filePath || SLACK_DM_JOBS_PATH;
-  const jobs = readJobs(filePath);
   let updated = null;
-  const next = jobs.map((job) => {
-    if (job.id !== id) return job;
-    const nextDeliveryResult = patch.deliveryResult ?? job.deliveryResult;
-    if (patch.status === "delivered" && !hasSlackDeliveryReceipt(nextDeliveryResult)) {
-      throw new Error("Slack DM job cannot be marked delivered without a Slack file/message receipt");
-    }
-    updated = {
-      ...job,
-      ...patch,
-      updatedAt: nowIso(),
-    };
-    return updated;
-  });
-  if (!updated) return null;
-  writeJobs(next, filePath);
+  mutateQueueSync((jobs) => {
+    const next = jobs.map((job) => {
+      if (job.id !== id) return job;
+      const nextDeliveryResult = patch.deliveryResult ?? job.deliveryResult;
+      if (patch.status === "delivered" && !hasSlackDeliveryReceipt(nextDeliveryResult)) {
+        throw new Error("Slack DM job cannot be marked delivered without a Slack file/message receipt");
+      }
+      updated = {
+        ...job,
+        ...patch,
+        updatedAt: nowIso(),
+      };
+      return updated;
+    });
+    return updated ? next : null;
+  }, { queuePath: filePath });
   return updated;
 }
 
@@ -157,12 +162,28 @@ export function canTransitionSlackAssetJob(fromStatus, toStatus) {
 
 export function transitionSlackDmJob(id, nextStatus, patch = {}, options = {}) {
   const filePath = options.filePath || SLACK_DM_JOBS_PATH;
-  const existing = readJobs(filePath).find((job) => job.id === id);
-  if (!existing) return null;
-  if (!canTransitionSlackAssetJob(existing.status, nextStatus)) {
-    throw new Error(`Invalid Slack asset job transition: ${existing.status} -> ${nextStatus}`);
-  }
-  return updateSlackDmJob(id, { ...patch, status: nextStatus }, options);
+  let updated = null;
+  mutateQueueSync((jobs) => {
+    const existing = jobs.find((job) => job.id === id);
+    if (!existing) return null;
+    // Legality is checked INSIDE the lock against the freshest status, so a
+    // concurrent writer can no longer slip between check and write (the old
+    // two-read TOCTOU).
+    if (!canTransitionSlackAssetJob(existing.status, nextStatus)) {
+      throw new Error(`Invalid Slack asset job transition: ${existing.status} -> ${nextStatus}`);
+    }
+    const fullPatch = { ...patch, status: nextStatus };
+    const nextDeliveryResult = fullPatch.deliveryResult ?? existing.deliveryResult;
+    if (nextStatus === "delivered" && !hasSlackDeliveryReceipt(nextDeliveryResult)) {
+      throw new Error("Slack DM job cannot be marked delivered without a Slack file/message receipt");
+    }
+    return jobs.map((job) => {
+      if (job.id !== id) return job;
+      updated = { ...job, ...fullPatch, updatedAt: nowIso() };
+      return updated;
+    });
+  }, { queuePath: filePath });
+  return updated;
 }
 
 export function recordSlackDmJobDelivered(id, patch = {}, options = {}) {

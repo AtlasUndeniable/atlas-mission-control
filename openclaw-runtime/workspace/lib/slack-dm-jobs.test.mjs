@@ -386,3 +386,55 @@ test("parked workspace jobs summarize honestly without future-delivery promises"
     t.cleanup();
   }
 });
+
+test("cross-writer serialization: listener-side helpers and worker-side mutateQueue never lose updates", async () => {
+  const { execFile } = await import("node:child_process");
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "dm-jobs-lock-"));
+  try {
+    const jobsPath = join(dir, "slack-dm-jobs.json");
+    const ROUNDS = 25;
+    writeFileSync(jobsPath, JSON.stringify([
+      { id: "job-a", status: "received", counter: 0 },
+      { id: "job-b", status: "received", counter: 0 },
+    ], null, 2));
+
+    const libDir = fileURLToPath(new URL(".", import.meta.url));
+    // Child A: listener-style sync mutator (updateSlackDmJob, locked critical section).
+    const driverA = join(dir, "driver-a.mjs");
+    writeFileSync(driverA, `
+import { updateSlackDmJob } from ${JSON.stringify(join(libDir, "slack-dm-jobs.mjs"))};
+const jobsPath = process.argv[2];
+for (let i = 1; i <= ${ROUNDS}; i += 1) {
+  updateSlackDmJob("job-a", { counter: i, sideA: "round-" + i }, { filePath: jobsPath });
+}
+`);
+    // Child B: worker-style async mutateQueue on the SAME file.
+    const driverB = join(dir, "driver-b.mjs");
+    writeFileSync(driverB, `
+import { mutateQueue } from ${JSON.stringify(join(libDir, "queue-writer.mjs"))};
+const jobsPath = process.argv[2];
+for (let i = 1; i <= ${ROUNDS}; i += 1) {
+  await mutateQueue((queue) => queue.map((j) => j.id === "job-b" ? { ...j, counter: i, sideB: "round-" + i } : j), { queuePath: jobsPath });
+}
+`);
+    const run = (driver) => new Promise((resolveP, rejectP) => {
+      execFile(process.execPath, [driver, jobsPath], { timeout: 60_000 },
+        (err, stdout, stderr) => err ? rejectP(new Error(`${err.message}\n${stderr}`)) : resolveP());
+    });
+
+    await Promise.all([run(driverA), run(driverB)]);
+
+    const final = JSON.parse(readFileSync(jobsPath, "utf8"));
+    const jobA = final.find((j) => j.id === "job-a");
+    const jobB = final.find((j) => j.id === "job-b");
+    assert.equal(final.length, 2, "no job lost");
+    assert.equal(jobA.counter, ROUNDS, "listener-side final write must survive worker-side writes");
+    assert.equal(jobB.counter, ROUNDS, "worker-side final write must survive listener-side writes");
+    assert.equal(jobA.sideA, `round-${ROUNDS}`);
+    assert.equal(jobB.sideB, `round-${ROUNDS}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

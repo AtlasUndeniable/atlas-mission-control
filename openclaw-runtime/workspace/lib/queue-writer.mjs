@@ -111,6 +111,34 @@ export async function mutateQueue(mutator, options = {}) {
 }
 
 /**
+ * Synchronous twin of mutateQueue for callers that must stay sync (the
+ * slack-dm-jobs mutators are consumed without await in the listener).
+ * Same lock file, same atomic write — every writer to a given path
+ * serialises on queuePath + ".lock" regardless of which variant it uses.
+ *
+ * Contract difference from mutateQueue: if the mutator returns a non-array,
+ * NOTHING is written (read-only outcome, e.g. upsert found an existing row).
+ * A mutator throw also writes nothing; the lock is always released.
+ */
+export function mutateQueueSync(mutator, options = {}) {
+  const queuePath = options.queuePath || DEFAULT_QUEUE_PATH;
+  const lockPath = lockPathFor(queuePath);
+
+  acquireLock(lockPath);
+  try {
+    const queue = readQueue(queuePath);
+    const result = mutator(queue);
+    if (Array.isArray(result)) {
+      atomicWrite(queuePath, JSON.stringify(result, null, 2));
+      return result;
+    }
+    return queue;
+  } finally {
+    releaseLock(lockPath);
+  }
+}
+
+/**
  * Read-only access (no lock needed for readers on atomic-write files).
  */
 export function peekQueue(options = {}) {
