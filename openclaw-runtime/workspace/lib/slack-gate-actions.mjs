@@ -5,11 +5,11 @@
  * unit-testable without filesystem or network mocks.
  *
  * Telegram bot/chat constants mirror watchdog.mjs (the existing alert path):
- *   bot 8098243076  →  chat 7069167270 ("Dante only")
+ *   same bot + chat ("Dante only") — ids live in config/integrations.json
  */
 
 import https from "node:https";
-import { existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { mutateQueue } from "./queue-writer.mjs";
 
 const DATA_DIR = "/Users/atlasai/.openclaw/data";
@@ -17,8 +17,22 @@ const LOG_DIR = "/Users/atlasai/.openclaw/logs";
 const LOG_FILE = `${LOG_DIR}/slack-gates.log`;
 
 // Reuse watchdog's Telegram bot — same channel Dante already watches.
-const TG_BOT_URL = "https://api.telegram.org/bot8098243076:AAGrv9TBGE8G85bc2BXxmvoUS_wqxHCq2yM/sendMessage";
+// Token: env first, then config/integrations.json (gitignored token store) so
+// launchd jobs keep alerting before their plists reload. Never hardcode it.
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || readTelegramToken();
+const TG_BOT_URL = TG_TOKEN ? `https://api.telegram.org/bot${TG_TOKEN}/sendMessage` : null;
 const TG_CHAT_ID = "7069167270";
+
+function readTelegramToken() {
+  try {
+    const raw = readFileSync("/Users/atlasai/.openclaw/workspace/config/integrations.json", "utf8");
+    return JSON.parse(raw)?.telegram?.botToken || null;
+  } catch {
+    return null;
+  }
+}
+
+if (!TG_BOT_URL) log("⚠️", "TELEGRAM_BOT_TOKEN not configured (env or config/integrations.json) - gate alerts will be skipped");
 
 function ts() {
   return new Date().toLocaleString("en-AU", { timeZone: "Australia/Brisbane" });
@@ -83,6 +97,11 @@ export async function holdMessage({
 // ─── Telegram alert ─────────────────────────────────────────────────────────
 export function alertDante(text) {
   return new Promise((resolve) => {
+    if (!TG_BOT_URL) {
+      log("⚠️", "Telegram alert skipped: TELEGRAM_BOT_TOKEN not configured (env or config/integrations.json)");
+      resolve({ status: 0, error: "telegram token not configured" });
+      return;
+    }
     try {
       const payload = JSON.stringify({ chat_id: TG_CHAT_ID, text });
       const url = new URL(TG_BOT_URL);
