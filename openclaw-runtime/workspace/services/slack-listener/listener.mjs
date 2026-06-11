@@ -30,13 +30,16 @@ import {
   isDeliveryRequestFollowup,
   isMisdirectedDeliveryReply,
   isLikelyLongRunningRequest,
+  isRetrievalIntentRequest,
   isStatusFollowup,
   isTimeoutDebugFollowup,
   isUsefulGatewayReply,
   liveTimeoutHandoffText,
   misroutedDeliveryReplyText,
+  noCapabilityText,
   prepareSlackReply,
   preferredDeliveryForSlackRequest,
+  retrievalAckText,
   splitProviderModel,
   workspaceAckForRequest,
 } from "../../lib/slack-listener-reply.mjs";
@@ -507,6 +510,46 @@ async function handleMessage(event) {
   if (job.kind === "request" && isLikelyLongRunningRequest(text)) {
     const handoffSummary = handoffSummaryForRequest({ text, classification: job.classification });
     const assetJobId = job.assetJobId;
+
+    // Resolve the route BEFORE any acknowledgement so the ack matches the
+    // route actually taken. Unmatched requests must never hear "creating
+    // now" followed by "blocked" a second later.
+    const workflow = findSlackAssetWorkflowForRequest(text);
+
+    if (!workflow) {
+      const route = isRetrievalIntentRequest(text) ? "retrieval" : "no-capability";
+      const reply = route === "retrieval" ? retrievalAckText() : noCapabilityText();
+      try {
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: `asset-route-${route}` });
+        await transitionSlackDmJob(job.id, "blocked", {
+          completedAt: new Date().toISOString(),
+          lastAckAt: new Date().toISOString(),
+          ackText: reply,
+          replyText: reply,
+          routeResolved: route,
+          safeErrorSummary: route === "retrieval"
+            ? "Retrieval request handed to the operator lane; no automated search workflow exists yet."
+            : "No verified Slack asset workflow matched this request.",
+          handoffSummary,
+          preferredDelivery: deliveryPreference.preferredDelivery,
+          preferredDeliveryReason: deliveryPreference.reason,
+        });
+        log("?", `Asset job blocked id=${assetJobId}: no verified workflow matched route=${route}`);
+      } catch (ackErr) {
+        await updateSlackDmJob(job.id, {
+          status: "failed",
+          safeErrorSummary: "Slack acknowledgement send failed.",
+          ackError: ackErr.message,
+          lastAckAttemptAt: new Date().toISOString(),
+          handoffSummary,
+          preferredDelivery: deliveryPreference.preferredDelivery,
+          preferredDeliveryReason: deliveryPreference.reason,
+        });
+        log("?", `ACK_SEND_FAILED channel=${channel} error="${ackErr.message}"`);
+      }
+      return;
+    }
+
     const ack = workspaceAckForRequest({ jobId: assetJobId, state: "queued" });
     try {
       await sendSlackMessage(channel, ack, threadTs, { kind: "summary", callerSite: "asset-job-queued-ack" });
@@ -514,6 +557,7 @@ async function handleMessage(event) {
         lastAckAt: new Date().toISOString(),
         ackText: ack,
         replyText: ack,
+        routeResolved: "build-workflow-matched",
         handoffSummary,
         preferredDelivery: deliveryPreference.preferredDelivery,
         preferredDeliveryReason: deliveryPreference.reason,
@@ -530,26 +574,6 @@ async function handleMessage(event) {
         preferredDeliveryReason: deliveryPreference.reason,
       });
       log("?", `ACK_SEND_FAILED channel=${channel} error="${ackErr.message}"`);
-      return;
-    }
-
-    const workflow = findSlackAssetWorkflowForRequest(text);
-    if (!workflow) {
-      const reply = assetWorkflowBlockedText({
-        jobId: assetJobId,
-        state: "blocked",
-        reason: "I checked the asset registry, but I do not have a verified workflow for that asset yet. I will not invent a generic PDF; this needs a real Atlas/Undeniable workflow or source package first.",
-      });
-      await transitionSlackDmJob(job.id, "blocked", {
-        completedAt: new Date().toISOString(),
-        replyText: reply,
-        safeErrorSummary: "No verified Slack asset workflow matched this request.",
-        handoffSummary,
-        preferredDelivery: deliveryPreference.preferredDelivery,
-        preferredDeliveryReason: deliveryPreference.reason,
-      });
-      await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "asset-workflow-blocked" });
-      log("??", `Asset job blocked id=${assetJobId}: no verified workflow matched`);
       return;
     }
 

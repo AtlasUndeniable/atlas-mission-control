@@ -91,10 +91,33 @@ export function isLikelyLongRunningRequest(text = "") {
     || (hasResearchVerb && hasBuildVerb && /\b(call|calls|client|ricky|visual|recommendation|pay)\b/.test(normalized));
 }
 
+// Retrieval intent: the request asks Atlas to FIND something that already
+// exists (sent/shared before), not to build a new asset. Used only to pick
+// the honest acknowledgement copy; it never changes job routing.
+export function isRetrievalIntentRequest(text = "") {
+  const normalized = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+  // "resend" can only refer to something that already exists.
+  if (/\bresend\b/.test(normalized)) return true;
+  // "find it/that" is anaphoric retrieval; "find the X" alone is not enough
+  // (e.g. "find the top objections and build a summary doc" is a build).
+  return /\b(find|locate|look for|search for|dig up|pull up)\b/.test(normalized)
+    && (/\b(again|before|previous|previously|earlier|existing|original|already|last time|last week|yesterday)\b/.test(normalized)
+      || /\bfind (it|that)\b/.test(normalized)
+      || /\b(sent|shared|gave|made)\b.{0,60}\b(before|already|previously|in slack|to (a )?client)/.test(normalized));
+}
+
 export function workspaceAckForRequest({ jobId, state = "queued" } = {}) {
   void jobId;
   void state;
   return "Got it. I'm creating the asset now. No verified file exists yet, and I won't call it done until the actual file is returned here.";
+}
+
+export function retrievalAckText() {
+  return "Let me find that.";
+}
+
+export function noCapabilityText() {
+  return "I can't build that one yet. There's no verified workflow for it, so I've flagged it for review instead of inventing a generic file.";
 }
 
 export function assetWorkflowBlockedText({ jobId, state = "blocked", reason } = {}) {

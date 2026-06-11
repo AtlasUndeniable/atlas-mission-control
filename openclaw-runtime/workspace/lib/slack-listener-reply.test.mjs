@@ -15,10 +15,13 @@ import {
   isExplicitEmailDeliveryRequest,
   isMisdirectedDeliveryReply,
   isLikelyLongRunningRequest,
+  isRetrievalIntentRequest,
   isStatusFollowup,
   isTimeoutDebugFollowup,
   isUsefulGatewayReply,
   liveTimeoutHandoffText,
+  noCapabilityText,
+  retrievalAckText,
   workspaceAckForRequest,
   misroutedDeliveryReplyText,
   prepareSlackReply,
@@ -251,4 +254,29 @@ test("known First 10K coaching asset requests map to verified artifact package",
   assert.match(artifact.artifactPath, /first-10k-month-bible-branded\.pdf$/);
   assert.match(artifact.message, /verified First \$10K Month branded asset/);
   assert.equal(findKnownArtifactForRequest("create a generic branded pdf for a random client"), null);
+});
+
+test("isRetrievalIntentRequest detects find-existing-doc requests", () => {
+  // The real request that produced the dishonest "creating now -> blocked" pair.
+  assert.equal(isRetrievalIntentRequest("i have sent clients a vsl framework before in slack as a hand. over doc. find it and send it to me"), true);
+  assert.equal(isRetrievalIntentRequest("find the retention playbook we shared with clients previously"), true);
+  assert.equal(isRetrievalIntentRequest("can you resend the audit pdf from last time"), true);
+  assert.equal(isRetrievalIntentRequest("resend the audit pdf"), true);
+  assert.equal(isRetrievalIntentRequest("resend the audit from last week"), true);
+  // Build requests are NOT retrieval.
+  assert.equal(isRetrievalIntentRequest("create a pricing playbook pdf for new clients"), false);
+  assert.equal(isRetrievalIntentRequest("build me a deck on q2 retention"), false);
+  // "find the X ... and build Y" is a build request, not retrieval.
+  assert.equal(isRetrievalIntentRequest("find the top objections in the calls and build a summary doc"), false);
+});
+
+test("route acks are honest and never claim creation for unmatched routes", () => {
+  assert.equal(retrievalAckText(), "Let me find that.");
+  for (const text of [retrievalAckText(), noCapabilityText()]) {
+    assert.ok(!/creat/i.test(text), "unmatched-route ack must never say creating");
+    assert.ok(!/\/Users\//.test(text) && !/slackdm-|asset-[0-9a-f]/.test(text), "no paths or internal ids");
+  }
+  assert.match(noCapabilityText(), /can't build that one yet/i);
+  // The matched-route ack keeps its honest building copy.
+  assert.match(workspaceAckForRequest({}), /creating the asset now/);
 });
