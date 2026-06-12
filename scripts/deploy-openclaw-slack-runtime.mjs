@@ -22,6 +22,7 @@ export const SLACK_RUNTIME_FILES = [
   "lib/slack-dm-jobs.mjs",
   "lib/slack-dm-jobs.test.mjs",
   "lib/slack-retrieval.mjs",
+  "lib/slack-retrieval-pending.mjs",
   "services/slack-listener/listener.mjs",
   "services/workspace-worker/worker.mjs",
 ];
