@@ -12,9 +12,15 @@ import { holdAndAlert } from "../../lib/slack-gate-actions.mjs";
 import { recordArtifactCreated, readDeliveryLedger, scanExportArtifactGroups } from "../../lib/artifact-delivery.mjs";
 import { RHYS_USER_ID, selectPreferredArtifactPath } from "../../lib/slack-rhys-dm-artifact.mjs";
 import { executeSlackAssetWorkflow, findSlackAssetWorkflowForRequest } from "../../lib/slack-asset-workflows.mjs";
-import { runRetrievalLane } from "../../lib/slack-retrieval.mjs";
+import { prettyName, retrievalAmbiguousText, retrievalDeliveredText, runRetrievalLane } from "../../lib/slack-retrieval.mjs";
 import {
-  findCarrierJobForArtifactGroup,
+  clearPendingDisambiguation,
+  enqueueRetrievalCarrier,
+  readPendingDisambiguation,
+  resolveDisambiguationPick,
+  setPendingDisambiguation,
+} from "../../lib/slack-retrieval-pending.mjs";
+import {
   findLatestDeliveryCandidate,
   findRecentSlackDmJob,
   listSlackDmJobs,
@@ -391,6 +397,94 @@ async function handleMessage(event) {
     preferredDeliveryReason: deliveryPreference.reason,
   });
 
+  // F3.1 DISAMBIGUATION PICK — checked BEFORE all normal routing. When a
+  // retrieval offer ("which one?") is live for this channel+user, the reply
+  // is most likely a candidate name ("first 10k month bible"), which carries
+  // no retrieval verb and would otherwise fall through to the gateway
+  // timeout lane ("needs workspace time...") — the exact live failure this
+  // fixes. Status follow-ups never consume or clear the offer.
+  if (job.kind !== "status_check") {
+    const pendingOffer = readPendingDisambiguation({ channel, userId });
+    if (pendingOffer && isRetrievalRequest(text)) {
+      // A NEW search ("find the ...") supersedes the standing offer — the
+      // user moved on to a fresh retrieval; never hijack it as a pick.
+      clearPendingDisambiguation({ channel, userId });
+      log("ℹ️", `Pending disambiguation superseded by a new retrieval request for ${userId} in ${channel}`);
+    } else if (pendingOffer) {
+      const pick = resolveDisambiguationPick(text, pendingOffer.candidates);
+      if (pick.kind === "match") {
+        const nowIso = new Date().toISOString();
+        const pickedPath = selectPreferredArtifactPath(pick.candidate.artifactPaths);
+        if (!canQueueRhysDmDelivery(channel, userId)) {
+          clearPendingDisambiguation({ channel, userId });
+          const reply = approvalBlockedArtifactText({ artifactPaths: pick.candidate.artifactPaths });
+          await updateSlackDmJob(job.id, {
+            status: "blocked_needs_approval",
+            completedAt: nowIso,
+            replyText: reply,
+            safeErrorSummary: "Artifact delivery is restricted to Rhys's DM; operator review required.",
+            retrievalResolved: "pick",
+          });
+          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-pick-not-rhys-dm" });
+          log("⚠️", `Disambiguation pick blocked (not Rhys DM) job=${job.id}`);
+          return;
+        }
+        if (!pickedPath || !existsSync(pickedPath)) {
+          clearPendingDisambiguation({ channel, userId });
+          const reply = "I found a record of that doc, but the file itself isn't available any more. Want me to rebuild it?";
+          await updateSlackDmJob(job.id, {
+            status: "answered",
+            completedAt: nowIso,
+            replyText: reply,
+            retrievalResolved: "pick_missing_file",
+            safeErrorSummary: "Disambiguation pick resolved an artifact whose file no longer exists on disk; nothing was queued.",
+          });
+          await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-pick-missing-file" });
+          log("⚠️", `Disambiguation pick resolved a missing file job=${job.id} — not queued`);
+          return;
+        }
+        // Same single-owner path as a clean retrieval match: queue for the
+        // worker; nothing is sent from the listener (F2.1). The offer is
+        // cleared only AFTER the enqueue succeeds — clearing first left a
+        // crash window where the pick evaporated with nothing queued and no
+        // reply (adversarial finding).
+        const { carrierId } = enqueueRetrievalCarrier({
+          requestJobId: job.id,
+          channel,
+          userId,
+          artifactPath: pickedPath,
+          groupPaths: pick.candidate.artifactPaths,
+          title: prettyName(pick.candidate),
+          message: retrievalDeliveredText(),
+          fileExists: existsSync,
+        });
+        clearPendingDisambiguation({ channel, userId });
+        await sendSlackMessage(channel, retrievalQueuedText(), threadTs, { kind: "summary", callerSite: "retrieval-pick-queued" });
+        log("✅", `Disambiguation pick queued for worker delivery job=${carrierId}`);
+        return;
+      }
+      if (pick.kind === "still_ambiguous") {
+        // Narrowed but still tied — re-ask with the tied subset, keep the
+        // offer alive (fresh TTL) so the next reply can settle it.
+        setPendingDisambiguation({ channel, userId, candidates: pick.candidates, offerJobId: job.id });
+        const reply = retrievalAmbiguousText(pick.candidates);
+        await updateSlackDmJob(job.id, {
+          status: "answered",
+          completedAt: new Date().toISOString(),
+          replyText: reply,
+          retrievalResolved: "still_ambiguous",
+          preferredDelivery: "slack_dm",
+        });
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-pick-still-ambiguous" });
+        log("✅", `Disambiguation pick still ambiguous job=${job.id} candidates=${pick.candidates.length}`);
+        return;
+      }
+      // No candidate matched — the user moved on. Clear and route normally.
+      clearPendingDisambiguation({ channel, userId });
+      log("ℹ️", `Pending disambiguation cleared (no candidate matched) for ${userId} in ${channel}`);
+    }
+  }
+
   // Read-only retrieval lane — AHEAD of the delivery-followup lane. A request
   // that names a referent to find ("find the VSL framework I sent before and
   // send it to me") resolves against files that already exist; it must never
@@ -460,44 +554,29 @@ async function handleMessage(event) {
           log("⚠️", `Retrieval resolved a missing file job=${job.id} — not queued`);
           return;
         }
-        // If a pending ledger job already carries ANY file of this resolved
-        // group, queue THAT job. Matching the single preferred path missed
-        // sibling formats of the same asset (.md vs .pdf), letting a second
-        // job queue the SAME asset under another filename — the two-filename
-        // double-send. Counters reset: an explicit re-request earns fresh
-        // worker attempts instead of an instant re-park.
-        const groupPaths = [...new Set([queued.artifactPath, ...((result.match?.artifactPaths) || [])])].filter(Boolean);
-        const existingCarrier = findCarrierJobForArtifactGroup(listSlackDmJobs(), {
-          channel, userId, excludeId: job.id, groupPaths,
+        // Shared single-owner enqueue (carrier-group dedupe + counter reset
+        // live in enqueueRetrievalCarrier — the same path a disambiguation
+        // pick uses, so the two can never drift).
+        const { carrierId } = enqueueRetrievalCarrier({
+          requestJobId: job.id,
+          channel,
+          userId,
+          artifactPath: queued.artifactPath,
+          groupPaths: result.match?.artifactPaths || [],
+          title: queued.title,
+          message: queued.message,
+          fileExists: existsSync,
         });
-        const carrier = existingCarrier || job;
-        await updateSlackDmJob(carrier.id, {
-          status: "delivery_requested",
-          preferredDelivery: "slack_dm",
-          deliveryRequestedAt: now,
-          artifactPaths: [...new Set([queued.artifactPath, ...((existingCarrier?.artifactPaths) || []).filter((p) => existsSync(p))])],
-          title: carrier.title || queued.title,
-          deliveryMessage: queued.message,
-          retrievalResolved: "match",
-          workerAttempts: 0,
-          workerVerifyFailures: 0,
-        });
-        queuedCarrierId = carrier.id;
-        if (existingCarrier) {
-          await updateSlackDmJob(job.id, {
-            status: "answered",
-            completedAt: now,
-            relatedJobId: existingCarrier.id,
-            replyText: retrievalQueuedText(),
-            preferredDelivery: "slack_dm",
-            retrievalResolved: "match",
-          });
-        }
+        queuedCarrierId = carrierId;
         await sendSlackMessage(channel, retrievalQueuedText(), threadTs, { kind: "summary", callerSite: "retrieval-queued" });
-        log("✅", `Retrieval resolved and queued for worker delivery job=${carrier.id}`);
+        log("✅", `Retrieval resolved and queued for worker delivery job=${carrierId}`);
         return;
       }
       if (result.kind === "ambiguous") {
+        // F3.1: the offer is now STATEFUL — persist the candidates so the
+        // verbless pick that follows resolves instead of falling through to
+        // the gateway timeout lane (the live failure Rhys hit).
+        setPendingDisambiguation({ channel, userId, candidates: result.candidates, offerJobId: job.id });
         await updateSlackDmJob(job.id, {
           status: "answered",
           completedAt: now,
@@ -506,7 +585,7 @@ async function handleMessage(event) {
           preferredDelivery: "slack_dm",
         });
         await sendSlackMessage(channel, result.reply, threadTs, { kind: "summary", callerSite: "retrieval-ambiguous" });
-        log("✅", `Retrieval ambiguous job=${job.id} candidates=${result.candidates.length}`);
+        log("✅", `Retrieval ambiguous job=${job.id} candidates=${result.candidates.length} (offer persisted)`);
         return;
       }
       // not_found — honest, never fabricates.

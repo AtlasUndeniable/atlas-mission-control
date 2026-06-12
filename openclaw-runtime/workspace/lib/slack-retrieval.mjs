@@ -30,7 +30,7 @@ const STOPWORDS = new Set([
   "pull", "up", "resend", "fetch", "grab", "get", "show", "give", "want", "need", "about",
 ]);
 
-const MIN_MATCH_SCORE = 2; // need ≥2 distinctive term hits to claim a match
+export const MIN_MATCH_SCORE = 2; // need ≥2 distinctive term hits to claim a match
 const AMBIGUOUS_MARGIN = 1; // winner must beat the runner-up by > this
 
 function collapse(value = "") {
