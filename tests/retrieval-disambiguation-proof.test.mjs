@@ -24,6 +24,8 @@ import { join, resolve } from "node:path";
 import {
   clearPendingDisambiguation,
   enqueueRetrievalCarrier,
+  looksLikeOfferReply,
+  parsePositionalPick,
   readPendingDisambiguation,
   resolveDisambiguationPick,
   setPendingDisambiguation,
@@ -341,6 +343,107 @@ test("WORKER: pick resolving to a group whose carrier job is already pending => 
   } finally { world.cleanup(); }
 });
 
+// ── R3: the WRONG-FILE live failure (2026-06-12 evening) ────────────────────
+test("R3-REPLAY: two offers, then 'last one' => the LAST PLAYBOOK candidate delivers, NEVER the bible", async () => {
+  const world = makeWorld();
+  try {
+    const biblePdf = world.makeArtifact("2026-06-12-first-10k-month-bible-branded.pdf");
+    const offer1 = [
+      { artifactKey: "first-10k-month-bible-branded", title: "First 10k Month Bible", artifactPaths: [biblePdf] },
+      { artifactKey: "first-10k-month-doc-branded", title: "First 10k Month Doc", artifactPaths: [world.makeArtifact("first-10k-month-doc-branded.pdf")] },
+    ];
+    const offer2 = [
+      { artifactKey: "first-10k-online-coaching-playbook-branded", title: "First 10k Online Coaching Playbook", artifactPaths: [world.makeArtifact("first-10k-online-coaching-playbook-branded.pdf")] },
+      { artifactKey: "online-coaching-leads-playbook-branded", title: "Online Coaching Leads Playbook", artifactPaths: [world.makeArtifact("online-coaching-leads-playbook-branded.pdf")] },
+      { artifactKey: "online-coaching-retention-playbook-branded", title: "Online Coaching Retention Playbook", artifactPaths: [world.makeArtifact("online-coaching-retention-playbook-branded.pdf")] },
+    ];
+    // offer #1 (bible-doc), then offer #2 (playbooks) SUPERSEDES it
+    setPendingDisambiguation({ channel: RHYS_DM_CHANNEL_ID, userId: RHYS_USER_ID, candidates: offer1 }, PENDING_OPTS(world));
+    setPendingDisambiguation({ channel: RHYS_DM_CHANNEL_ID, userId: RHYS_USER_ID, candidates: offer2 }, PENDING_OPTS(world));
+    const live = readPendingDisambiguation({ channel: RHYS_DM_CHANNEL_ID, userId: RHYS_USER_ID }, PENDING_OPTS(world));
+    assert.equal(live.candidates.length, 3, "the newest offer fully replaced the old one");
+    assert.ok(!JSON.stringify(live.candidates).includes("bible"), "no bible candidate survives the supersede");
+
+    // Rhys's EXACT pick
+    const pick = resolveDisambiguationPick("last one", live.candidates);
+    assert.equal(pick.kind, "match", "'last one' must resolve positionally");
+    assert.equal(pick.candidate.title, "Online Coaching Retention Playbook", "the LAST CANDIDATE of the CURRENT offer");
+    assert.ok(live.candidates.some((c) => c.artifactKey === pick.candidate.artifactKey), "hard invariant: pick is a member of the offer");
+
+    world.writeJobs([requestJob("slackdm-lastone", "last one")]);
+    enqueueRetrievalCarrier({
+      requestJobId: "slackdm-lastone", channel: RHYS_DM_CHANNEL_ID, userId: RHYS_USER_ID,
+      artifactPath: pick.candidate.artifactPaths[0], groupPaths: pick.candidate.artifactPaths,
+      title: pick.candidate.title, message: "Found it.", fileExists: existsSync,
+    }, { jobsPath: world.jobsPath });
+    const summary = await workerDeliver(world);
+    assert.equal(summary.delivered, 1);
+    const sends = world.readSends();
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].filename, "online-coaching-retention-playbook-branded.pdf", "the playbook ships");
+    assert.ok(!sends.some((s) => /bible/.test(s.filename)), "THE BIBLE NEVER SHIPS");
+  } finally { world.cleanup(); }
+});
+
+test("R3-ORDINALS: positional picks index the offer exactly; bare ordinals in NAMES never misfire", () => {
+  const world = makeWorld();
+  try {
+    const candidates = liveCandidates(world); // [Bible, Checklist, Lead Nurture]
+    assert.equal(resolveDisambiguationPick("the first one", candidates).candidate?.title, "First 10K Month Bible");
+    assert.equal(resolveDisambiguationPick("second one", candidates).candidate?.title, "First 10K Month Checklist");
+    assert.equal(resolveDisambiguationPick("the third one", candidates).candidate?.title, "Lead Nurture Playbook");
+    assert.equal(resolveDisambiguationPick("number 2", candidates).candidate?.title, "First 10K Month Checklist");
+    assert.equal(resolveDisambiguationPick("3", candidates).candidate?.title, "Lead Nurture Playbook");
+    assert.equal(resolveDisambiguationPick("last one", candidates).candidate?.title, "Lead Nurture Playbook");
+    // ordinal words inside a NAME pick stay name-scored, not positional
+    const namePick = resolveDisambiguationPick("first 10k month", candidates);
+    assert.equal(namePick.kind, "still_ambiguous", "'first 10k month' is a name fragment, not position 1");
+    // out of range => reask, never a guess, never fallthrough
+    assert.equal(resolveDisambiguationPick("number 9", candidates).kind, "reask");
+    assert.equal(resolveDisambiguationPick("option 7", candidates).kind, "reask");
+  } finally { world.cleanup(); }
+});
+
+test("R3-REASK: referential-but-unresolvable picks re-ask and never fall through", () => {
+  const world = makeWorld();
+  try {
+    const candidates = liveCandidates(world);
+    assert.equal(resolveDisambiguationPick("that one", candidates).kind, "reask");
+    assert.equal(resolveDisambiguationPick("the shiny one", candidates).kind, "reask");
+    assert.equal(resolveDisambiguationPick("either of them", candidates).kind, "reask");
+    // genuinely-new intents still clear + route normally
+    assert.equal(resolveDisambiguationPick("actually can you check my calendar for tomorrow", candidates).kind, "none");
+    assert.ok(looksLikeOfferReply("last one"));
+    assert.ok(!looksLikeOfferReply("build me a competitor teardown pdf for gym owners"));
+    assert.deepEqual(parsePositionalPick("last week"), null, "temporal phrases are not positional");
+  } finally { world.cleanup(); }
+});
+
+// ── R4: escape-the-offer attacks (second adversarial round) ──────────────────
+test("R4-ESCAPE: long polite ordinal replies resolve positionally — preamble can never push a pick to the gateway", () => {
+  const world = makeWorld();
+  try {
+    const candidates = liveCandidates(world);
+    assert.equal(resolveDisambiguationPick("yes please send me the second one from the list", candidates).candidate?.title, "First 10K Month Checklist");
+    assert.equal(resolveDisambiguationPick("ok cool send the last one over to me please thanks", candidates).candidate?.title, "Lead Nurture Playbook");
+    assert.equal(resolveDisambiguationPick("could you send me the second one from that list", candidates).candidate?.title, "First 10K Month Checklist");
+    // substance still routes to scoring/normal flow, never positional
+    assert.equal(parsePositionalPick("send me the second invoice from the march list"), null);
+  } finally { world.cleanup(); }
+});
+
+test("R4-ESCAPE: pronoun-free delivery phrasings ('send the file here') re-ask while an offer is open", () => {
+  const world = makeWorld();
+  try {
+    const candidates = liveCandidates(world);
+    // lib-level: definite-article file nouns are referential
+    assert.equal(resolveDisambiguationPick("yeah send the file here", candidates).kind, "reask");
+    assert.equal(resolveDisambiguationPick("just send the doc here", candidates).kind, "reask");
+    // and genuinely-new intents still route normally
+    assert.equal(resolveDisambiguationPick("can you build me that competitor teardown thing we discussed", candidates).kind, "none");
+  } finally { world.cleanup(); }
+});
+
 // ── Static wiring: the listener actually uses all of this ────────────────────
 test("STATIC: listener wires the pending seam before routing and persists offers in the ambiguous branch", () => {
   const src = readFileSync(LISTENER_PATH, "utf8");
@@ -355,6 +458,8 @@ test("STATIC: listener wires the pending seam before routing and persists offers
   assert.ok(!/sendRhysDmArtifact\s*\(/.test(src.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n")), "no listener-side send reintroduced");
   // R2: a new retrieval request supersedes the standing offer
   assert.ok(/pendingOffer && isRetrievalRequest\(text\)/.test(src), "new search supersedes a stale offer");
+  // R4: delivery-followup phrasing while an offer is open re-asks (belt-and-braces)
+  assert.ok(/pick\.kind === "none" && isDeliveryRequestFollowup\(text\)/.test(src), "delivery phrasings never escape an open offer");
   // R2: in the match branch the offer is cleared only AFTER the enqueue
   const matchBranch = src.slice(src.indexOf('pick.kind === "match"'), src.indexOf('pick.kind === "still_ambiguous"'));
   const enqueueAt = matchBranch.indexOf("const { carrierId } = enqueueRetrievalCarrier");

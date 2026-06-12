@@ -412,6 +412,23 @@ async function handleMessage(event) {
       log("ℹ️", `Pending disambiguation superseded by a new retrieval request for ${userId} in ${channel}`);
     } else if (pendingOffer) {
       const pick = resolveDisambiguationPick(text, pendingOffer.candidates);
+      // Belt-and-braces (adversarial finding): "send the file here" carries
+      // no pronoun, so heuristics may call it a non-match — but a delivery
+      // request straight after "which one?" is ANSWERING the offer. Falling
+      // through would hand it to findLatestDeliveryCandidate, which ships
+      // whatever unrelated job is newest. While an offer is open, delivery
+      // phrasings re-ask instead.
+      if (pick.kind === "none" && isDeliveryRequestFollowup(text)) {
+        pick.kind = "reask";
+      }
+      // HARD INVARIANT: a delivered file is always a member of the offer the
+      // user is answering. The resolver guarantees this by construction; the
+      // membership check makes the invariant survive any future refactor.
+      if (pick.kind === "match" && !pendingOffer.candidates.includes(pick.candidate)) {
+        log("❌", `INVARIANT VIOLATION: pick resolved outside the offer for ${userId} in ${channel} — re-asking instead`);
+        pick.kind = "reask";
+        delete pick.candidate;
+      }
       if (pick.kind === "match") {
         const nowIso = new Date().toISOString();
         const pickedPath = selectPreferredArtifactPath(pick.candidate.artifactPaths);
@@ -463,23 +480,30 @@ async function handleMessage(event) {
         log("✅", `Disambiguation pick queued for worker delivery job=${carrierId}`);
         return;
       }
-      if (pick.kind === "still_ambiguous") {
-        // Narrowed but still tied — re-ask with the tied subset, keep the
-        // offer alive (fresh TTL) so the next reply can settle it.
-        setPendingDisambiguation({ channel, userId, candidates: pick.candidates, offerJobId: job.id });
-        const reply = retrievalAmbiguousText(pick.candidates);
+      if (pick.kind === "still_ambiguous" || pick.kind === "reask") {
+        // Narrowed-but-tied, out-of-range positional, or referential-but-
+        // unresolvable ("that one"): the user IS answering the offer. Re-ask
+        // and keep the offer alive (fresh TTL). NEVER fall through — a
+        // referential pick reaching the gateway is how "last one" delivered
+        // the wrong file live (2026-06-12).
+        const reaskCandidates = pick.kind === "still_ambiguous" ? pick.candidates : pendingOffer.candidates;
+        setPendingDisambiguation({ channel, userId, candidates: reaskCandidates, offerJobId: job.id });
+        const reply = pick.kind === "reask"
+          ? `I want to make sure I send the right one — reply with the name or its number:\n${reaskCandidates.map((c, i) => `${i + 1}. ${prettyName(c)}`).join("\n")}`
+          : retrievalAmbiguousText(reaskCandidates);
         await updateSlackDmJob(job.id, {
           status: "answered",
           completedAt: new Date().toISOString(),
           replyText: reply,
-          retrievalResolved: "still_ambiguous",
+          retrievalResolved: pick.kind,
           preferredDelivery: "slack_dm",
         });
-        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: "retrieval-pick-still-ambiguous" });
-        log("✅", `Disambiguation pick still ambiguous job=${job.id} candidates=${pick.candidates.length}`);
+        await sendSlackMessage(channel, reply, threadTs, { kind: "summary", callerSite: `retrieval-pick-${pick.kind === "reask" ? "reask" : "still-ambiguous"}` });
+        log("✅", `Disambiguation pick ${pick.kind} job=${job.id} candidates=${reaskCandidates.length}`);
         return;
       }
-      // No candidate matched — the user moved on. Clear and route normally.
+      // Non-referential, no candidate matched — the user moved on. Clear and
+      // route normally.
       clearPendingDisambiguation({ channel, userId });
       log("ℹ️", `Pending disambiguation cleared (no candidate matched) for ${userId} in ${channel}`);
     }
