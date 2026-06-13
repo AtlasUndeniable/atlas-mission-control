@@ -648,7 +648,137 @@ function EmptyState({
   );
 }
 
-function LibraryPanel({
+// Read-only "Audits" section: surfaces Rhys's cohort-audit deliverables from
+// the real exports projection via /api/workspace/audits, with Open (inline) and
+// Download links to the by-id PDF byte route. No approve/send/deliver controls.
+interface AuditListRow {
+  id: string;
+  title: string;
+  date: string;
+  sizeBytes: number;
+}
+
+function formatAuditSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function formatAuditDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function AuditsPanel() {
+  const [rows, setRows] = useState<AuditListRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const response = await fetch("/api/workspace/audits", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error(`audits ${response.status}`);
+        const data = await response.json();
+        setRows(Array.isArray(data?.audits) ? (data.audits as AuditListRow[]) : []);
+      } catch (caught) {
+        if ((caught as Error).name !== "AbortError") setError("Audits are unavailable right now.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  // Stay out of the way when there is nothing to show and nothing went wrong.
+  if (!loading && !error && rows.length === 0) return null;
+
+  return (
+    <section
+      style={{
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 12,
+        padding: "16px 18px",
+        marginBottom: 16,
+        background: "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+        <div>
+          <div className={styles.panelKicker}>Audits</div>
+          <h1 style={{ fontSize: 18, margin: "2px 0 0" }}>Cohort audit deliverables</h1>
+        </div>
+        {rows.length > 0 ? <span style={{ opacity: 0.6, fontSize: 13 }}>{rows.length} available</span> : null}
+      </div>
+
+      {loading ? <p style={{ opacity: 0.7, margin: 0 }}>Loading audits...</p> : null}
+      {error ? <p style={{ color: "#f1a1a1", margin: 0 }}>{error}</p> : null}
+
+      {rows.length > 0 ? (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map((row) => (
+            <li
+              key={row.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "10px 12px",
+                border: "1px solid rgba(255,255,255,0.06)",
+                borderRadius: 10,
+              }}
+            >
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: "block", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {row.title}
+                </span>
+                <span style={{ display: "block", opacity: 0.6, fontSize: 12 }}>
+                  {[formatAuditDate(row.date), formatAuditSize(row.sizeBytes), "PDF"].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <a
+                  href={`/api/workspace/artifacts/${encodeURIComponent(row.id)}/file`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: 13, textDecoration: "none", padding: "4px 10px", border: "1px solid rgba(255,255,255,0.16)", borderRadius: 8 }}
+                >
+                  Open
+                </a>
+                <a
+                  href={`/api/workspace/artifacts/${encodeURIComponent(row.id)}/file?download=1`}
+                  style={{ fontSize: 13, textDecoration: "none", padding: "4px 10px", border: "1px solid rgba(255,255,255,0.16)", borderRadius: 8 }}
+                >
+                  Download
+                </a>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function LibraryPanel(props: {
+  artifacts: WorkspaceLibraryArtifact[];
+  error: string | null;
+  hydrating: boolean;
+  onOpenArtifact: (artifact: Artifact) => void;
+}) {
+  return (
+    <>
+      <AuditsPanel />
+      <LibraryPanelBody {...props} />
+    </>
+  );
+}
+
+function LibraryPanelBody({
   artifacts,
   error,
   hydrating,
