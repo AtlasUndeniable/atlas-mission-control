@@ -271,6 +271,14 @@ const initialThreadState: ThreadState = {
 
 const WORKSPACE_ROOM = "workspace-demo";
 const DEFAULT_PROJECT_ID = "undeniable-os";
+
+// Resizable left rail. Width persists to localStorage and restores on load.
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_DEFAULT_WIDTH = 256;
+const SIDEBAR_WIDTH_KEY = "atlas-workspace-sidebar-width";
+const clampSidebarWidth = (value: number) =>
+  Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
 const ACTIVE_SESSION_STORAGE_PREFIX = "atlas.workspace.activeSession";
 const WORKSPACE_PROJECTS: WorkspaceProjectOption[] = [
   { id: "undeniable-os", title: "Undeniable OS" },
@@ -1860,7 +1868,7 @@ function Sidebar({
           <li className={selectedProjectId === project.id ? styles.sidebarActive : undefined} key={project.id}>
             <button className={styles.sidebarItemButton} type="button" onClick={() => onSelectProject(project.id)}>
               <IconFolder />
-              <span className={styles.sidebarTitle}>{project.title}</span>
+              <span className={styles.sidebarTitleFixed}>{project.title}</span>
             </button>
           </li>
         ))}
@@ -1881,13 +1889,13 @@ function Sidebar({
         {runState === "running" && visibleSessions.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconSpinner />
-            <span className={styles.sidebarTitle}>Running local task</span>
+            <span className={styles.sidebarTitleFixed}>Running local task</span>
           </li>
         ) : null}
         {runState !== "running" && visibleSessions.length === 0 ? (
           <li className={styles.sidebarMuted}>
             <IconList />
-            <span className={styles.sidebarTitle}>No saved sessions yet</span>
+            <span className={styles.sidebarTitleFixed}>No saved sessions yet</span>
           </li>
         ) : null}
       </ul>
@@ -2003,8 +2011,43 @@ export default function WorkspaceDemoApp() {
   const [connectorLoading, setConnectorLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState>({ status: "closed" });
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
   const sourceRef = useRef<LocalWorkspaceEventSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+
+  // Single setter keeps the ref (read during drag/persist) in sync with state.
+  const applySidebarWidth = useCallback((value: number) => {
+    const next = clampSidebarWidth(value);
+    sidebarWidthRef.current = next;
+    setSidebarWidth(next);
+  }, []);
+
+  // Restore persisted width on mount (client-only — avoids SSR hydration drift).
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(saved) && saved > 0) applySidebarWidth(saved);
+  }, [applySidebarWidth]);
+
+  // Drag the rail's right edge; persist the final width on release.
+  const startSidebarResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.classList.add(styles.resizeHandleActive);
+    const onMove = (moveEvent: PointerEvent) => applySidebarWidth(moveEvent.clientX);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.removeProperty("user-select");
+      document.body.style.removeProperty("cursor");
+      handle.classList.remove(styles.resizeHandleActive);
+      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidthRef.current));
+    };
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [applySidebarWidth]);
   const referencePacket = useMemo(
     () => readLatestReferencePacket(threadState.internalEvents),
     [threadState.internalEvents],
@@ -2304,7 +2347,7 @@ export default function WorkspaceDemoApp() {
   const hasThreadData = threadState.messages.length > 0 || threadState.artifacts.length > 0 || threadState.tasks.length > 0 || Boolean(threadState.errorMessage);
 
   return (
-    <main className={styles.app}>
+    <main className={styles.app} style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
       <Sidebar
         runState={runState}
         panel={activePanel}
@@ -2316,6 +2359,14 @@ export default function WorkspaceDemoApp() {
         onPanelChange={setActivePanel}
         onSelectProject={selectProject}
         onSelectSession={selectSession}
+      />
+      <div
+        className={styles.resizeHandle}
+        style={{ left: sidebarWidth - 3 }}
+        onPointerDown={startSidebarResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
       />
       <section className={styles.canvas}>
         <header className={styles.topbar}>
