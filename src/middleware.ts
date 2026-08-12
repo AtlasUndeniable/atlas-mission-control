@@ -4,6 +4,45 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 const AUTH_USER = process.env.MISSION_CONTROL_AUTH_USER;
 const AUTH_PASSWORD = process.env.MISSION_CONTROL_AUTH_PASSWORD;
 
+// ===== RHYS-ONLY CREDENTIAL =====
+// A SECOND Basic Auth pair. Mission Control was single-tenant: one shared
+// operator credential with no notion of who is behind it. /exec is Rhys's
+// board and must not be readable by whoever holds the operator password, so
+// the middleware now identifies WHICH pair authenticated and tags the request.
+const RHYS_USER = process.env.MISSION_CONTROL_RHYS_USER;
+const RHYS_PASSWORD = process.env.MISSION_CONTROL_RHYS_PASSWORD;
+
+/** Who is behind this request. Never inferred from a client-supplied header. */
+type Principal = "operator" | "rhys" | "cf-access";
+
+/**
+ * Downstream routes read this to know who they are serving. Middleware ALWAYS
+ * sets it from its own check and never forwards a client-supplied value, so it
+ * cannot be spoofed by sending the header.
+ */
+const PRINCIPAL_HEADER = "x-mc-principal";
+
+/** Path prefixes only the Rhys credential may reach. */
+const RHYS_ONLY_PREFIXES = ["/exec", "/api/exec"];
+
+const rhysCredentialConfigured = Boolean(RHYS_USER && RHYS_PASSWORD);
+
+/**
+ * A Rhys pair identical to the operator pair would silently hand every
+ * operator the executive board. That is a misconfiguration, not a login, so
+ * /exec fails closed rather than quietly granting access.
+ */
+const rhysCredentialIsDistinct =
+  rhysCredentialConfigured && !(RHYS_USER === AUTH_USER && RHYS_PASSWORD === AUTH_PASSWORD);
+
+/** Length-independent, constant-time-ish compare: no early exit on first mismatch. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 // ===== CLOUDFLARE ACCESS JWT =====
 // Both env vars must be set or the JWT path stays OFF (Basic Auth only).
 // Values come from the Cloudflare Zero Trust dashboard (.env.local).
@@ -50,18 +89,27 @@ async function checkCfAccessJwt(request: NextRequest): Promise<boolean> {
 }
 
 // ===== BASIC AUTH =====
-function checkBasicAuth(request: NextRequest): boolean {
+/** Identify which configured pair the credentials match, or null for neither. */
+function identifyBasicAuth(request: NextRequest): Principal | null {
   const header = request.headers.get("authorization");
-  if (!header || !header.startsWith("Basic ")) return false;
+  if (!header || !header.startsWith("Basic ")) return null;
   try {
     const decoded = atob(header.slice(6));
     const colon = decoded.indexOf(":");
-    if (colon === -1) return false;
+    if (colon === -1) return null;
     const user = decoded.slice(0, colon);
     const pass = decoded.slice(colon + 1);
-    return user === AUTH_USER && pass === AUTH_PASSWORD;
+    // Rhys first: on an identical pair the narrower principal must win, and
+    // rhysCredentialIsDistinct gates /exec separately if they were duplicated.
+    if (RHYS_USER && RHYS_PASSWORD && safeEqual(user, RHYS_USER) && safeEqual(pass, RHYS_PASSWORD)) {
+      return "rhys";
+    }
+    if (AUTH_USER && AUTH_PASSWORD && safeEqual(user, AUTH_USER) && safeEqual(pass, AUTH_PASSWORD)) {
+      return "operator";
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -72,6 +120,13 @@ function unauthorizedResponse(): NextResponse {
   });
 }
 
+/** Pass the request through, stamped with the principal we actually verified. */
+function allow(request: NextRequest, principal: Principal): NextResponse {
+  const headers = new Headers(request.headers);
+  headers.set(PRINCIPAL_HEADER, principal);   // overwrites any client-sent value
+  return NextResponse.next({ request: { headers } });
+}
+
 // ===== MIDDLEWARE =====
 export async function middleware(request: NextRequest) {
   // Fail closed if auth env vars are not configured
@@ -79,20 +134,42 @@ export async function middleware(request: NextRequest) {
     return new NextResponse("Mission Control auth not configured", { status: 503 });
   }
 
+  const isRhysOnly = RHYS_ONLY_PREFIXES.some(
+    (p) => request.nextUrl.pathname === p || request.nextUrl.pathname.startsWith(`${p}/`),
+  );
+
   // Cloudflare tunnel traffic (W1c) authenticates with a verified Access
-  // JWT and never sees the Basic Auth dialog.
+  // JWT and never sees the Basic Auth dialog. That JWT proves "someone with
+  // Access", NOT "Rhys" — it carries no identity claim we check — so it is
+  // deliberately not enough for the executive board.
   if (await checkCfAccessJwt(request)) {
-    return NextResponse.next();
+    if (isRhysOnly) return unauthorizedResponse();
+    return allow(request, "cf-access");
   }
 
   // Basic Auth on every other request — no bypass. The Host header is
   // client-supplied and must never gate auth or network restrictions;
   // network-level restriction belongs at the bind address (package.json).
-  if (!checkBasicAuth(request)) {
+  const principal = identifyBasicAuth(request);
+  if (!principal) {
     return unauthorizedResponse();
   }
 
-  return NextResponse.next();
+  if (isRhysOnly) {
+    if (!rhysCredentialConfigured) {
+      return new NextResponse("Executive view not configured", { status: 503 });
+    }
+    if (!rhysCredentialIsDistinct) {
+      return new NextResponse(
+        "Executive view misconfigured: the Rhys credential must differ from the operator credential",
+        { status: 503 },
+      );
+    }
+    // The operator credential opens every other route and none of this one.
+    if (principal !== "rhys") return unauthorizedResponse();
+  }
+
+  return allow(request, principal);
 }
 
 export const config = {

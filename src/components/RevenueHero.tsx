@@ -2,12 +2,49 @@
 
 import { useEffect, useState } from "react";
 
+interface RecentPayment {
+  name: string;
+  amount: number;
+  date: string | null;
+}
+
 interface RevenueData {
   totalRevenue: number;
   mrr: number;
   activeSubscribers: number;
   paymentsCount: number;
   currency: string;
+  recentPayments?: RecentPayment[];
+  source?: string;
+}
+
+/**
+ * Newest payment this feed actually contains.
+ *
+ * This panel is fed by the Newie bridge, whose newest payment is dated
+ * 2026-04-04 while it keeps returning a confident, well-formed total. Nothing
+ * errors and the shape is valid, so only the maximum record date reveals that
+ * the figure stopped moving months ago. It used to be labelled "LIVE" and read
+ * as current. The label is now derived from the data rather than asserted, so
+ * it corrects itself if Newie ever resumes.
+ *
+ * Deliberately NOT switched to the GoHighLevel payments feed: which source is
+ * the truth is Rhys's decision, not an engineering one. The executive board at
+ * /exec carries the GHL figure and says so; this panel says where it came from
+ * and how current it is.
+ */
+function latestPaymentDate(revenue: RevenueData | null): string | null {
+  const dates = (revenue?.recentPayments ?? [])
+    .map((p) => p.date)
+    .filter((d): d is string => Boolean(d))
+    .sort();
+  return dates.length ? dates[dates.length - 1] : null;
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function formatAUD(amount: number): string {
@@ -40,6 +77,7 @@ export default function RevenueHero() {
   const daysInYear = (now.getFullYear() % 4 === 0) ? 366 : 365;
 
   const hasData = revenue !== null && revenue.totalRevenue > 0;
+  const lastPayment = latestPaymentDate(revenue);
   const totalRevenue = revenue?.totalRevenue ?? 0;
   const projectedEOY = hasData ? Math.round((totalRevenue / dayOfYear) * daysInYear) : 0;
   const progressPct = hasData ? Math.min((totalRevenue / target) * 100, 100) : 0;
@@ -58,7 +96,7 @@ export default function RevenueHero() {
             letterSpacing: "0.05em",
           }}
         >
-          JAN 1 &mdash; NOW
+          {lastPayment ? `JAN 1 TO ${formatShortDate(lastPayment).toUpperCase()}` : "JAN 1 ONWARDS"}
         </span>
       </div>
 
@@ -150,17 +188,21 @@ export default function RevenueHero() {
         </div>
       </div>
 
-      {/* Status */}
+      {/* Provenance and true currency of the feed, derived from the data. */}
       <p
         className="mt-4"
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: "9px",
           letterSpacing: "0.1em",
-          color: hasData ? "rgba(0,200,255,0.35)" : "rgba(255,255,255,0.15)",
+          color: lastPayment ? "rgba(255,184,0,0.75)" : "rgba(255,255,255,0.15)",
         }}
       >
-        {hasData ? "LIVE \u2014 NEWIE + GHL" : "AWAITING FIRST TRANSACTION"}
+        {hasData
+          ? lastPayment
+            ? `VIA NEWIE, LAST PAYMENT ${formatShortDate(lastPayment).toUpperCase()}`
+            : "VIA NEWIE, LAST PAYMENT DATE UNKNOWN"
+          : "AWAITING FIRST TRANSACTION"}
       </p>
     </div>
   );

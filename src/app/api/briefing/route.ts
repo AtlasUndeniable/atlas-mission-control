@@ -63,6 +63,7 @@ interface Metrics {
     currency?: string;
     source?: string;
     stale?: boolean;
+    recentPayments?: Array<{ date?: string | null }>;
   };
   revenueTarget?: number;
   monday?: {
@@ -186,6 +187,17 @@ function buildBriefing(m: Metrics) {
       paymentsCount: m.revenue?.paymentsCount ?? null,
       source: m.revenue?.source ?? "unknown",
       stale: m.revenue?.stale ?? false,
+      // Newest payment the feed actually holds. The Newie feed keeps returning a
+      // confident, well-formed total whose newest payment is months old, and only
+      // the maximum record date reveals it, so the UI states it instead of
+      // implying the figure is current.
+      lastPaymentDate: (() => {
+        const dates = (m.revenue?.recentPayments ?? [])
+          .map((p) => p?.date)
+          .filter((d): d is string => Boolean(d))
+          .sort();
+        return dates.length ? dates[dates.length - 1] : null;
+      })(),
     },
     kpis: {
       callsBooked: calls.thisWeek ?? kpis.callsCoachingThisWeek ?? 0,

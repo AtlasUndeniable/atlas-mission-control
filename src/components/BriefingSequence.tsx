@@ -14,6 +14,8 @@ interface BriefingRevenue {
   mrr: number | null;
   activeSubscribers: number | null;
   paymentsCount: number | null;
+  /** Newest payment the Newie feed holds. Null when unknown. */
+  lastPaymentDate?: string | null;
 }
 
 interface BriefingKpis {
@@ -287,7 +289,7 @@ function RevenueHero({ revenue, visible }: { revenue: BriefingRevenue; visible: 
         }}>
           Year-to-Date Revenue
         </span>
-        {!hasRevenue && (
+        {!hasRevenue ? (
           <span style={{
             fontFamily: "var(--font-mono)",
             fontSize: "9px",
@@ -295,6 +297,20 @@ function RevenueHero({ revenue, visible }: { revenue: BriefingRevenue; visible: 
             color: "rgba(255,255,255,0.15)",
           }}>
             AWAITING NEWIE
+          </span>
+        ) : (
+          /* This figure comes from Newie, whose newest payment is months old
+             while it keeps returning a valid-looking total. Say where it came
+             from and how far it actually runs, rather than implying "now". */
+          <span style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "9px",
+            letterSpacing: "0.1em",
+            color: "rgba(255,184,0,0.75)",
+          }}>
+            {revenue.lastPaymentDate
+              ? `VIA NEWIE, LAST PAYMENT ${new Date(revenue.lastPaymentDate).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }).toUpperCase()}`
+              : "VIA NEWIE, LAST PAYMENT DATE UNKNOWN"}
           </span>
         )}
       </div>
