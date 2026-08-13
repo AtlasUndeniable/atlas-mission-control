@@ -135,16 +135,51 @@ function newieSummary() {
   );
 }
 
-/** Pipelines + all opportunities. Heavy (paged), so cached with the probes. */
+/**
+ * Pipelines + all opportunities. Heavy (paged), so cached with the probes.
+ *
+ * COMPLETENESS. /opportunities sends no `complete` flag the way /payments does.
+ * It sends two counts, and only one of them is a real check:
+ *
+ *   total     — the bridge sets this to `all.length`, i.e. the rows it managed
+ *               to collect. Comparing it against the row count is vacuous; it
+ *               agrees with itself no matter how short the read was.
+ *   metaTotal — the count GoHighLevel itself reported for the query. This is
+ *               the only independent signal, so it is the one checked here.
+ *
+ * The bridge's paging loop breaks out on an empty batch, which is also what an
+ * upstream error looks like, so a short read is consistent rather than obviously
+ * broken. Observed live: reads of 1,019 and 950 SALES opportunities against a
+ * true 2,024, each rendered as a complete, green, LIVE snapshot (CLOSED DEAL 10
+ * and 6 against a true 76) until the TTL expired.
+ *
+ * A metaTotal we cannot read counts as NOT complete. We would rather say
+ * "short" than publish a number we cannot prove is whole.
+ */
 function pipelineSnapshot() {
-  return probe("pipeline-snapshot", async () => {
-    const [pipesRaw, oppsRaw] = await Promise.all([
-      bridge<{ pipelines?: Pipeline[] }>("/pipelines", 20_000),
-      bridge<{ opportunities?: Opportunity[]; total?: number }>("/opportunities", 90_000),
-    ]);
-    if (!pipesRaw?.pipelines || !oppsRaw?.opportunities) return null;
-    return { pipelines: pipesRaw.pipelines, opportunities: oppsRaw.opportunities };
-  });
+  return probe(
+    "pipeline-snapshot",
+    async () => {
+      const [pipesRaw, oppsRaw] = await Promise.all([
+        bridge<{ pipelines?: Pipeline[] }>("/pipelines", 20_000),
+        bridge<{ opportunities?: Opportunity[]; total?: number; metaTotal?: number | null }>(
+          "/opportunities", 90_000),
+      ]);
+      if (!pipesRaw?.pipelines || !oppsRaw?.opportunities) return null;
+      const received = oppsRaw.opportunities.length;
+      const expected = typeof oppsRaw.metaTotal === "number" ? oppsRaw.metaTotal : null;
+      return {
+        pipelines: pipesRaw.pipelines,
+        opportunities: oppsRaw.opportunities,
+        complete: expected !== null && received === expected,
+        received,
+        expected,
+      };
+    },
+    // Gate on the RESULT, exactly as the trend probe does. Without this a
+    // momentary short read is pinned for the full TTL and served as truth.
+    (v) => v !== null && v.complete,
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -215,7 +250,12 @@ export async function GET(request: NextRequest) {
   }[] | null = null;
   let pipelineLatest: string | null = null;
 
-  if (pipeline) {
+  // A short opportunity read is not a smaller true pipeline. Same rule as
+  // payments and appointments: report it, and let the tile withhold the counts.
+  const pipelineComplete = pipeline?.complete === true;
+  if (pipeline && !pipelineComplete) incomplete.push("pipeline");
+
+  if (pipeline && pipelineComplete) {
     const counts = new Map<string, number>();
     for (const o of pipeline.opportunities) {
       counts.set(o.pipelineStageId, (counts.get(o.pipelineStageId) ?? 0) + 1);
@@ -237,7 +277,9 @@ export async function GET(request: NextRequest) {
         stages,
       };
     });
-  } else {
+  } else if (!pipeline) {
+    // Only "no answer at all" is unavailable. A short answer is already
+    // reported as incomplete above and must not be double-counted here.
     unavailable.push("pipeline");
   }
 
@@ -308,8 +350,15 @@ export async function GET(request: NextRequest) {
     // Feeds that answered but could not prove they answered in full. The tile
     // shows why instead of a number that is quietly short.
     incomplete,
-    incompleteDetail: rangeEvents && !eventsComplete
-      ? `${rangeEvents.calendarsFailed ?? "some"} of ${rangeEvents.calendarsQueried ?? "?"} calendars did not answer`
-      : null,
+    // More than one feed can be short at once, so this names each of them
+    // rather than describing only the calendars.
+    incompleteDetail: [
+      rangeEvents && !eventsComplete
+        ? `${rangeEvents.calendarsFailed ?? "some"} of ${rangeEvents.calendarsQueried ?? "?"} calendars did not answer`
+        : null,
+      pipeline && !pipelineComplete
+        ? `the opportunity read returned ${pipeline.received} of ${pipeline.expected ?? "an unknown number of"} records`
+        : null,
+    ].filter(Boolean).join("; ") || null,
   });
 }
