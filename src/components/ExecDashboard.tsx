@@ -42,6 +42,18 @@ interface Metrics {
     cancellationRate: number | null; calendarsQueried: number | null; freshness: Freshness;
   } | null;
   pipeline: { pipelines: PipelineView[]; freshness: Freshness } | null;
+  recurring: {
+    mrr: number | null;
+    activeSubscribers: number | null;
+    currency: string;
+    latestPaymentAt: string | null;
+    collectedAllTime: number | null;
+    datedCount: number | null;
+    undatedCount: number;
+    undatedTotal: number;
+    revenueFreshness: Freshness;
+    rosterFreshness: Freshness;
+  } | null;
   unavailable: string[];
   incomplete: string[];
   incompleteDetail: string | null;
@@ -78,7 +90,11 @@ const AWAITING: { label: string; unlock: string }[] = [
   { label: "Landing page traffic", unlock: "not available from GHL, needs GA4" },
   { label: "Landing page conversion", unlock: "no denominator available" },
   { label: "Show rate", unlock: "awaiting the No Show stage being used" },
-  { label: "MRR", unlock: "no billing interval field in the feed" },
+  // MRR moved onto the Recurring revenue tile: it is derived from the dated
+  // Subscriptions feed by inferring the billing interval from the plan name,
+  // so the missing interval field is no longer a blocker.
+  { label: "Recurring revenue by period", unlock: "awaiting the Zapier date fix" },
+  { label: "Combined total revenue", unlock: "held until both lines prove current" },
 ];
 
 // ===== shared tile chrome =====
@@ -193,6 +209,34 @@ function StaleNotice({ f }: { f: Freshness }) {
   );
 }
 
+/**
+ * The recurring line's own withheld-figure notice.
+ *
+ * Distinct from StaleNotice because the cause is known and specific: the feed
+ * is alive and charges are landing, but the Zap writes them with an empty Time
+ * column, so no charge can be attributed to a period. Naming the cause is the
+ * difference between a tile that looks broken and one that tells Rhys exactly
+ * what to go and fix.
+ */
+function UndatedNotice({ undatedCount }: { undatedCount: number }) {
+  return (
+    <div>
+      <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FFB800" }}>
+        AWAITING FEED FIX
+      </p>
+      <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "48ch" }}>
+        Feed rows arrive undated — Zapier fix pending.
+      </p>
+      {undatedCount > 0 && (
+        <p style={{ fontSize: "14px", lineHeight: 1.6, color: "rgba(255,255,255,0.38)", marginTop: "8px", maxWidth: "48ch" }}>
+          {num(undatedCount)} charges are being held back because they carry no date. No total is
+          shown rather than one that cannot be tied to a period.
+        </p>
+      )}
+    </div>
+  );
+}
+
 const UNAVAILABLE: Freshness = { status: "unavailable", latestRecordAt: null, ageDays: null, thresholdDays: 7 };
 
 /**
@@ -286,7 +330,8 @@ export default function ExecDashboard() {
             EXECUTIVE
           </h1>
           <p style={{ fontSize: "16px", lineHeight: 1.55, color: "rgba(255,255,255,0.45)", marginTop: "12px" }}>
-            Live from GoHighLevel. Every tile shows the window it covers and when it was read.
+            Live from GoHighLevel and Newie, kept as two separate lines. Every tile shows the
+            window it covers and when it was read.
           </p>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -368,31 +413,96 @@ export default function ExecDashboard() {
       {data && (
         <>
           {/* ===== row 1: money ===== */}
+          {/*
+            Two revenue lines, side by side and never summed. Newie bills the
+            recurring subscriptions; GoHighLevel bills tickets and upsells. A Q1
+            cross-post check found zero payment-level overlap, so they are
+            additive — but each is sourced and gated separately, and a combined
+            total stays off the board until both lines can prove they are current.
+          */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            {/* a. revenue collected */}
-            <div className="lg:col-span-2">
-              <Tile
-                title="Revenue collected"
-                subtitle="Succeeded AUD payments, via GoHighLevel"
-                freshness={data.revenue?.freshness}
-                asOf={asOf}
-                rangeLabel={rangeLabel}
-              >
-                {guard("payments", data.revenue, data) ?? (
-                  <div>
-                    <p style={{ ...bigNumber, fontSize: "clamp(56px, 6vw, 92px)" }}>
-                      {aud(data.revenue!.collected)}
-                    </p>
-                    <p style={subLine}>
-                      {num(data.revenue!.count)} payments in this range.
-                      {" "}Excluded: {data.revenue!.excluded.failed} failed,{" "}
-                      {data.revenue!.excluded.refunded} refunded,{" "}
-                      {data.revenue!.excluded.testMode} test, {data.revenue!.excluded.nonAud} non-AUD.
-                    </p>
+            {/* a. revenue collected — GHL */}
+            <Tile
+              title="Revenue collected (GoHighLevel)"
+              subtitle="Succeeded AUD payments for tickets and upsells"
+              freshness={data.revenue?.freshness}
+              asOf={asOf}
+              rangeLabel={rangeLabel}
+            >
+              {guard("payments", data.revenue, data) ?? (
+                <div>
+                  <p style={{ ...bigNumber, fontSize: "clamp(36px, 3.2vw, 52px)" }}>
+                    {aud(data.revenue!.collected)}
+                  </p>
+                  <p style={subLine}>
+                    {num(data.revenue!.count)} payments in this range.
+                    {" "}Excluded: {data.revenue!.excluded.failed} failed,{" "}
+                    {data.revenue!.excluded.refunded} refunded,{" "}
+                    {data.revenue!.excluded.testMode} test, {data.revenue!.excluded.nonAud} non-AUD.
+                  </p>
+                </div>
+              )}
+            </Tile>
+
+            {/* a2. recurring revenue — Newie. Separate line, separate gate. */}
+            <Tile
+              title="Recurring revenue (Newie)"
+              subtitle="Subscriptions and memberships. A separate business line — not added to the GoHighLevel figure."
+              freshness={data.recurring?.revenueFreshness}
+              asOf={asOf}
+              rangeLabel="AS OF NOW, NOT THE SELECTED RANGE"
+            >
+              {!data.recurring ? (
+                <StaleNotice f={UNAVAILABLE} />
+              ) : (
+                <div>
+                  {/* The collected figure is withheld while charges arrive
+                      undated. When the feed recovers this shows the all-time
+                      dated total — explicitly labelled as such, because this
+                      line cannot follow the range picker until rows are dated. */}
+                  {data.recurring.revenueFreshness.status === "fresh" &&
+                  data.recurring.collectedAllTime !== null ? (
+                    <div>
+                      <p style={{ ...bigNumber, fontSize: "clamp(36px, 3.2vw, 52px)" }}>
+                        {aud(data.recurring.collectedAllTime)}
+                      </p>
+                      <p style={subLine}>
+                        Collected all time
+                        {data.recurring.datedCount !== null
+                          ? ` across ${num(data.recurring.datedCount)} dated charges.`
+                          : "."}
+                        {" "}This line does not follow the range picker.
+                      </p>
+                    </div>
+                  ) : (
+                    <UndatedNotice undatedCount={data.recurring.undatedCount} />
+                  )}
+
+                  {/* MRR + roster come from the dated Subscriptions tab, which
+                      IS current, so they show on their own gate. */}
+                  <div style={{ marginTop: "22px", paddingTop: "18px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                    {data.recurring.rosterFreshness.status !== "fresh" ? (
+                      <StaleNotice f={data.recurring.rosterFreshness} />
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3" style={{ marginBottom: "6px" }}>
+                          <span className="type-timestamp">MRR</span>
+                          <FreshnessMark f={data.recurring.rosterFreshness} />
+                        </div>
+                        <p style={{ ...bigNumber, fontSize: "clamp(28px, 2.4vw, 38px)", color: "rgba(0,200,255,0.85)" }}>
+                          {data.recurring.mrr === null ? "—" : aud(data.recurring.mrr)}
+                        </p>
+                        <p style={{ ...subLine, marginTop: "8px" }}>
+                          {data.recurring.activeSubscribers === null
+                            ? "Subscriber count unavailable."
+                            : `${num(data.recurring.activeSubscribers)} active subscribers.`}
+                        </p>
+                      </>
+                    )}
                   </div>
-                )}
-              </Tile>
-            </div>
+                </div>
+              )}
+            </Tile>
 
             {/* b. payments count + average */}
             <Tile

@@ -321,9 +321,25 @@ export function evaluateFreshness(
   };
 }
 
-/** How many days of silence before each feed is called stale. */
+/**
+ * How many days of silence before each feed is called stale.
+ *
+ * These are per-feed on purpose: a threshold is only meaningful against a
+ * feed's own natural cadence, and one global number would either miss a dead
+ * feed or cry wolf on a quiet one.
+ *
+ * newieRecurring (3): the Newie payment feed writes 2-3 charge rows a day, so
+ *   three days of silence is a genuine fault rather than a quiet patch.
+ * newieRoster (90): subscription LIFECYCLE rows only appear when someone joins,
+ *   changes plan, or cancels. Measured over the feed's history the largest
+ *   natural gap is 90 days (Feb 2026 and Jun 2026 each recorded none at all),
+ *   so anything tighter would flag a legitimately quiet quarter as a failure.
+ *   This gates the MRR/active-subscriber roster, not the payment figures.
+ */
 export const FRESHNESS_THRESHOLD_DAYS = {
   payments: 7,
   appointments: 7,
   pipeline: 7,
+  newieRecurring: 3,
+  newieRoster: 90,
 } as const;

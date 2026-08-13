@@ -28,6 +28,15 @@ import {
 } from "@/lib/exec-metrics";
 
 const BRIDGE = "http://127.0.0.1:4003";
+/**
+ * Recurring revenue is a SEPARATE business line on a separate bridge: Newie
+ * bills the subscriptions, GoHighLevel bills tickets and upsells. A cross-post
+ * check over Q1 found zero payment-level overlap between them (9 of 63
+ * customers appear in both systems, but not one payment matches on amount and
+ * date), so the two are additive — and they are still reported as two
+ * independently-gated lines, never pre-summed here.
+ */
+const NEWIE_BRIDGE = "http://127.0.0.1:4014";
 const TREND_MONTHS = 8;
 const PROBE_TTL_MS = 5 * 60 * 1000;
 
@@ -40,9 +49,9 @@ const TARGET_PIPELINES: { id: string; name: string }[] = [
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function bridge<T>(path: string, timeoutMs: number): Promise<T | null> {
+async function bridge<T>(path: string, timeoutMs: number, base = BRIDGE): Promise<T | null> {
   try {
-    const res = await fetch(`${BRIDGE}${path}`, { signal: AbortSignal.timeout(timeoutMs), cache: "no-store" });
+    const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs), cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -76,6 +85,18 @@ interface EventsResponse {
   events?: AppointmentEvent[]; total?: number; calendarsQueried?: number;
   calendarsFailed?: number; complete?: boolean; failures?: string[];
 }
+/** /revenue/summary on the newie-bridge. Totals cover DATED rows only. */
+interface NewieSummary {
+  totalRevenue?: number;
+  mrr?: number;
+  activeSubscribers?: number;
+  paymentsCount?: number;
+  currency?: string;
+  latestPaymentAt?: string | null;
+  latestSubscriptionAt?: string | null;
+  undated?: { count: number; total: number };
+}
+
 interface Stage { id: string; name: string; position: number }
 interface Pipeline { id: string; name: string; stages: Stage[] }
 interface Opportunity { pipelineId: string; pipelineStageId: string; status?: string; lastStageChangeAt?: string }
@@ -103,6 +124,15 @@ function appointmentsHeartbeat(now: Date) {
     if (!r?.events) return null;
     return summariseAppointments(r.events).latestBookedAt;
   });
+}
+
+/** Newie recurring-revenue summary. Cheap (the bridge caches the sheet 5m). */
+function newieSummary() {
+  return probe(
+    "newie-summary",
+    () => bridge<NewieSummary>("/revenue/summary", 20_000, NEWIE_BRIDGE),
+    (v) => v !== null,
+  );
 }
 
 /** Pipelines + all opportunities. Heavy (paged), so cached with the probes. */
@@ -134,7 +164,7 @@ export async function GET(request: NextRequest) {
 
   const [
     rangePayments, trendPayments, paymentsLatest,
-    rangeEvents, appointmentsLatest, pipeline,
+    rangeEvents, appointmentsLatest, pipeline, newie,
   ] = await Promise.all([
     bridge<PaymentsResponse>(
       `/payments/transactions?startAt=${range.startDate}&endAt=${range.endDate}`, 60_000),
@@ -147,6 +177,7 @@ export async function GET(request: NextRequest) {
       `/events?start=${encodeURIComponent(range.startISO)}&end=${encodeURIComponent(range.endISO)}`, 90_000),
     appointmentsHeartbeat(now),
     pipelineSnapshot(),
+    newieSummary(),
   ]);
 
   const unavailable: string[] = [];
@@ -210,6 +241,8 @@ export async function GET(request: NextRequest) {
     unavailable.push("pipeline");
   }
 
+  if (!newie) unavailable.push("recurring");
+
   return NextResponse.json({
     generatedAt: now.toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -238,6 +271,38 @@ export async function GET(request: NextRequest) {
     pipeline: pipelineView && {
       pipelines: pipelineView,
       freshness: evaluateFreshness(pipelineLatest, now, FRESHNESS_THRESHOLD_DAYS.pipeline),
+    },
+    /**
+     * Recurring revenue (Newie) — the second business line, deliberately NOT
+     * merged with the GHL figures above.
+     *
+     * Two independent gates, because the two halves of this feed fail
+     * separately. `revenueFreshness` reads the newest DATED payment: the Zap
+     * writes charge rows with a blank Time column, so nothing has been dated
+     * since the 2026-04-04 CSV backfill and this reads STALE. `rosterFreshness`
+     * reads the subscription lifecycle rows, which ARE dated and current, so
+     * MRR and the subscriber count are shown.
+     */
+    recurring: newie && {
+      mrr: newie.mrr ?? null,
+      activeSubscribers: newie.activeSubscribers ?? null,
+      currency: newie.currency ?? "AUD",
+      latestPaymentAt: newie.latestPaymentAt ?? null,
+      /**
+       * All-time total over DATED charge rows, after the backfill
+       * de-duplication. Deliberately not range-scoped: the range picker cannot
+       * be honoured on this line until the rows carry dates, so the tile labels
+       * this as an all-time figure rather than implying it follows the picker.
+       */
+      collectedAllTime: newie.totalRevenue ?? null,
+      datedCount: newie.paymentsCount ?? null,
+      /** Charge rows the Zap wrote with no date. Real money, unplaceable in time. */
+      undatedCount: newie.undated?.count ?? 0,
+      undatedTotal: newie.undated?.total ?? 0,
+      revenueFreshness: evaluateFreshness(
+        newie.latestPaymentAt ?? null, now, FRESHNESS_THRESHOLD_DAYS.newieRecurring),
+      rosterFreshness: evaluateFreshness(
+        newie.latestSubscriptionAt ?? null, now, FRESHNESS_THRESHOLD_DAYS.newieRoster),
     },
     unavailable,
     // Feeds that answered but could not prove they answered in full. The tile
