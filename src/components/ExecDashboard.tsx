@@ -86,9 +86,9 @@ const AWAITING: { label: string; unlock: string }[] = [
 function FreshnessMark({ f }: { f: Freshness }) {
   if (f.status === "fresh") {
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         <span className="status-dot online" />
-        <span className="type-timestamp" style={{ color: "rgba(0,255,136,0.55)" }}>
+        <span className="type-timestamp" style={{ color: "rgba(0,255,136,0.62)" }}>
           LIVE
         </span>
       </span>
@@ -96,14 +96,14 @@ function FreshnessMark({ f }: { f: Freshness }) {
   }
   if (f.status === "stale") {
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         <span className="status-dot degraded" />
         <span className="type-timestamp" style={{ color: "#FFB800" }}>STALE</span>
       </span>
     );
   }
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
       <span className="status-dot offline" />
       <span className="type-timestamp" style={{ color: "#FF3344" }}>NO FEED</span>
     </span>
@@ -121,21 +121,23 @@ function Tile({
   children: React.ReactNode;
 }) {
   return (
-    <div className="glass-card hud-corners p-5 flex flex-col" style={{ minHeight: "180px" }}>
-      <div className="flex items-start justify-between gap-3 mb-1">
+    <div className="glass-card hud-corners p-7 lg:p-9 flex flex-col" style={{ minHeight: "260px" }}>
+      <div className="flex items-start justify-between gap-5 mb-2">
         <div>
-          <p className="type-section-header">{title}</p>
+          <p className="type-section-header" style={{ whiteSpace: "normal" }}>{title}</p>
           {subtitle && (
-            <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.40)", marginTop: "4px" }}>{subtitle}</p>
+            <p style={{ fontSize: "14px", lineHeight: 1.55, color: "rgba(255,255,255,0.42)", marginTop: "8px", maxWidth: "72ch" }}>
+              {subtitle}
+            </p>
           )}
         </div>
         {freshness && <FreshnessMark f={freshness} />}
       </div>
 
-      <div className="flex-1 flex flex-col justify-center py-2">{children}</div>
+      <div className="flex-1 flex flex-col justify-center py-4">{children}</div>
 
       {/* Every tile states what it covers and when it was read. */}
-      <p className="type-timestamp" style={{ marginTop: "10px", lineHeight: 1.5 }}>
+      <p className="type-timestamp" style={{ marginTop: "18px", lineHeight: 1.7 }}>
         {rangeLabel}
         <br />
         READ AT {asOf}
@@ -153,10 +155,10 @@ function Tile({
 function PartialNotice({ detail }: { detail: string | null }) {
   return (
     <div>
-      <p style={{ fontFamily: "var(--font-mono)", fontSize: "22px", fontWeight: 700, color: "#FFB800" }}>
+      <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FFB800" }}>
         PARTIAL DATA
       </p>
-      <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginTop: "6px", maxWidth: "36ch" }}>
+      <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "48ch" }}>
         {detail ? `${detail}. ` : ""}The figure is withheld because it would be short without saying so.
         Try refreshing.
       </p>
@@ -169,10 +171,10 @@ function StaleNotice({ f }: { f: Freshness }) {
   if (f.status === "unavailable") {
     return (
       <div>
-        <p style={{ fontFamily: "var(--font-mono)", fontSize: "22px", fontWeight: 700, color: "#FF3344" }}>
+        <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FF3344" }}>
           NO FEED
         </p>
-        <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginTop: "6px", maxWidth: "34ch" }}>
+        <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "46ch" }}>
           The bridge did not answer, so no figure is shown rather than an old one.
         </p>
       </div>
@@ -180,10 +182,10 @@ function StaleNotice({ f }: { f: Freshness }) {
   }
   return (
     <div>
-      <p style={{ fontFamily: "var(--font-mono)", fontSize: "22px", fontWeight: 700, color: "#FFB800" }}>
+      <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FFB800" }}>
         STALE since {f.latestRecordAt ? dayMonth(f.latestRecordAt) : "unknown"}
       </p>
-      <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginTop: "6px", maxWidth: "36ch" }}>
+      <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "48ch" }}>
         Nothing new in {f.ageDays} days, past the {f.thresholdDays} day limit. The figure is withheld
         rather than shown as current.
       </p>
@@ -212,17 +214,18 @@ function guard(
 
 const bigNumber: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: "clamp(28px, 3vw, 40px)",
+  fontSize: "clamp(44px, 4.2vw, 64px)",
   fontWeight: 700,
-  lineHeight: 1.05,
-  letterSpacing: "-0.02em",
+  lineHeight: 1.02,
+  letterSpacing: "-0.03em",
   color: "#ffffff",
 };
 const subLine: React.CSSProperties = {
-  fontSize: "11px",
-  color: "rgba(255,255,255,0.45)",
-  marginTop: "8px",
-  lineHeight: 1.6,
+  fontSize: "15px",
+  color: "rgba(255,255,255,0.50)",
+  marginTop: "14px",
+  lineHeight: 1.65,
+  maxWidth: "62ch",
 };
 
 // ===== page =====
@@ -272,14 +275,17 @@ export default function ExecDashboard() {
   const trendMax = data?.trend ? Math.max(...data.trend!.months.map((m) => m.total), 1) : 1;
 
   return (
-    <main className="ambient-bg min-h-screen p-6 lg:p-8" style={{ position: "relative", zIndex: 1 }}>
+    <main className="exec-board ambient-bg min-h-screen p-8 lg:p-12" style={{ position: "relative", zIndex: 1 }}>
       {/* ===== header ===== */}
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+      <div className="flex flex-wrap items-end justify-between gap-6 mb-9">
         <div>
-          <h1 className="type-section-header" style={{ fontSize: "13px", color: "rgba(255,255,255,0.85)" }}>
+          <h1
+            className="type-section-header"
+            style={{ fontSize: "30px", letterSpacing: "0.16em", color: "rgba(255,255,255,0.92)" }}
+          >
             EXECUTIVE
           </h1>
-          <p style={{ fontSize: "12px", color: "rgba(255,255,255,0.40)", marginTop: "6px" }}>
+          <p style={{ fontSize: "16px", lineHeight: 1.55, color: "rgba(255,255,255,0.45)", marginTop: "12px" }}>
             Live from GoHighLevel. Every tile shows the window it covers and when it was read.
           </p>
         </div>
@@ -289,8 +295,8 @@ export default function ExecDashboard() {
             onClick={() => void load()}
             disabled={loading}
             style={{
-              marginTop: "6px", fontFamily: "var(--font-mono)", fontSize: "10px",
-              letterSpacing: "0.1em", padding: "5px 12px", borderRadius: "4px",
+              marginTop: "10px", fontFamily: "var(--font-mono)", fontSize: "13px",
+              letterSpacing: "0.1em", padding: "10px 20px", borderRadius: "5px",
               border: "1px solid rgba(0,136,255,0.3)", background: "rgba(0,136,255,0.08)",
               color: "rgba(255,255,255,0.75)", cursor: loading ? "wait" : "pointer",
             }}
@@ -301,9 +307,9 @@ export default function ExecDashboard() {
       </div>
 
       {/* ===== range picker ===== */}
-      <div className="glass-card p-4 mb-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="type-section-header" style={{ marginRight: "6px" }}>DATE RANGE</span>
+      <div className="glass-card p-6 mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="type-section-header" style={{ marginRight: "10px" }}>DATE RANGE</span>
           {RANGES.map((r) => {
             const active = r.key === rangeKey;
             return (
@@ -311,8 +317,8 @@ export default function ExecDashboard() {
                 key={r.key}
                 onClick={() => setRangeKey(r.key)}
                 style={{
-                  fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.06em",
-                  padding: "6px 12px", borderRadius: "4px",
+                  fontFamily: "var(--font-mono)", fontSize: "14px", letterSpacing: "0.06em",
+                  padding: "11px 20px", borderRadius: "5px",
                   border: active ? "1px solid rgba(0,136,255,0.55)" : "1px solid rgba(255,255,255,0.10)",
                   background: active ? "rgba(0,136,255,0.16)" : "transparent",
                   color: active ? "#ffffff" : "rgba(255,255,255,0.55)",
@@ -324,21 +330,21 @@ export default function ExecDashboard() {
             );
           })}
           {rangeKey === "custom" && (
-            <span className="flex items-center gap-2" style={{ marginLeft: "6px" }}>
+            <span className="flex items-center gap-3" style={{ marginLeft: "10px" }}>
               <input
                 type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
                 style={{
-                  fontFamily: "var(--font-mono)", fontSize: "11px", padding: "5px 8px",
-                  borderRadius: "4px", border: "1px solid rgba(255,255,255,0.12)",
+                  fontFamily: "var(--font-mono)", fontSize: "14px", padding: "10px 14px",
+                  borderRadius: "5px", border: "1px solid rgba(255,255,255,0.12)",
                   background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.8)",
                 }}
               />
-              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "11px" }}>to</span>
+              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "14px" }}>to</span>
               <input
                 type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
                 style={{
-                  fontFamily: "var(--font-mono)", fontSize: "11px", padding: "5px 8px",
-                  borderRadius: "4px", border: "1px solid rgba(255,255,255,0.12)",
+                  fontFamily: "var(--font-mono)", fontSize: "14px", padding: "10px 14px",
+                  borderRadius: "5px", border: "1px solid rgba(255,255,255,0.12)",
                   background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.8)",
                 }}
               />
@@ -346,7 +352,7 @@ export default function ExecDashboard() {
           )}
         </div>
         {data && (
-          <p className="type-timestamp" style={{ marginTop: "10px" }}>
+          <p className="type-timestamp" style={{ marginTop: "16px" }}>
             SHOWING {data.range.label.toUpperCase()}
             {!data.range.includesNow && "  ·  HISTORICAL RANGE"}
           </p>
@@ -354,15 +360,15 @@ export default function ExecDashboard() {
       </div>
 
       {error && (
-        <div className="glass-card p-4 mb-6" style={{ borderColor: "rgba(255,51,68,0.35)" }}>
-          <p style={{ color: "#FF3344", fontSize: "12px" }}>Could not load metrics: {error}</p>
+        <div className="glass-card p-6 mb-6" style={{ borderColor: "rgba(255,51,68,0.35)" }}>
+          <p style={{ color: "#FF3344", fontSize: "15px" }}>Could not load metrics: {error}</p>
         </div>
       )}
 
       {data && (
         <>
           {/* ===== row 1: money ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {/* a. revenue collected */}
             <div className="lg:col-span-2">
               <Tile
@@ -374,7 +380,7 @@ export default function ExecDashboard() {
               >
                 {guard("payments", data.revenue, data) ?? (
                   <div>
-                    <p style={{ ...bigNumber, fontSize: "clamp(34px, 4vw, 52px)" }}>
+                    <p style={{ ...bigNumber, fontSize: "clamp(56px, 6vw, 92px)" }}>
                       {aud(data.revenue!.collected)}
                     </p>
                     <p style={subLine}>
@@ -399,18 +405,18 @@ export default function ExecDashboard() {
               {guard("payments", data.revenue, data) ?? (
                 <div>
                   <p style={bigNumber}>{num(data.revenue!.count)}</p>
-                  <p style={subLine}>payments taken</p>
-                  <p style={{ ...bigNumber, fontSize: "22px", marginTop: "12px", color: "rgba(0,200,255,0.85)" }}>
+                  <p style={{ ...subLine, marginTop: "10px" }}>payments taken</p>
+                  <p style={{ ...bigNumber, fontSize: "clamp(30px, 2.6vw, 40px)", marginTop: "26px", color: "rgba(0,200,255,0.85)" }}>
                     {aud(data.revenue!.average)}
                   </p>
-                  <p style={{ ...subLine, marginTop: "4px" }}>average payment</p>
+                  <p style={{ ...subLine, marginTop: "8px" }}>average payment</p>
                 </div>
               )}
             </Tile>
           </div>
 
           {/* ===== row 2: c. revenue trend ===== */}
-          <div className="mb-4">
+          <div className="mb-6">
             <Tile
               title="Revenue by month"
               subtitle={`${data.trend?.windowLabel ?? "Last 8 months"}. This chart is fixed to the last 8 months and does not follow the range above.`}
@@ -419,15 +425,15 @@ export default function ExecDashboard() {
               rangeLabel="RANGE LAST 8 CALENDAR MONTHS"
             >
               {guard("trend", data.trend, data) ?? (
-                <div className="flex items-end gap-3" style={{ height: "170px", paddingTop: "8px" }}>
+                <div className="flex items-end gap-5" style={{ height: "300px", paddingTop: "12px" }}>
                   {data.trend!.months.map((m) => {
-                    const h = Math.max((m.total / trendMax) * 130, m.total > 0 ? 3 : 1);
+                    const h = Math.max((m.total / trendMax) * 230, m.total > 0 ? 4 : 1);
                     return (
                       <div key={m.month} className="flex-1 flex flex-col items-center justify-end" style={{ height: "100%" }}>
                         <span
                           style={{
-                            fontFamily: "var(--font-mono)", fontSize: "10px",
-                            color: "rgba(255,255,255,0.55)", marginBottom: "6px", whiteSpace: "nowrap",
+                            fontFamily: "var(--font-mono)", fontSize: "16px", fontWeight: 600,
+                            color: "rgba(255,255,255,0.72)", marginBottom: "10px", whiteSpace: "nowrap",
                           }}
                         >
                           {audShort(m.total)}
@@ -435,7 +441,7 @@ export default function ExecDashboard() {
                         <div
                           title={`${m.label}: ${aud(m.total)} from ${m.count} payments`}
                           style={{
-                            width: "100%", height: `${h}px`, borderRadius: "3px 3px 0 0",
+                            width: "100%", height: `${h}px`, borderRadius: "4px 4px 0 0",
                             background: m.partial
                               ? "repeating-linear-gradient(45deg, rgba(0,136,255,0.35) 0 6px, rgba(0,136,255,0.12) 6px 12px)"
                               : "linear-gradient(180deg, rgba(0,170,255,0.75) 0%, rgba(0,136,255,0.25) 100%)",
@@ -445,14 +451,19 @@ export default function ExecDashboard() {
                         />
                         <span
                           style={{
-                            fontFamily: "var(--font-mono)", fontSize: "10px",
-                            color: "rgba(255,255,255,0.45)", marginTop: "6px",
+                            fontFamily: "var(--font-mono)", fontSize: "14px",
+                            color: "rgba(255,255,255,0.52)", marginTop: "12px",
                           }}
                         >
                           {m.label}
                         </span>
                         {m.partial && (
-                          <span style={{ fontFamily: "var(--font-mono)", fontSize: "8px", color: "rgba(255,184,0,0.75)" }}>
+                          <span
+                            style={{
+                              fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.1em",
+                              color: "rgba(255,184,0,0.8)", marginTop: "4px",
+                            }}
+                          >
                             SO FAR
                           </span>
                         )}
@@ -465,7 +476,7 @@ export default function ExecDashboard() {
           </div>
 
           {/* ===== row 3: appointments ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* d. booked */}
             <Tile
               title="Appointments booked"
@@ -509,7 +520,7 @@ export default function ExecDashboard() {
           </div>
 
           {/* ===== row 4: f. pipeline ===== */}
-          <div className="mb-4">
+          <div className="mb-6">
             <Tile
               title="Pipeline by stage"
               subtitle="Where opportunities sit right now. This is a snapshot, not movement over the range."
@@ -518,32 +529,35 @@ export default function ExecDashboard() {
               rangeLabel="AS OF NOW, NOT THE SELECTED RANGE"
             >
               {guard("pipeline", data.pipeline, data) ?? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
                   {data.pipeline!.pipelines.map((p) => {
                     const max = Math.max(...p.stages.map((s) => s.count), 1);
                     return (
                       <div key={p.id}>
-                        <div className="flex items-baseline justify-between mb-3">
-                          <span className="type-module-tag" style={{ color: "rgba(255,255,255,0.75)" }}>{p.name}</span>
-                          <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "rgba(255,255,255,0.4)" }}>
+                        <div
+                          className="flex items-baseline justify-between mb-5"
+                          style={{ paddingBottom: "10px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}
+                        >
+                          <span className="type-module-tag" style={{ color: "rgba(255,255,255,0.80)" }}>{p.name}</span>
+                          <span style={{ fontFamily: "var(--font-mono)", fontSize: "15px", color: "rgba(255,255,255,0.45)" }}>
                             {num(p.total)}
                           </span>
                         </div>
-                        <div className="flex flex-col gap-2">
+                        <div className="flex flex-col gap-4">
                           {p.stages.map((s) => (
                             <div key={s.name}>
-                              <div className="flex items-baseline justify-between" style={{ marginBottom: "3px" }}>
-                                <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.60)" }}>{s.name}</span>
-                                <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "rgba(255,255,255,0.85)" }}>
+                              <div className="flex items-baseline justify-between gap-4" style={{ marginBottom: "7px" }}>
+                                <span style={{ fontSize: "15px", color: "rgba(255,255,255,0.66)" }}>{s.name}</span>
+                                <span style={{ fontFamily: "var(--font-mono)", fontSize: "17px", fontWeight: 600, color: "rgba(255,255,255,0.92)" }}>
                                   {num(s.count)}
                                 </span>
                               </div>
-                              <div className="progress-bar">
+                              <div className="progress-bar" style={{ height: "7px", borderRadius: "3px" }}>
                                 <div
                                   style={{
                                     width: `${(s.count / max) * 100}%`, height: "100%",
                                     background: s.count > 0 ? "rgba(0,136,255,0.55)" : "transparent",
-                                    borderRadius: "2px", transition: "width 0.5s ease-out",
+                                    borderRadius: "3px", transition: "width 0.5s ease-out",
                                   }}
                                 />
                               </div>
@@ -559,23 +573,23 @@ export default function ExecDashboard() {
           </div>
 
           {/* ===== deliberately not shown ===== */}
-          <div className="glass-card p-5" style={{ opacity: 0.55 }}>
+          <div className="glass-card p-7 lg:p-9" style={{ opacity: 0.6 }}>
             <p className="type-section-header">Not shown yet</p>
-            <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.40)", marginTop: "6px", marginBottom: "14px" }}>
+            <p style={{ fontSize: "14px", lineHeight: 1.6, color: "rgba(255,255,255,0.42)", marginTop: "10px", marginBottom: "24px", maxWidth: "80ch" }}>
               These are left off on purpose. Each one would need a number that is missing or provably
               wrong, which is how the earlier dashboards lost trust.
             </p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
               {AWAITING.map((a) => (
                 <div
                   key={a.label}
                   style={{
-                    padding: "10px 12px", borderRadius: "4px",
+                    padding: "18px 20px", borderRadius: "5px",
                     border: "1px dashed rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.02)",
                   }}
                 >
-                  <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>{a.label}</p>
-                  <p className="type-timestamp" style={{ marginTop: "4px" }}>{a.unlock.toUpperCase()}</p>
+                  <p style={{ fontSize: "15px", color: "rgba(255,255,255,0.58)" }}>{a.label}</p>
+                  <p className="type-timestamp" style={{ marginTop: "8px" }}>{a.unlock.toUpperCase()}</p>
                 </div>
               ))}
             </div>
@@ -584,8 +598,8 @@ export default function ExecDashboard() {
       )}
 
       {!data && loading && (
-        <div className="glass-card p-8 text-center">
-          <p className="type-timestamp">LOADING LIVE FIGURES</p>
+        <div className="glass-card p-12 text-center">
+          <p className="type-timestamp" style={{ fontSize: "14px" }}>LOADING LIVE FIGURES</p>
         </div>
       )}
     </main>

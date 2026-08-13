@@ -1341,3 +1341,25 @@ body {
   from { width: 100%; }
   to { width: 0%; }
 }
+
+/* ===== EXECUTIVE BOARD (/exec) TYPE SCALE =====
+   The shared scale is tuned for the dense operator dashboard. The executive
+   board is read at a glance on a large screen, so it steps the same tokens up
+   rather than introducing new ones. Scoped to .exec-board so no other route
+   changes. */
+.exec-board .type-section-header {
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.exec-board .type-timestamp {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.exec-board .type-module-tag {
+  font-size: 13px;
+  letter-spacing: 0.12em;
+}
