@@ -1363,3 +1363,18 @@ body {
   font-size: 13px;
   letter-spacing: 0.12em;
 }
+
+/* ===== ACTION BOARD (/board) TYPE SCALE =====
+   Same reasoning as the executive board above: the shared scale is tuned for
+   the dense operator dashboard, and the action board is read at arm's length
+   on a large screen. It steps the same tokens up rather than adding new ones.
+   Scoped to .action-board so no other route changes. */
+.action-board .type-section-header {
+  font-size: 12px;
+  letter-spacing: 0.13em;
+}
+
+.action-board .type-timestamp {
+  font-size: 10px;
+  letter-spacing: 0.11em;
+}

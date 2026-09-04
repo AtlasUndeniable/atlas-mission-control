@@ -22,8 +22,15 @@ type Principal = "operator" | "rhys" | "cf-access";
  */
 const PRINCIPAL_HEADER = "x-mc-principal";
 
-/** Path prefixes only the Rhys credential may reach. */
-const RHYS_ONLY_PREFIXES = ["/exec", "/api/exec"];
+/**
+ * Path prefixes only the Rhys credential may reach.
+ *
+ * /board (the action board) joins /exec on the SAME pair deliberately: it is
+ * the same person's surface, and Basic Auth is scoped to the origin and realm,
+ * so one login opens both rather than two. Everything /exec's rules say about
+ * the operator credential and about Cf-Access holds here unchanged.
+ */
+const RHYS_ONLY_PREFIXES = ["/exec", "/api/exec", "/board", "/api/board"];
 
 const rhysCredentialConfigured = Boolean(RHYS_USER && RHYS_PASSWORD);
 
