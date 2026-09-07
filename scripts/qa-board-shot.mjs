@@ -95,7 +95,18 @@ try {
     return JSON.stringify({
       title: document.querySelector("h1")?.textContent ?? null,
       cards: document.querySelectorAll("article").length,
-      columns: [...document.querySelectorAll("section")].map((s) => s.innerText.split("\n").slice(0, 1)[0]),
+      // Column label -> the card titles actually under it. B3.1 puts `approved`
+      // in the In build column, and a label-only probe could not tell whether
+      // the card landed there or quietly stayed in the strip below.
+      columns: [...document.querySelectorAll("section")].map((s) => ({
+        label: s.innerText.split("\n")[0],
+        cards: [...s.querySelectorAll("article")].map((a) => ({
+          title: a.querySelector("p")?.textContent ?? null,
+          stateLine: [...a.querySelectorAll("p")].pop()?.textContent ?? null,
+        })),
+      })),
+      offBoard: [...document.querySelectorAll("article")].length
+        - [...document.querySelectorAll("section article")].length,
       synced: (text.match(/SYNCED [^\n]*/) || [null])[0],
       slackNote: text.includes("Approvals happen in Slack for now."),
       buttons: [...document.querySelectorAll("button")].map((b) => b.innerText.trim()),

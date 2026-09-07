@@ -51,22 +51,26 @@ interface BoardPayload {
 // ===== columns =====
 
 /**
- * The four columns of the approved mock, in order.
+ * The four columns of the approved mock, in order. A column holds a SET of
+ * states, because 008 defines seven and the mock has four.
  *
- * 008 defines SEVEN states. Three of them — approved, sent_back, declined —
- * have no column in the mock. They are not dropped: a card Rhys approved or
- * sent back in Slack would otherwise vanish from the board entirely, which is
- * worse than an unglamorous strip. They render below the columns instead.
+ * `approved` shares the In build column with `in_build` (B3.1). A card Rhys
+ * approved in Slack is progress he asked for and must read as progress, not as
+ * a footnote below the board — but it is not being built either, so it carries
+ * its own amber state line rather than borrowing "Atlas is working".
+ *
+ * `sent_back` and `declined` still have no column. They are not dropped: a card
+ * Rhys sent back would otherwise vanish from the board entirely, which is worse
+ * than an unglamorous strip. They render below the columns instead.
  */
-const COLUMNS: { state: State; label: string; hint: string }[] = [
-  { state: "queued",         label: "Queued",         hint: "Logged, not started" },
-  { state: "needs_approval", label: "Needs approval", hint: "Waiting on you in Slack" },
-  { state: "in_build",       label: "In build",       hint: "Atlas is working" },
-  { state: "delivered",      label: "Delivered",      hint: "Receipt on file" },
+const COLUMNS: { key: string; states: State[]; label: string; hint: string }[] = [
+  { key: "queued",         states: ["queued"],                 label: "Queued",         hint: "Logged, not started" },
+  { key: "needs_approval", states: ["needs_approval"],          label: "Needs approval", hint: "Waiting on you in Slack" },
+  { key: "in_build",       states: ["approved", "in_build"],    label: "In build",       hint: "Approved or under way" },
+  { key: "delivered",      states: ["delivered"],               label: "Delivered",      hint: "Receipt on file" },
 ];
 
 const OFF_BOARD: { state: State; label: string }[] = [
-  { state: "approved",  label: "Approved, build not started" },
   { state: "sent_back", label: "Sent back" },
   { state: "declined",  label: "Declined" },
 ];
@@ -127,7 +131,10 @@ function stateLine(t: TaskRow, now: number): string {
   switch (t.state) {
     case "queued":         return `Queued ${touched}`;
     case "needs_approval": return `Waiting for your call · raised ${relativeMinutes(t.created_at, now)}`;
-    case "approved":       return `Approved ${touched} · build not started`;
+    // B3.1 product decision: approved is visible progress with a distinct
+    // reading. The age is kept because a card that has sat approved for days
+    // is exactly the thing this column exists to surface.
+    case "approved":       return `APPROVED · WAITING TO START · ${touched.toUpperCase()}`;
     case "in_build":       return `In build · last moved ${touched}`;
     case "delivered":      return `Delivered ${touched}`;
     case "sent_back":      return `Sent back ${touched}`;
@@ -233,7 +240,17 @@ function TaskCard({ task, now, dim }: { task: TaskRow; now: number; dim: boolean
         )}
       </div>
 
-      <p className="type-timestamp" style={{ lineHeight: 1.6 }}>{stateLine(task, now)}</p>
+      <p
+        className="type-timestamp"
+        style={{
+          lineHeight: 1.6,
+          // Approved sits in the In build column but is NOT being built.
+          // Amber is the visual seam between the two.
+          color: task.state === "approved" ? AMBER : undefined,
+        }}
+      >
+        {stateLine(task, now)}
+      </p>
 
       {task.state === "declined" && task.declined_reason && (
         <p
@@ -427,9 +444,9 @@ export default function ActionBoard() {
       {!error && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
           {COLUMNS.map((col) => {
-            const rows = visible.filter((t) => t.state === col.state);
+            const rows = visible.filter((t) => col.states.includes(t.state));
             return (
-              <section key={col.state}>
+              <section key={col.key}>
                 <div
                   className="flex items-baseline justify-between"
                   style={{
