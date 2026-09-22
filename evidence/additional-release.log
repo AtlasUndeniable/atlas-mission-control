@@ -1,0 +1,11 @@
+PASS Concurrent callers produce one valid result
+PASS Concurrent requests dispatch exactly once
+PASS Published attempt response cannot be replaced
+PASS Invalid synthetic provider response is refused
+PASS Known invalid response is not labelled as success or unknown delivery
+PASS Invalid response retained privately with no version
+PASS Invalid response cannot trigger an automatic redispatch
+PASS Transient source-permission revoke/regrant fences an in-flight dispatch
+PASS Restored source permission cannot publish stale in-flight output
+PASS Fenced attempt created no version
+PASS Duplicate canonical acceptance preserves the same task identity

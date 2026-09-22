@@ -1,0 +1,17 @@
+{
+  "synthetic": true,
+  "checks": [
+    "Lost provider response leaves outcome unresolved",
+    "One provider dispatch occurred",
+    "Retry after unknown dispatch is held without provider call",
+    "Expired response window shows uncertain state",
+    "Cancellation stops publication without replenishing budget",
+    "Late response after cancellation cannot publish",
+    "Cancelled attempt never reinvokes",
+    "Exact prompt hash bound once before dispatch",
+    "Provider response recorded before simulated lost acknowledgment/process stop",
+    "Recorded response exposes recovery, not another dispatch"
+  ],
+  "recordedTask": "c820034e-d7bb-4646-b7aa-abe372c56fea",
+  "unknownTask": "cee31e7d-05a4-467d-bc31-b605b21fb1f7"
+}

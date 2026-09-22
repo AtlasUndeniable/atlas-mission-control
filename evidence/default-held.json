@@ -1,0 +1,8 @@
+{
+  "synthetic": true,
+  "checks": [
+    "Disabled global setting shows actual missing-decision message",
+    "Manual build refused with503",
+    "No provider dispatch while held"
+  ]
+}

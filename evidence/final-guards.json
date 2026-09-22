@@ -1,0 +1,20 @@
+{
+  "synthetic": true,
+  "checks": [
+    "unauthenticated /board: 401",
+    "operator /board: 401",
+    "nat /board: 200",
+    "nat /exec: 403",
+    "rhys /exec: 200",
+    "operator /exec: 401",
+    "rhys /board: 200",
+    "nat /api/exec: 403",
+    "Principal header cannot bypass executive auth",
+    "Cross-origin mutation refused",
+    "Browser-supplied authority fields refused",
+    "Unconfigured task cannot acquire authority from visibility",
+    "Revoked prior version cannot enter a fresh correction prompt",
+    "Stale v1 build cannot reconcile v2 under an old revision"
+  ],
+  "executiveDataNotConfigured": true
+}

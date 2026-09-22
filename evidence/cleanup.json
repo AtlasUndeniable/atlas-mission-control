@@ -1,0 +1,17 @@
+{
+  "at": "2026-09-22T07:06:59.306419+00:00",
+  "ownedContainers": {
+    "atlas-task-docs-20260922": "exited",
+    "atlas-task-docs-20260922-rest": "exited",
+    "atlas-task-docs-20260922-clean": "exited"
+  },
+  "ownedListeners": {
+    "55824": [],
+    "55825": [],
+    "55826": [],
+    "55827": [],
+    "55828": []
+  },
+  "syntheticJournalsRetained": true,
+  "unrelatedServicesStopped": false
+}

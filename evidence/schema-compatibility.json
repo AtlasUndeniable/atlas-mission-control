@@ -1,0 +1,23 @@
+{
+  "capturedCurrentFunctionsMatched": 15,
+  "tableColumnsMatched": [
+    "app_private.meeting_history",
+    "app_private.meeting_items",
+    "app_private.meeting_keys",
+    "app_private.meeting_policy",
+    "app_private.meeting_reviewers",
+    "app_private.meeting_scans",
+    "app_private.meeting_scope",
+    "app_private.meeting_source_people",
+    "app_private.meeting_task_events",
+    "app_private.meeting_task_grants",
+    "app_private.meetings",
+    "app_private.workspace_actors",
+    "app_private.workspace_clients",
+    "public.intake_sources",
+    "public.requests",
+    "public.tasks"
+  ],
+  "hostedDataCopied": false,
+  "baseline": "Captured schema-only pre021 + exact021 on isolated PostgreSQL17; compared to September22 catalog"
+}

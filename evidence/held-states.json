@@ -1,0 +1,12 @@
+{
+  "synthetic": true,
+  "fixtures": {
+    "held": "16682789-4f9e-486d-9798-ab74b2f2c21c",
+    "uncertain": "ba837a63-97b1-4d74-bdbe-8a05ccb45c6e"
+  },
+  "checks": [
+    "Disabled task refuses context",
+    "Expired reservation shows uncertain without dispatch"
+  ],
+  "uncertainFixture": "Reservation deadline advanced locally; no provider dispatch for screenshot"
+}

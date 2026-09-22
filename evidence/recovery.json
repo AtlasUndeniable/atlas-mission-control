@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "realProcessRestart": true,
+  "providerResponses": "synthetic only",
+  "checks": [
+    "Lost provider response leaves outcome unresolved",
+    "One provider dispatch occurred",
+    "Retry after unknown dispatch is held without provider call",
+    "Expired response window shows uncertain state",
+    "Cancellation stops publication without replenishing budget",
+    "Late response after cancellation cannot publish",
+    "Cancelled attempt never reinvokes",
+    "Exact prompt hash bound once before dispatch",
+    "Provider response recorded before simulated lost acknowledgment/process stop",
+    "Recorded response exposes recovery, not another dispatch",
+    "Recorded response survives database/PostgREST/app restart",
+    "Built route reconciles retained response after restart",
+    "Recovery makes no second provider call",
+    "Recovered result is a draft, not completion",
+    "Cancelled/unknown history survives restart",
+    "Revoke/restore increments retained authorization epochs",
+    "Regrant cannot revive output under old authority fingerprint"
+  ],
+  "providerCallsBeforeRestart": 16,
+  "providerCallsAfterRecovery": 16
+}

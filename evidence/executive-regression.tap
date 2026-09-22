@@ -1,0 +1,57 @@
+(node:32869) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/verification/exec-e1-regression.test.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ defect 1: the fixed 8-month window is identical for every selected range (11.435083ms)
+✔ defect 1: a historical selection still charts through the CURRENT month (0.44975ms)
+✔ defect 2: the business day is Melbourne's, whatever the host or viewer zone (0.606042ms)
+✔ defect 2: a 23-hour day (DST start) is still exactly one calendar day (0.181334ms)
+✔ defect 2: a 25-hour day (DST end) is still exactly one calendar day (0.142041ms)
+✔ defect 2: multi-day ranges spanning a DST change keep their exact day count (0.312666ms)
+✔ defect 2: month and year boundaries resolve in business time (0.5155ms)
+✔ defect 2: payments are bucketed into business months, not host months (0.360334ms)
+✔ defect 2: the resolved range carries the timezone that produced it (0.21675ms)
+✔ defect 2: business midnight is solved, not assumed, across the DST edge (0.117292ms)
+✔ defect 2: an impossible custom date is rejected, not rolled forward (0.182959ms)
+(node:32870) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/verification/exec-request-gate.test.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ a slower EARLIER request cannot overwrite a faster later one (0.834375ms)
+✔ the newest request still wins when responses arrive in order (0.078917ms)
+✔ three rapid clicks paint only the last, whatever order they return in (0.082541ms)
+✔ a superseded request that FAILS does not raise an error on the new view (0.635083ms)
+✔ a CURRENT request that fails does surface, so a failure is never swallowed (0.131708ms)
+✔ beginning a request aborts the one it supersedes (0.055959ms)
+✔ closing the gate invalidates everything in flight (0.064125ms)
+✔ cancellation is never reported to the user as a metrics failure (0.050375ms)
+(node:32871) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/verification/exec-view-state.test.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ when the payload matches the selection nothing is flagged (0.727834ms)
+✔ while a new preset loads, the highlight stays on the period ON SCREEN (0.069875ms)
+✔ the highlight and the figures never describe different periods, in any state (0.066458ms)
+✔ a failed request keeps the old period highlighted and names what failed (0.047166ms)
+✔ with no payload yet the selection may hold the highlight (0.050667ms)
+✔ two DIFFERENT custom ranges are not treated as the same view (8.865458ms)
+✔ the SAME custom range is aligned (0.152375ms)
+✔ a reversed custom pair matches the range the server ordered (0.045417ms)
+✔ a custom selection never matches a preset payload (0.046541ms)
+✔ a half-entered custom range asks for the missing date, it does not report a failure (0.091791ms)
+✔ needs-input outranks a stale error from an earlier request (0.043917ms)
+✔ customRangeComplete only passes when both bounds are present (0.044416ms)
+✔ a settled payload for another period is reported, never silently accepted (0.035458ms)
+✔ civil dates are labelled without a timezone shift (0.103458ms)
+✔ a single-day custom range is described as one day (0.063209ms)
+✔ the ISO currency code is visible, so AUD and USD cannot be confused (3.768167ms)
+✔ every dollar-symbol currency is distinguishable from every other (0.240833ms)
+✔ an unknown currency code is shown rather than swallowed (0.102958ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 132.696166

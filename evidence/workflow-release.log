@@ -1,0 +1,33 @@
+PASS Accepted canonical task opens explicit working context
+Screenshot 01-ready { x: 0, y: 0, width: 920, height: 500.78125 }
+PASS Built app generates v1 with synthetic provider
+PASS Generation produces draft, not canonical completion
+PASS v1 exact bytes/hash verified
+Screenshot 02-v1 { x: 0, y: 0, width: 920, height: 968 }
+PASS Generated permitted content excludes private financial source
+PASS Duplicate build reuses publication without provider reinvocation
+PASS Generated draft leaves canonical task todo
+PASS Exact v1 handed to required reviewer
+PASS Canonical meeting task reflects reviewer handoff
+PASS Nat cannot accept her own handed-off work
+PASS Reviewer substantive correction recorded
+PASS v1 retained while correction opens generation revision2
+Screenshot 03-correction { x: 0, y: 0, width: 920, height: 968 }
+PASS Canonical correction returns task to executor
+PASS Corrected v2 generated
+PASS Substantive correction changes the procedure, not just a feedback appendix
+Screenshot 04-v2 { x: 0, y: 0, width: 920, height: 968 }
+Screenshot 05-v2-mobile { x: 0, y: 0, width: 356, height: 1012 }
+PASS v1 bytes remain intact after v2
+PASS Exactly two invocation reservations for v1/v2
+PASS Version mutation rejected by immutable trigger
+PASS Revocation blocks old-version output (transaction rolled back after test)
+PASS v2 exact reviewer handoff works
+Screenshot 06-reviewer-handoff { x: 0, y: 0, width: 920, height: 968 }
+PASS Lost handoff response can replay without a second canonical transition
+PASS Required reviewer accepts exact v2
+PASS Truthful internal completion follows reviewer decision only
+PASS Internal completion never fabricates external delivered state
+PASS Status, revision, handoff and acceptance never resend or reinvoke generation
+PASS Both immutable versions remain accessible to current permitted audience
+Screenshot 07-accepted { x: 0, y: 0, width: 920, height: 968 }

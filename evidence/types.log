@@ -1,0 +1,2 @@
+src/lib/task-document-transport.ts(23,234): error TS7006: Parameter 'prompt' implicitly has an 'any' type.
+src/lib/task-document-transport.ts(23,241): error TS7006: Parameter 'invocationId' implicitly has an 'any' type.

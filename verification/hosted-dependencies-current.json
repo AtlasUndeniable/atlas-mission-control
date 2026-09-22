@@ -1,0 +1,537 @@
+{
+  "tables": [
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "public.evidence_revisions",
+      "columns": [
+        {
+          "name": "scope",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "ref",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "CHECK (((length(btrim(note)) >= 1) AND (length(btrim(note)) <= 500)))",
+        "PRIMARY KEY (scope, ref)",
+        "CHECK ((((length(btrim(ref)) >= 1) AND (length(btrim(ref)) <= 200)) AND (ref !~ '[[:cntrl:]]'::text)))",
+        "CHECK ((revision ~ '^[0-9a-f]{64}$'::text))",
+        "CHECK ((scope = ANY (ARRAY['call_source'::text, 'identity_ruling'::text])))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "public.intake_source_versions",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "raw",
+          "type": "jsonb",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (source_id, revision)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "public.memory_note_versions",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "memory_note_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "version_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_content_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "parser_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "classification_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "chunk_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "embedding_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "sensitivity",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_class",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "review_evidence_version",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "publication_state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "activated_at",
+          "type": "timestamp with time zone",
+          "notNull": false
+        },
+        {
+          "name": "superseded_at",
+          "type": "timestamp with time zone",
+          "notNull": false
+        },
+        {
+          "name": "content_class",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "exposure_mode",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "classification_decision_hash",
+          "type": "text",
+          "notNull": false
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "CHECK (((classification_decision_hash IS NULL) OR app_private.is_sha256(classification_decision_hash)))",
+        "CHECK ((content_class = ANY (ARRAY['published_content'::text, 'internal_reference'::text, 'deep_ip'::text, 'training_source'::text, 'client_record'::text])))",
+        "CHECK ((exposure_mode = ANY (ARRAY['browseable'::text, 'usable_not_visible'::text])))",
+        "FOREIGN KEY (memory_note_id) REFERENCES memory_notes(id) ON DELETE CASCADE",
+        "UNIQUE (memory_note_id, version_key)",
+        "CHECK ((jsonb_typeof(metadata) = 'object'::text))",
+        "PRIMARY KEY (id)",
+        "FOREIGN KEY (project_id) REFERENCES projects(id)",
+        "CHECK ((publication_state = ANY (ARRAY['current'::text, 'superseded'::text, 'held'::text, 'withdrawn'::text])))",
+        "CHECK ((scope = ANY (ARRAY['strategy'::text, 'ops'::text, 'content'::text, 'monday'::text, 'client_sensitive'::text])))",
+        "CHECK ((sensitivity = ANY (ARRAY['standard'::text, 'internal_financial'::text])))",
+        "CHECK ((source_class = ANY (ARRAY['workspace_knowledge'::text, 'atlas_training_source'::text])))",
+        "CHECK (app_private.is_sha256(source_content_hash))",
+        "CHECK (app_private.is_sha256(version_key))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres",
+        "authenticated=r/postgres"
+      ],
+      "rls": true,
+      "name": "public.memory_notes",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "feed_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "source_path",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "current_version_id",
+          "type": "uuid",
+          "notNull": false
+        },
+        {
+          "name": "current_source_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "sensitivity",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_class",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "classification_state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "review_state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "retrieval_enabled",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "parser_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "classification_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "chunk_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "embedding_profile",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "last_source_observed_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "content_class",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "exposure_mode",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "classification_decision_hash",
+          "type": "text",
+          "notNull": false
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER memory_notes_set_updated_at BEFORE UPDATE ON public.memory_notes FOR EACH ROW EXECUTE FUNCTION app_private.set_updated_at()"
+      ],
+      "constraints": [
+        "CHECK (((retrieval_enabled = false) OR ((classification_state = 'classified'::text) AND (review_state = 'approved'::text) AND (current_version_id IS NOT NULL))))",
+        "CHECK (((classification_decision_hash IS NULL) OR app_private.is_sha256(classification_decision_hash)))",
+        "CHECK ((classification_state = ANY (ARRAY['classified'::text, 'stale_pending'::text, 'held_unclassified'::text, 'withdrawn'::text])))",
+        "CHECK ((content_class = ANY (ARRAY['published_content'::text, 'internal_reference'::text, 'deep_ip'::text, 'training_source'::text, 'client_record'::text])))",
+        "CHECK (app_private.is_sha256(current_source_hash))",
+        "FOREIGN KEY (current_version_id) REFERENCES memory_note_versions(id)",
+        "CHECK ((exposure_mode = ANY (ARRAY['browseable'::text, 'usable_not_visible'::text])))",
+        "FOREIGN KEY (feed_id) REFERENCES projection_feeds(id)",
+        "UNIQUE (feed_id, source_path)",
+        "CHECK ((jsonb_typeof(metadata) = 'object'::text))",
+        "PRIMARY KEY (id)",
+        "FOREIGN KEY (project_id) REFERENCES projects(id)",
+        "CHECK (((NOT retrieval_enabled) OR (exposure_mode = 'browseable'::text)))",
+        "CHECK ((review_state = ANY (ARRAY['approved'::text, 'held'::text])))",
+        "CHECK ((scope = ANY (ARRAY['strategy'::text, 'ops'::text, 'content'::text, 'monday'::text, 'client_sensitive'::text])))",
+        "CHECK ((sensitivity = ANY (ARRAY['standard'::text, 'internal_financial'::text])))",
+        "CHECK ((source_class = ANY (ARRAY['workspace_knowledge'::text, 'atlas_training_source'::text])))",
+        "CHECK (app_private.is_safe_relative_markdown_path(source_path))",
+        "CHECK (((length(title) >= 1) AND (length(title) <= 1000)))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres",
+        "authenticated=r/postgres",
+        "service_role=arwd/postgres"
+      ],
+      "rls": true,
+      "name": "public.projects",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "key",
+          "type": "citext",
+          "notNull": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "is_archived",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER trg_projects_updated_at BEFORE UPDATE ON public.projects FOR EACH ROW EXECUTE FUNCTION app_private.set_updated_at()"
+      ],
+      "constraints": [
+        "UNIQUE (key)",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "public.request_source_bindings",
+      "columns": [
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "commitment_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "ruling_ref",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "ruling_revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "bound_by",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "bound_adapter",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "bound_principal",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "bound_input_version",
+          "type": "integer",
+          "notNull": true
+        },
+        {
+          "name": "bound_input_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_anchor",
+          "type": "jsonb",
+          "notNull": false
+        },
+        {
+          "name": "binding_fingerprint",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "bound_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER meeting_binding_guard BEFORE INSERT OR DELETE OR UPDATE ON public.request_source_bindings FOR EACH ROW EXECUTE FUNCTION app_private.meeting_binding_guard()"
+      ],
+      "constraints": [
+        "CHECK ((binding_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+        "CHECK (app_private.is_person_key(bound_by))",
+        "CHECK ((bound_input_hash ~ '^[0-9a-f]{64}$'::text))",
+        "CHECK ((bound_input_version >= 1))",
+        "CHECK ((((length(btrim(commitment_key)) >= 8) AND (length(btrim(commitment_key)) <= 200)) AND (commitment_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+        "PRIMARY KEY (request_id)",
+        "FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE",
+        "CHECK ((ruling_revision ~ '^[0-9a-f]{64}$'::text))",
+        "CHECK (((source_anchor IS NULL) OR (jsonb_typeof(source_anchor) = 'object'::text)))",
+        "CHECK ((source_revision ~ '^[0-9a-f]{64}$'::text))"
+      ]
+    }
+  ],
+  "helpers": [
+    {
+      "md5": "9f1388f0816ca6f2f29edf990087ca91",
+      "name": "app_private.request_transition_allowed",
+      "arguments": "p_from text, p_to text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.request_transition_allowed(p_from text, p_to text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n  select (p_from, p_to) in (\n    ('pending_approval', 'approved'),\n    ('pending_approval', 'declined')\n  );\n$function$\n"
+    },
+    {
+      "md5": "97672ab42b547a2408f874c6451c36dd",
+      "name": "app_private.safe_excerpt",
+      "arguments": "p_text text, p_max integer",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.safe_excerpt(p_text text, p_max integer)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\n  with c1 as (select regexp_replace(p_text, '\\[\\[[^]]*/[^]]*\\]\\]', '[reference removed]', 'g') as t),\n       c2 as (select regexp_replace(t, '\\[\\[[^]|]*\\|([^]]*)\\]\\]', '\\1', 'g')                   as t from c1),\n       c3 as (select regexp_replace(t, '\\[\\[([^]]*)\\]\\]', '\\1', 'g')                           as t from c2),\n       c4 as (select regexp_replace(t, '\\[([^]]*)\\]\\([^)]*\\)', '\\1', 'g')                      as t from c3),\n       -- any ']]' left at this point is a chunk-boundary orphan, not a link\n       c5 as (select regexp_replace(t, '^[^\\n]*?\\]\\]', '')                                     as t from c4),\n       c6 as (select regexp_replace(t, '\\[\\[.*$', '[reference removed]')                       as t from c5),\n       c7 as (select regexp_replace(t, '[^[:space:]]*/[^[:space:]]*\\.md',\n                                       '[reference removed]', 'g')                             as t from c6),\n       -- bare vault-root paths with no .md extension; absent from v1\n       c8 as (select regexp_replace(t,\n                '(brain|content|knowledge|memory|audit|exports|tools|\\.claude)/[^][:space:]|)]*',\n                '[reference removed]', 'g')                                                    as t from c7),\n       c9 as (select pg_catalog.left(t, p_max)                                                 as t from c8),\n       -- truncation can sever a link or a path token of its own making\n       cA as (select regexp_replace(t, '\\[\\[.*$', '[reference removed]')                       as t from c9),\n       cB as (select regexp_replace(t,\n                '(brain|content|knowledge|memory|audit|exports|tools|\\.claude)/[^][:space:]|)]*$',\n                '[reference removed]')                                                         as t from cA),\n       cC as (select regexp_replace(t, '[^[:space:]]*/[^[:space:]]*$', '[reference removed]')  as t from cB)\n  select pg_catalog.left(t, p_max) from cC\n$function$\n"
+    },
+    {
+      "md5": "cc29df66bf174730cf58ed808f7654e2",
+      "name": "app_private.task_transition_allowed",
+      "arguments": "p_from text, p_to text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.task_transition_allowed(p_from text, p_to text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n  select (p_from, p_to) in (\n    ('queued',         'needs_approval'),\n    ('queued',         'in_build'),\n    ('queued',         'declined'),\n    ('needs_approval', 'approved'),\n    ('needs_approval', 'declined'),\n    ('needs_approval', 'sent_back'),\n    ('sent_back',      'needs_approval'),\n    ('sent_back',      'queued'),\n    ('sent_back',      'declined'),\n    ('approved',       'in_build'),\n    ('approved',       'declined'),\n    ('in_build',       'delivered'),\n    ('in_build',       'sent_back'),\n    ('in_build',       'declined')\n  );\n$function$\n"
+    }
+  ],
+  "readOnly": "on"
+}

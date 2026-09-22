@@ -1,0 +1,22 @@
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{execFileSync}from'node:child_process';import{rpc,sql,jlit}from'./harness.mjs';
+const checks=[],base='http://127.0.0.1:55827';const check=(x,n)=>{assert.ok(x,n);checks.push(n);console.log('PASS',n)};
+const seed=name=>{execFileSync('node',['verification/seed.mjs'],{env:{...process.env,SYNTHETIC_CALL:name+(process.env.FIXTURE_SUFFIX||'')},stdio:'pipe'});return JSON.parse(readFileSync('verification/private/fixture.json'))};
+const build=async f=>{const r=await fetch(base+'/api/board/meetings/document',{method:'POST',headers:{Authorization:'Basic '+Buffer.from('nat:synthetic-nat').toString('base64'),Origin:base,'Content-Type':'application/json'},body:JSON.stringify({taskId:f.task,action:'build',revision:1,operationId:crypto.randomUUID()})});await r.text();return r.status};
+const control=async mode=>{const r=await fetch('http://127.0.0.1:55826/control',mode?{method:'POST',body:JSON.stringify({mode})}:{});return r.json()};
+const f=seed('synthetic-doc-concurrent');await control('normal');const before=(await control()).calls;const results=await Promise.all([build(f),build(f)]);check(results.includes(200),'Concurrent callers produce one valid result');check((await control()).calls===before+1,'Concurrent requests dispatch exactly once');
+const a=JSON.parse(sql(`select row_to_json(a)from app_private.task_document_attempts a join app_private.task_documents d on d.id=a.document_id where d.task_id='${f.task}'`));
+check((await rpc('runtime','meeting_document_runtime',{action:'record',attempt_id:a.id,payload:{token:a.token,response:{forged:true},content:'Forged replacement '.repeat(12)}})).status===409,'Published attempt response cannot be replaced');
+const invalid=seed('synthetic-doc-invalid');await control('invalid');check(await build(invalid)===409,'Invalid synthetic provider response is refused');const invalidState=(await rpc('nat','meeting_document',{action:'read',task_id:invalid.task,payload:{}})).data;check(invalidState.status==='rejected','Known invalid response is not labelled as success or unknown delivery');
+const inv=JSON.parse(sql(`select row_to_json(a)from app_private.task_document_attempts a join app_private.task_documents d on d.id=a.document_id where d.task_id='${invalid.task}'`));check(inv.state==='invalid'&&!!inv.response_hash&&!inv.content,'Invalid response retained privately with no version');
+const n=(await control()).calls;check(await build(invalid)===409&&(await control()).calls===n,'Invalid response cannot trigger an automatic redispatch');await control('normal');
+const fenced=seed('synthetic-doc-fenced');const start=(await rpc('nat','meeting_document',{action:'begin',task_id:fenced.task,payload:{operationId:crypto.randomUUID(),revision:1,configurationHash:fenced.configurationHash}})).data;
+sql(`update app_private.meeting_task_grants set active=false where request_id='${fenced.rid}';update app_private.meeting_task_grants set active=true where request_id='${fenced.rid}';`);
+check((await rpc('runtime','meeting_document_runtime',{action:'check',attempt_id:start.attempt,payload:{token:start.token}})).status===409,'Transient source-permission revoke/regrant fences an in-flight dispatch');
+check((await rpc('runtime','meeting_document_runtime',{action:'record',attempt_id:start.attempt,payload:{token:start.token,response:{late:true},content:'Late stale content '.repeat(12)}})).status===409,'Restored source permission cannot publish stale in-flight output');
+const state=(await rpc('nat','meeting_document',{action:'read',task_id:fenced.task,payload:{}})).data;
+check(state.currentVersion===0,'Fenced attempt created no version');
+// A new business acceptance request remains idempotent through the existing canonical RPC.
+const rid=fenced.rid;const rev=Number(sql(`select revision from app_private.meeting_items where request_id='${rid}'`));
+const accepted=await rpc('nat','meeting_queue',{action:'accept',payload:{id:rid,sourceId:fenced.sourceId,revision:rev,operationId:crypto.randomUUID(),note:'Synthetic duplicate acceptance'}});
+check(accepted.status===200&&sql(`select task_id from public.requests where id='${rid}'`)===fenced.task,'Duplicate canonical acceptance preserves the same task identity');
+writeFileSync('evidence/additional.json',JSON.stringify({synthetic:true,checks,concurrentTask:f.task,invalidTask:invalid.task,fencedTask:fenced.task},null,2)+'\n');

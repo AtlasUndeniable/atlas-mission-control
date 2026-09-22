@@ -1,0 +1,150 @@
+{
+  "actors": [
+    {
+      "role": "builder",
+      "actor": "nat",
+      "epoch": 1,
+      "active": true,
+      "dbRole": "atlas_meeting_nat_web",
+      "review": false,
+      "triage": true,
+      "reviewerActive": true,
+      "validTaskGrants": 1,
+      "activeTaskGrants": 1,
+      "requiredReviewer": "rhys",
+      "activeClientGrants": 121,
+      "activeFullSourceGrants": 0
+    },
+    {
+      "role": "super_admin",
+      "actor": "rhys",
+      "epoch": 1,
+      "active": true,
+      "dbRole": "atlas_meeting_rhys_web",
+      "review": true,
+      "triage": true,
+      "reviewerActive": true,
+      "validTaskGrants": 0,
+      "activeTaskGrants": 0,
+      "requiredReviewer": "rhys",
+      "activeClientGrants": 121,
+      "activeFullSourceGrants": 3
+    }
+  ],
+  "readOnly": "on",
+  "relations": [
+    "app_private.meeting_history",
+    "app_private.meeting_items",
+    "app_private.meeting_keys",
+    "app_private.meeting_policy",
+    "app_private.meeting_reviewers",
+    "app_private.meeting_scans",
+    "app_private.meeting_scope",
+    "app_private.meeting_source_people",
+    "app_private.meeting_task_events",
+    "app_private.meeting_task_grants",
+    "app_private.meetings",
+    "app_private.workspace_actors",
+    "app_private.workspace_clients",
+    "public.derived_graph_metadata",
+    "public.evidence_revisions",
+    "public.intake_source_versions",
+    "public.intake_sources",
+    "public.memory_chunks",
+    "public.memory_note_links",
+    "public.memory_note_versions",
+    "public.memory_notes",
+    "public.my_permissions",
+    "public.permissions",
+    "public.project_members",
+    "public.projection_batches",
+    "public.projection_classification_decisions",
+    "public.projection_feeds",
+    "public.projection_health",
+    "public.projection_items",
+    "public.projection_scan_items",
+    "public.projection_scan_runs",
+    "public.projection_subjects",
+    "public.projection_worker_principals",
+    "public.projects",
+    "public.request_source_bindings",
+    "public.requests",
+    "public.role_permissions",
+    "public.roles",
+    "public.tasks",
+    "public.users"
+  ],
+  "meetingState": {
+    "ready": 3,
+    "meetings": 8,
+    "sourceReviewRequired": 0
+  },
+  "meetingRequests": [
+    {
+      "count": 3,
+      "state": "pending_approval",
+      "with_task": 0
+    }
+  ],
+  "taskConstraints": [
+    "CHECK (((work_status IS NULL) OR (work_status = ANY (ARRAY['todo'::text, 'needs_review'::text, 'completed'::text, 'atlas_held'::text]))))",
+    "CHECK (((client IS NULL) OR (((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120)) AND (client !~ '[[:cntrl:]]'::text))))",
+    "CHECK (app_private.is_person_key(created_by))",
+    "CHECK (((state <> 'declined'::text) OR (declined_reason IS NOT NULL)))",
+    "CHECK (((declined_reason IS NULL) OR ((length(btrim(declined_reason)) >= 1) AND (length(btrim(declined_reason)) <= 1000))))",
+    "CHECK (((state <> 'delivered'::text) OR (receipts IS NOT NULL)))",
+    "CHECK ((due_origin = ANY (ARRAY['original'::text, 'owner_override'::text])))",
+    "CHECK ((execution_gate = ANY (ARRAY['ready'::text, 'review_required'::text, 'sent_back'::text, 'declined'::text])))",
+    "CHECK ((kind = ANY (ARRAY['doc'::text, 'audit'::text, 'generic'::text])))",
+    "CHECK ((lane = ANY (ARRAY['business'::text, 'engineering'::text])))",
+    "CHECK ((origin = ANY (ARRAY['slack_request'::text, 'atlas_signal'::text, 'operator'::text])))",
+    "CHECK (app_private.is_person_key(owner))",
+    "PRIMARY KEY (id)",
+    "CHECK (((declined_reason IS NULL) OR (state = 'declined'::text)))",
+    "CHECK (((receipts IS NULL) OR (jsonb_typeof(receipts) = 'object'::text)))",
+    "CHECK (((sent_back_reason IS NULL) OR ((length(btrim(sent_back_reason)) >= 1) AND (length(btrim(sent_back_reason)) <= 1000))))",
+    "CHECK (((sent_back_reason IS NULL) OR (state = 'sent_back'::text)))",
+    "CHECK (((source_quote IS NULL) OR ((length(source_quote) >= 1) AND (length(source_quote) <= 2000))))",
+    "CHECK ((state = ANY (ARRAY['queued'::text, 'needs_approval'::text, 'approved'::text, 'in_build'::text, 'delivered'::text, 'declined'::text, 'sent_back'::text])))",
+    "CHECK ((((length(btrim(title)) >= 1) AND (length(btrim(title)) <= 300)) AND (title !~ '[[:cntrl:]]'::text)))"
+  ],
+  "webRolePrivileges": [
+    {
+      "role": "atlas_meeting_nat_web",
+      "tasksSelect": false,
+      "tasksUpdate": false,
+      "requestsUpdate": false,
+      "privateSchemaUsage": false,
+      "meetingQueueExecute": true,
+      "meetingIngestExecute": false,
+      "meetingCapabilityExecute": true
+    },
+    {
+      "role": "atlas_meeting_rhys_web",
+      "tasksSelect": false,
+      "tasksUpdate": false,
+      "requestsUpdate": false,
+      "privateSchemaUsage": false,
+      "meetingQueueExecute": true,
+      "meetingIngestExecute": false,
+      "meetingCapabilityExecute": true
+    }
+  ],
+  "dependentFunctions": [
+    {
+      "md5": "83544c7dc339548520eaf6788d6c04e9",
+      "name": "app_private.requests_derive_and_freeze",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.requests_derive_and_freeze()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\ndeclare\n  v_hash text;\nbegin\n  v_hash := app_private.request_input_hash(\n    app_private.request_canonical_input(\n      new.requested, new.client, new.project_key::text, new.source_type, new.source_id\n    )\n  );\n  if tg_op = 'INSERT' then\n    new.input_hash    := v_hash;\n    new.input_version := 1;\n    return new;\n  end if;\n  if new.id is distinct from old.id then\n    raise exception 'request id is immutable' using errcode = 'check_violation';\n  end if;\n  if new.adapter is distinct from old.adapter\n     or new.requester_principal is distinct from old.requester_principal then\n    raise exception 'request adapter/principal is immutable' using errcode = 'check_violation';\n  end if;\n  if new.requested_by is distinct from old.requested_by\n     or new.requester_role is distinct from old.requester_role then\n    raise exception 'request requester attribution is immutable' using errcode = 'check_violation';\n  end if;\n  if new.idempotency_key is distinct from old.idempotency_key then\n    raise exception 'request idempotency_key is immutable' using errcode = 'check_violation';\n  end if;\n  if new.source_type is distinct from old.source_type\n     or new.source_id is distinct from old.source_id then\n    raise exception 'request source reference is immutable' using errcode = 'check_violation';\n  end if;\n  if new.permitted_audience is distinct from old.permitted_audience then\n    raise exception 'request permitted_audience is derived and immutable'\n      using errcode = 'check_violation';\n  end if;\n  if new.created_at is distinct from old.created_at then\n    raise exception 'request created_at is immutable' using errcode = 'check_violation';\n  end if;\n  if old.task_id is not null and new.task_id is distinct from old.task_id then\n    raise exception 'request task association is immutable once made'\n      using errcode = 'check_violation';\n  end if;\n  if new.state is distinct from old.state\n     and not app_private.request_transition_allowed(old.state, new.state) then\n    raise exception 'request % state transition % -> % is not allowed',\n      old.id, old.state, new.state\n      using errcode = 'check_violation';\n  end if;\n  if v_hash is distinct from old.input_hash then\n    if new.input_version is distinct from old.input_version + 1 then\n      raise exception\n        'request input changed: input_version must go from % to %, got %',\n        old.input_version, old.input_version + 1, new.input_version\n        using errcode = 'check_violation';\n    end if;\n  elsif new.input_version is distinct from old.input_version then\n    raise exception 'request input_version cannot change while the input does not'\n      using errcode = 'check_violation';\n  end if;\n  new.input_hash := v_hash;\n  return new;\nend;\n$function$\n"
+    },
+    {
+      "md5": "929e7cc1324c78482f8f5ce621fc278e",
+      "name": "app_private.tasks_enforce_entry_state",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.tasks_enforce_entry_state()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nbegin\n  if new.state not in ('queued','needs_approval') then\n    raise exception\n      'task cannot be created in state %; entry states are queued and needs_approval',\n      new.state\n      using errcode = 'check_violation';\n  end if;\n  return new;\nend;\n$function$\n"
+    },
+    {
+      "md5": "a75db9d4c9666b405f8da2523a0d8cf9",
+      "name": "app_private.tasks_enforce_transition",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.tasks_enforce_transition()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nbegin\n  if new.state is distinct from old.state then\n    if not app_private.task_transition_allowed(old.state, new.state) then\n      raise exception\n        'task % state transition % -> % is not allowed',\n        old.id, old.state, new.state\n        using errcode = 'check_violation';\n    end if;\n  end if;\n\n  if new.id is distinct from old.id then\n    raise exception 'task id is immutable' using errcode = 'check_violation';\n  end if;\n  if new.origin is distinct from old.origin then\n    raise exception 'task origin is immutable' using errcode = 'check_violation';\n  end if;\n  if new.created_by is distinct from old.created_by then\n    raise exception 'task created_by is immutable' using errcode = 'check_violation';\n  end if;\n  if new.source_quote is distinct from old.source_quote then\n    raise exception 'task source_quote is immutable' using errcode = 'check_violation';\n  end if;\n  if new.created_at is distinct from old.created_at then\n    raise exception 'task created_at is immutable' using errcode = 'check_violation';\n  end if;\n\n  return new;\nend;\n$function$\n"
+    }
+  ]
+}
