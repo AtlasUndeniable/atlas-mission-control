@@ -12,7 +12,10 @@
  * The browser never touches GoHighLevel.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { captureExecReport, REPORT_PRINT_CSS } from "@/lib/exec-report";
+import { createRequestGate, isAbort } from "@/lib/exec-request-gate";
+import { deriveViewState } from "@/lib/exec-view-state";
 
 // ===== types mirroring /api/exec/metrics =====
 
@@ -23,13 +26,21 @@ interface Freshness {
   thresholdDays: number;
 }
 interface MonthPoint { month: string; label: string; total: number; count: number; partial: boolean }
-interface RangeInfo { key: string; label: string; startDate: string; endDate: string; includesNow: boolean }
+interface RangeInfo {
+  key: string; label: string; startDate: string; endDate: string;
+  includesNow: boolean;
+  /** The business timezone this range was resolved in. */
+  timezone: string;
+}
 interface StageCount { name: string; count: number }
 interface PipelineView { id: string; name: string; total: number; stages: StageCount[] }
 
-interface Metrics {
+export interface Metrics {
   generatedAt: string;
+  /** BUSINESS timezone — the one the figures were computed in, and the one
+   *  every timestamp below is formatted in. Not the browser's. */
   timezone: string;
+  serverTimezone?: string;
   range: RangeInfo;
   revenue: {
     collected: number; count: number; average: number;
@@ -51,6 +62,8 @@ interface Metrics {
     datedCount: number | null;
     undatedCount: number;
     undatedTotal: number;
+    /** False while dated rows omit known undated charges. */
+    coverageComplete: boolean;
     revenueFreshness: Freshness;
     rosterFreshness: Freshness;
   } | null;
@@ -67,11 +80,25 @@ const audShort = (n: number) =>
   n >= 1000 ? `$${Math.round(n / 1000).toLocaleString("en-AU")}k` : `$${Math.round(n)}`;
 const num = (n: number) => n.toLocaleString("en-AU");
 
-function clockTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
+/**
+ * Timestamps are printed in the BUSINESS timezone that the API reports, never
+ * in the browser's.
+ *
+ * These two formatters previously took no timeZone, so they rendered in
+ * whatever zone the device was in, and the header then appended the SERVER's
+ * zone string to the result. Opening the board from Los Angeles produced a
+ * Los Angeles clock reading labelled "Australia/Melbourne" — the one failure
+ * mode most likely to appear during a trip, on the day it matters.
+ */
+function clockTime(iso: string, tz: string): string {
+  return new Date(iso).toLocaleTimeString("en-AU", {
+    timeZone: tz, hour: "2-digit", minute: "2-digit",
+  });
 }
-function dayMonth(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+function dayMonth(iso: string, tz: string): string {
+  return new Date(iso).toLocaleDateString("en-AU", {
+    timeZone: tz, day: "numeric", month: "short", year: "numeric",
+  });
 }
 
 const RANGES: { key: string; label: string }[] = [
@@ -90,16 +117,27 @@ const AWAITING: { label: string; unlock: string }[] = [
   { label: "Landing page traffic", unlock: "not available from GHL, needs GA4" },
   { label: "Landing page conversion", unlock: "no denominator available" },
   { label: "Show rate", unlock: "awaiting the No Show stage being used" },
-  // MRR moved onto the Recurring revenue tile: it is derived from the dated
-  // Subscriptions feed by inferring the billing interval from the plan name,
-  // so the missing interval field is no longer a blocker.
-  { label: "Recurring revenue by period", unlock: "awaiting the Zapier date fix" },
+  // Newie remains unavailable until source verification.
+  { label: "Recurring revenue by period", unlock: "pending source verification" },
   { label: "Combined total revenue", unlock: "held until both lines prove current" },
 ];
 
 // ===== shared tile chrome =====
 
-function FreshnessMark({ f }: { f: Freshness }) {
+/**
+ * @param partial Coverage is known to be short even though the feed is current.
+ *   A LIVE badge over a figure that silently omits rows is the exact failure
+ *   this board exists to prevent, so coverage outranks freshness in the badge.
+ */
+function FreshnessMark({ f, partial }: { f: Freshness; partial?: boolean }) {
+  if (f.status === "fresh" && partial) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+        <span className="status-dot degraded" />
+        <span className="type-timestamp" style={{ color: "#FFB800" }}>PARTIAL</span>
+      </span>
+    );
+  }
   if (f.status === "fresh") {
     return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
@@ -127,11 +165,12 @@ function FreshnessMark({ f }: { f: Freshness }) {
 }
 
 function Tile({
-  title, subtitle, freshness, asOf, rangeLabel, children,
+  title, subtitle, freshness, partial, asOf, rangeLabel, children,
 }: {
   title: string;
   subtitle?: string;
   freshness?: Freshness;
+  partial?: boolean;
   asOf: string;
   rangeLabel: string;
   children: React.ReactNode;
@@ -147,7 +186,7 @@ function Tile({
             </p>
           )}
         </div>
-        {freshness && <FreshnessMark f={freshness} />}
+        {freshness && <FreshnessMark f={freshness} partial={partial} />}
       </div>
 
       <div className="flex-1 flex flex-col justify-center py-4">{children}</div>
@@ -183,7 +222,7 @@ function PartialNotice({ detail }: { detail: string | null }) {
 }
 
 /** Replaces the figure entirely when a feed cannot prove it is current. */
-function StaleNotice({ f }: { f: Freshness }) {
+function StaleNotice({ f, tz }: { f: Freshness; tz: string }) {
   if (f.status === "unavailable") {
     return (
       <div>
@@ -199,40 +238,12 @@ function StaleNotice({ f }: { f: Freshness }) {
   return (
     <div>
       <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FFB800" }}>
-        STALE since {f.latestRecordAt ? dayMonth(f.latestRecordAt) : "unknown"}
+        STALE since {f.latestRecordAt ? dayMonth(f.latestRecordAt, tz) : "unknown"}
       </p>
       <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "48ch" }}>
         Nothing new in {f.ageDays} days, past the {f.thresholdDays} day limit. The figure is withheld
         rather than shown as current.
       </p>
-    </div>
-  );
-}
-
-/**
- * The recurring line's own withheld-figure notice.
- *
- * Distinct from StaleNotice because the cause is known and specific: the feed
- * is alive and charges are landing, but the Zap writes them with an empty Time
- * column, so no charge can be attributed to a period. Naming the cause is the
- * difference between a tile that looks broken and one that tells Rhys exactly
- * what to go and fix.
- */
-function UndatedNotice({ undatedCount }: { undatedCount: number }) {
-  return (
-    <div>
-      <p style={{ fontFamily: "var(--font-mono)", fontSize: "32px", fontWeight: 700, letterSpacing: "-0.01em", color: "#FFB800" }}>
-        AWAITING FEED FIX
-      </p>
-      <p style={{ fontSize: "15px", lineHeight: 1.6, color: "rgba(255,255,255,0.48)", marginTop: "12px", maxWidth: "48ch" }}>
-        Feed rows arrive undated — Zapier fix pending.
-      </p>
-      {undatedCount > 0 && (
-        <p style={{ fontSize: "14px", lineHeight: 1.6, color: "rgba(255,255,255,0.38)", marginTop: "8px", maxWidth: "48ch" }}>
-          {num(undatedCount)} charges are being held back because they carry no date. No total is
-          shown rather than one that cannot be tied to a period.
-        </p>
-      )}
     </div>
   );
 }
@@ -251,8 +262,8 @@ function guard(
   data: Metrics,
 ): React.ReactNode | null {
   if (data.incomplete?.includes(feedKey)) return <PartialNotice detail={data.incompleteDetail} />;
-  if (!feed) return <StaleNotice f={UNAVAILABLE} />;
-  if (feed.freshness.status !== "fresh") return <StaleNotice f={feed.freshness} />;
+  if (!feed) return <StaleNotice f={UNAVAILABLE} tz={data.timezone} />;
+  if (feed.freshness.status !== "fresh") return <StaleNotice f={feed.freshness} tz={data.timezone} />;
   return null;
 }
 
@@ -281,26 +292,54 @@ export default function ExecDashboard() {
   const [data, setData] = useState<Metrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Only the newest request may paint the board. See exec-request-gate.ts for
+   * the failure this prevents; the rule is tested directly against out-of-order
+   * resolution in tests/exec-request-gate.test.ts.
+   */
+  const gate = useRef(createRequestGate());
 
   const load = useCallback(async () => {
+    const { seq, signal } = gate.current.begin();
+
     setLoading(true);
     setError(null);
     try {
       const qs = new URLSearchParams({ range: rangeKey });
       if (rangeKey === "custom") {
-        if (!customStart || !customEnd) { setLoading(false); return; }
+        if (!customStart || !customEnd) {
+          // Nothing to ask for yet. deriveViewState reports this as
+          // "needs-input" from the selection itself, so no flag is set here —
+          // the banner asks for the missing date rather than implying a
+          // failure that never happened.
+          if (gate.current.isCurrent(seq)) setLoading(false);
+          return;
+        }
         qs.set("start", customStart);
         qs.set("end", customEnd);
       }
-      const res = await fetch(`/api/exec/metrics?${qs.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/exec/metrics?${qs.toString()}`, {
+        cache: "no-store", signal,
+      });
+      // Checked again after every await: the board may have moved on while
+      // this response was in flight, and a stale commit is the whole bug.
+      if (!gate.current.isCurrent(seq)) return;
       if (!res.ok) throw new Error(`metrics request failed (${res.status})`);
-      setData((await res.json()) as Metrics);
+      const next = (await res.json()) as Metrics;
+      if (!gate.current.isCurrent(seq)) return;
+      setData({ ...next, recurring: null });
     } catch (e) {
+      // A superseded read was cancelled on purpose; it is not an error to show.
+      if (!gate.current.isCurrent(seq) || isAbort(e)) return;
       setError(e instanceof Error ? e.message : "could not load metrics");
     } finally {
-      setLoading(false);
+      if (gate.current.isCurrent(seq)) setLoading(false);
     }
   }, [rangeKey, customStart, customEnd]);
+
+  // Do not let an in-flight read commit into an unmounted tree.
+  const gateRef = gate;
+  useEffect(() => () => gateRef.current.close(), [gateRef]);
 
   // ?range= makes a view linkable. Applied AFTER mount rather than in the
   // useState initialiser: the server renders without a window, so seeding state
@@ -314,12 +353,54 @@ export default function ExecDashboard() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const asOf = data ? `${clockTime(data.generatedAt)} ${data.timezone}` : "";
+  // Clock value and zone label now come from the same place: the business
+  // timezone the API computed the figures in.
+  const asOf = data ? `${clockTime(data.generatedAt, data.timezone)} ${data.timezone}` : "";
   const rangeLabel = data ? `RANGE ${data.range.label.toUpperCase()}` : "";
+  /**
+   * One derivation drives the picker highlight AND the banner, so the
+   * emphasised chip can never describe a different period from the figures.
+   * Computed from the payload actually rendered rather than from a flag that
+   * could drift from it. See exec-view-state.ts.
+   */
+  const view = deriveViewState({
+    range: data?.range ?? null,
+    loading,
+    error,
+    selection: { rangeKey, customStart, customEnd },
+    presetLabel: RANGES.find((r) => r.key === rangeKey)?.label,
+  });
+  const [report, setReport] = useState<string | null>(null);
+  const printable = captureExecReport(data, { loading, error, selection: { rangeKey, customStart, customEnd } });
+  const printSource = useRef<string | null>(null);
+  printSource.current = report ?? printable;
+  useEffect(() => {
+    const prepare = () => {
+      // Synchronous capture also handles browser menu print/Ctrl+P. The print
+      // tree is independent of later React renders or network responses.
+      document.getElementById("exec-print-capture")?.remove();
+      const node = document.createElement("section");
+      node.id = "exec-print-capture";
+      node.innerHTML = printSource.current ?? "<h1>Report unavailable</h1><p>Wait for a successful, settled selection before printing.</p>";
+      document.body.appendChild(node);
+    };
+    const cleanup = () => document.getElementById("exec-print-capture")?.remove();
+    window.addEventListener("beforeprint", prepare);
+    window.addEventListener("afterprint", cleanup);
+    return () => { window.removeEventListener("beforeprint", prepare); window.removeEventListener("afterprint", cleanup); cleanup(); };
+  }, []);
+  const reportDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (report) reportDialog.current?.showModal(); }, [report]);
   const trendMax = data?.trend ? Math.max(...data.trend!.months.map((m) => m.total), 1) : 1;
 
   return (
     <main className="exec-board ambient-bg min-h-screen p-8 lg:p-12" style={{ position: "relative", zIndex: 1 }}>
+      <style>{REPORT_PRINT_CSS}</style>
+      <dialog ref={reportDialog} onCancel={() => setReport(null)} onClose={() => setReport(null)} aria-label="Executive report preview" style={{ maxWidth: "900px", width: "95%", maxHeight: "90vh", padding: "24px", color: "#17202a", background: "white" }}>
+        <button onClick={() => window.print()}>Print / Save PDF</button>{" "}
+        <button onClick={() => { reportDialog.current?.close(); setReport(null); }}>Close report</button>
+        <div className="exec-report" dangerouslySetInnerHTML={{ __html: report ?? "" }} />
+      </dialog>
       {/* ===== header ===== */}
       <div className="flex flex-wrap items-end justify-between gap-6 mb-9">
         <div>
@@ -330,12 +411,12 @@ export default function ExecDashboard() {
             EXECUTIVE
           </h1>
           <p style={{ fontSize: "16px", lineHeight: 1.55, color: "rgba(255,255,255,0.45)", marginTop: "12px" }}>
-            Live from GoHighLevel and Newie, kept as two separate lines. Every tile shows the
-            window it covers and when it was read.
+            GoHighLevel figures, with Newie pending verification. Each tile states its period and freshness.
           </p>
         </div>
         <div style={{ textAlign: "right" }}>
           <p className="type-timestamp">{data ? `READ AT ${asOf}` : "LOADING"}</p>
+          <button disabled={!printable} onClick={() => setReport(printable)} style={{ marginRight: "12px" }} title={printable ? "Open a fixed report of these figures" : "Wait for settled, matching figures"}>Print / Save PDF</button>
           <button
             onClick={() => void load()}
             disabled={loading}
@@ -356,21 +437,45 @@ export default function ExecDashboard() {
         <div className="flex flex-wrap items-center gap-3">
           <span className="type-section-header" style={{ marginRight: "10px" }}>DATE RANGE</span>
           {RANGES.map((r) => {
-            const active = r.key === rangeKey;
+            // `active` is the period ON SCREEN. `requested` is what was just
+            // asked for and is not showing yet — marked as pending, never as
+            // active, so the emphasised chip always matches the figures.
+            //
+            // Both can be true at once, and that case matters: moving from one
+            // Custom range to another leaves the same chip holding the rendered
+            // period AND the requested one. The chip alone cannot express which
+            // dates are which, so it carries the pending marker while the
+            // SHOWING line and the banner name both periods explicitly.
+            const active = r.key === view.activeChipKey;
+            const requested = r.key === view.requestedChipKey;
             return (
               <button
                 key={r.key}
                 onClick={() => setRangeKey(r.key)}
+                aria-current={active ? "true" : undefined}
+                data-state={
+                  active && requested ? "showing-and-requested"
+                    : active ? "showing" : requested ? "requested" : "idle"
+                }
                 style={{
                   fontFamily: "var(--font-mono)", fontSize: "14px", letterSpacing: "0.06em",
                   padding: "11px 20px", borderRadius: "5px",
-                  border: active ? "1px solid rgba(0,136,255,0.55)" : "1px solid rgba(255,255,255,0.10)",
+                  border: requested
+                    ? "1px dashed rgba(255,184,0,0.65)"
+                    : active
+                      ? "1px solid rgba(0,136,255,0.55)"
+                      : "1px solid rgba(255,255,255,0.10)",
                   background: active ? "rgba(0,136,255,0.16)" : "transparent",
-                  color: active ? "#ffffff" : "rgba(255,255,255,0.55)",
+                  color: active ? "#ffffff" : requested ? "#FFB800" : "rgba(255,255,255,0.55)",
                   cursor: "pointer",
                 }}
               >
                 {r.label}
+                {requested && (
+                  <span style={{ marginLeft: "8px", fontSize: "11px", letterSpacing: "0.1em" }}>
+                    {view.sync === "pending" ? "LOADING" : view.sync === "needs-input" ? "SET DATES" : "NOT SHOWN"}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -400,6 +505,7 @@ export default function ExecDashboard() {
           <p className="type-timestamp" style={{ marginTop: "16px" }}>
             SHOWING {data.range.label.toUpperCase()}
             {!data.range.includesNow && "  ·  HISTORICAL RANGE"}
+            {view.showingPrevious && `  ·  REQUESTED ${view.requestedLabel.toUpperCase()}`}
           </p>
         )}
       </div>
@@ -410,21 +516,32 @@ export default function ExecDashboard() {
         </div>
       )}
 
+      {(loading || view.showingPrevious) && (
+        <p role="status" className="mb-4" style={{ fontSize: "14px", color: "#FFB800" }}>
+          {loading ? "Loading…" : view.sync === "needs-input" ? "Choose both dates." : "Requested range unavailable."}
+          {data ? ` Showing ${data.range.startDate} to ${data.range.endDate} (${data.timezone}).` : " No figures displayed yet."}
+        </p>
+      )}
+      <details className="glass-card p-4 mb-6">
+        <summary style={{ cursor: "pointer" }}>Sources and periods</summary>
+        <p style={subLine}>Range tiles use the displayed dates in the business timezone. The successful-payments chart is a fixed eight-month window; pipeline is a read-time snapshot. September MTD and completed August are unequal periods. GoHighLevel totals succeeded AUD payments and excludes failed, refunded-status, test and non-AUD payments. Partial refunds and fees are not deducted; these figures are not net collections or bank payouts. Newie collections, MRR and subscriber counts await source verification; private native exports are not dashboard inputs. Combined revenue, leads and won-sales metrics remain unavailable.</p>
+      </details>
+
       {data && (
         <>
           {/* ===== row 1: money ===== */}
           {/*
-            Two revenue lines, side by side and never summed. Newie bills the
-            recurring subscriptions; GoHighLevel bills tickets and upsells. A Q1
-            cross-post check found zero payment-level overlap, so they are
-            additive — but each is sourced and gated separately, and a combined
-            total stays off the board until both lines can prove they are current.
+            Keep the sources separate. A combined total requires fresh
+            payment-level overlap reconciliation and verified currency, period,
+            payment status and completeness for both sources. Historical overlap
+            checks do not establish that current figures can be added.
+            No combined total is released here.
           */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            {/* a. revenue collected — GHL */}
+            {/* a. successful payments — GHL */}
             <Tile
-              title="Revenue collected (GoHighLevel)"
-              subtitle="Succeeded AUD payments for tickets and upsells"
+              title="Successful payments (GoHighLevel)"
+              subtitle="Succeeded AUD payments; partial refunds and fees not deducted"
               freshness={data.revenue?.freshness}
               asOf={asOf}
               rangeLabel={rangeLabel}
@@ -437,77 +554,22 @@ export default function ExecDashboard() {
                   <p style={subLine}>
                     {num(data.revenue!.count)} payments in this range.
                     {" "}Excluded: {data.revenue!.excluded.failed} failed,{" "}
-                    {data.revenue!.excluded.refunded} refunded,{" "}
+                    {data.revenue!.excluded.refunded} refunded-status,{" "}
                     {data.revenue!.excluded.testMode} test, {data.revenue!.excluded.nonAud} non-AUD.
                   </p>
                 </div>
               )}
             </Tile>
 
-            {/* a2. recurring revenue — Newie. Separate line, separate gate. */}
-            <Tile
-              title="Recurring revenue (Newie)"
-              subtitle="Subscriptions and memberships. A separate business line — not added to the GoHighLevel figure."
-              freshness={data.recurring?.revenueFreshness}
-              asOf={asOf}
-              rangeLabel="AS OF NOW, NOT THE SELECTED RANGE"
-            >
-              {!data.recurring ? (
-                <StaleNotice f={UNAVAILABLE} />
-              ) : (
-                <div>
-                  {/* The collected figure is withheld while charges arrive
-                      undated. When the feed recovers this shows the all-time
-                      dated total — explicitly labelled as such, because this
-                      line cannot follow the range picker until rows are dated. */}
-                  {data.recurring.revenueFreshness.status === "fresh" &&
-                  data.recurring.collectedAllTime !== null ? (
-                    <div>
-                      <p style={{ ...bigNumber, fontSize: "clamp(36px, 3.2vw, 52px)" }}>
-                        {aud(data.recurring.collectedAllTime)}
-                      </p>
-                      <p style={subLine}>
-                        Collected all time
-                        {data.recurring.datedCount !== null
-                          ? ` across ${num(data.recurring.datedCount)} dated charges.`
-                          : "."}
-                        {" "}This line does not follow the range picker.
-                      </p>
-                    </div>
-                  ) : (
-                    <UndatedNotice undatedCount={data.recurring.undatedCount} />
-                  )}
-
-                  {/* MRR + roster come from the dated Subscriptions tab, which
-                      IS current, so they show on their own gate. */}
-                  <div style={{ marginTop: "22px", paddingTop: "18px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                    {data.recurring.rosterFreshness.status !== "fresh" ? (
-                      <StaleNotice f={data.recurring.rosterFreshness} />
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-3" style={{ marginBottom: "6px" }}>
-                          <span className="type-timestamp">MRR</span>
-                          <FreshnessMark f={data.recurring.rosterFreshness} />
-                        </div>
-                        <p style={{ ...bigNumber, fontSize: "clamp(28px, 2.4vw, 38px)", color: "rgba(0,200,255,0.85)" }}>
-                          {data.recurring.mrr === null ? "—" : aud(data.recurring.mrr)}
-                        </p>
-                        <p style={{ ...subLine, marginTop: "8px" }}>
-                          {data.recurring.activeSubscribers === null
-                            ? "Subscriber count unavailable."
-                            : `${num(data.recurring.activeSubscribers)} active subscribers.`}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
+            <Tile title="Recurring revenue (Newie)" subtitle="Separate business line" asOf={asOf} rangeLabel="PENDING VERIFICATION">
+              <p style={{ fontSize: "22px", color: "#FFB800" }}>Unavailable</p>
+              <p style={subLine}>Collections, MRR and subscriber count pending verification.</p>
             </Tile>
 
             {/* b. payments count + average */}
             <Tile
               title="Payments and average"
-              subtitle="Same rule as revenue collected"
+              subtitle="Same successful-payment criteria"
               freshness={data.revenue?.freshness}
               asOf={asOf}
               rangeLabel={rangeLabel}
@@ -525,10 +587,10 @@ export default function ExecDashboard() {
             </Tile>
           </div>
 
-          {/* ===== row 2: c. revenue trend ===== */}
+          {/* ===== row 2: c. successful payments trend ===== */}
           <div className="mb-6">
             <Tile
-              title="Revenue by month"
+              title="Successful payments by month"
               subtitle={`${data.trend?.windowLabel ?? "Last 8 months"}. This chart is fixed to the last 8 months and does not follow the range above.`}
               freshness={data.trend?.freshness}
               asOf={asOf}
@@ -611,7 +673,7 @@ export default function ExecDashboard() {
             {/* e. cancelled + rate */}
             <Tile
               title="Appointments cancelled"
-              subtitle="The one attendance signal that is actually recorded"
+              subtitle="Cancellation status for appointments scheduled in this range. Attendance is not verified."
               freshness={data.appointments?.freshness}
               asOf={asOf}
               rangeLabel={rangeLabel}
@@ -707,11 +769,6 @@ export default function ExecDashboard() {
         </>
       )}
 
-      {!data && loading && (
-        <div className="glass-card p-12 text-center">
-          <p className="type-timestamp" style={{ fontSize: "14px" }}>LOADING LIVE FIGURES</p>
-        </div>
-      )}
     </main>
   );
 }

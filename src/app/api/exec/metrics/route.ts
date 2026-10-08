@@ -19,26 +19,38 @@ import {
   resolveRange,
   summarisePayments,
   summariseAppointments,
+  selectAppointmentsInRange,
   monthlySeries,
   evaluateFreshness,
+  fixedTrendWindow,
+  DEFAULT_BUSINESS_TIMEZONE,
   FRESHNESS_THRESHOLD_DAYS,
   type RangeKey,
   type Transaction,
   type AppointmentEvent,
 } from "@/lib/exec-metrics";
 
-const BRIDGE = "http://127.0.0.1:4003";
 /**
- * Recurring revenue is a SEPARATE business line on a separate bridge: Newie
- * bills the subscriptions, GoHighLevel bills tickets and upsells. A cross-post
- * check over Q1 found zero payment-level overlap between them (9 of 63
- * customers appear in both systems, but not one payment matches on amount and
- * date), so the two are additive — and they are still reported as two
- * independently-gated lines, never pre-summed here.
+ * Overridable ONLY so the board can be driven from sanitized fixtures during
+ * verification. Unset in production, which is every deployment: the default is
+ * the same loopback address this route has always used, so behaviour is
+ * unchanged unless someone deliberately points it elsewhere.
  */
-const NEWIE_BRIDGE = "http://127.0.0.1:4014";
+const BRIDGE = process.env.EXEC_GHL_BRIDGE_URL || "http://127.0.0.1:4003";
 const TREND_MONTHS = 8;
 const PROBE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The one timezone every bound, bucket and label on this board resolves in.
+ *
+ * Previously implicit: date bounds took the host's zone and the page printed
+ * the browser's zone while labelling it with the server's. Rhys reads this
+ * board while travelling, so "today" has to mean his Melbourne today from any
+ * device. Overridable for a meeting run from a different business timezone;
+ * it is never taken from the request, because the viewer's location must not
+ * silently redefine a business day.
+ */
+const BUSINESS_TZ = process.env.EXEC_BUSINESS_TIMEZONE || DEFAULT_BUSINESS_TIMEZONE;
 
 /** Pipelines Rhys reads. Matched by id, with a name fallback if an id changes. */
 const TARGET_PIPELINES: { id: string; name: string }[] = [
@@ -85,18 +97,6 @@ interface EventsResponse {
   events?: AppointmentEvent[]; total?: number; calendarsQueried?: number;
   calendarsFailed?: number; complete?: boolean; failures?: string[];
 }
-/** /revenue/summary on the newie-bridge. Totals cover DATED rows only. */
-interface NewieSummary {
-  totalRevenue?: number;
-  mrr?: number;
-  activeSubscribers?: number;
-  paymentsCount?: number;
-  currency?: string;
-  latestPaymentAt?: string | null;
-  latestSubscriptionAt?: string | null;
-  undated?: { count: number; total: number };
-}
-
 interface Stage { id: string; name: string; position: number }
 interface Pipeline { id: string; name: string; stages: Stage[] }
 interface Opportunity { pipelineId: string; pipelineStageId: string; status?: string; lastStageChangeAt?: string }
@@ -124,15 +124,6 @@ function appointmentsHeartbeat(now: Date) {
     if (!r?.events) return null;
     return summariseAppointments(r.events).latestBookedAt;
   });
-}
-
-/** Newie recurring-revenue summary. Cheap (the bridge caches the sheet 5m). */
-function newieSummary() {
-  return probe(
-    "newie-summary",
-    () => bridge<NewieSummary>("/revenue/summary", 20_000, NEWIE_BRIDGE),
-    (v) => v !== null,
-  );
 }
 
 /**
@@ -190,39 +181,70 @@ export async function GET(request: NextRequest) {
   const range = resolveRange(
     validKeys.includes(key) ? key : "30d",
     now,
+    BUSINESS_TZ,
     params.get("start"),
     params.get("end"),
   );
 
-  const trendStart = new Date(now.getFullYear(), now.getMonth() - (TREND_MONTHS - 1), 1);
-  const trendStartDate = `${trendStart.getFullYear()}-${String(trendStart.getMonth() + 1).padStart(2, "0")}-01`;
+  /**
+   * The chart's window is resolved from TODAY, not from the picker.
+   *
+   * It used to be fetched as `trendStart -> range.endDate`, so selecting a
+   * historical custom period truncated the series at that date and drew the
+   * months after it as zero — under a caption that said the chart was fixed to
+   * the last 8 months. Both ends now come from the business clock, and the
+   * cache key holds only those, so a picker change can no longer evict or
+   * reshape the fixed series.
+   */
+  const trendWindow = fixedTrendWindow(now, TREND_MONTHS, BUSINESS_TZ);
 
   const [
     rangePayments, trendPayments, paymentsLatest,
-    rangeEvents, appointmentsLatest, pipeline, newie,
+    rangeEvents, appointmentsLatest, pipeline,
   ] = await Promise.all([
     bridge<PaymentsResponse>(
       `/payments/transactions?startAt=${range.startDate}&endAt=${range.endDate}`, 60_000),
-    probe(`trend-${trendStartDate}-${range.endDate}`,
+    probe(`trend-${trendWindow.startDate}-${trendWindow.endDate}`,
       () => bridge<PaymentsResponse>(
-        `/payments/transactions?startAt=${trendStartDate}&endAt=${range.endDate}`, 60_000),
-      (v) => Boolean(v?.data) && v?.complete !== false),
+        `/payments/transactions?startAt=${trendWindow.startDate}&endAt=${trendWindow.endDate}`,
+        60_000),
+      (v) => Boolean(v?.data) && v?.complete === true),
     paymentsHeartbeat(),
     bridge<EventsResponse>(
       `/events?start=${encodeURIComponent(range.startISO)}&end=${encodeURIComponent(range.endISO)}`, 90_000),
     appointmentsHeartbeat(now),
     pipelineSnapshot(),
-    newieSummary(),
   ]);
 
   const unavailable: string[] = [];
   const incomplete: string[] = [];
 
-  // A feed that answered SHORT is not a smaller true number. Anything not
-  // provably complete is reported as such so the tile withholds the figure.
-  const paymentsComplete = rangePayments?.complete !== false;
-  const trendComplete = trendPayments?.complete !== false;
-  const eventsComplete = rangeEvents?.complete !== false;
+  /**
+   * A feed that answered SHORT is not a smaller true number. Anything not
+   * provably complete is reported as such so the tile withholds the figure.
+   *
+   * AFFIRMATIVE, not merely not-negative. This was `complete !== false`, which
+   * passes when the flag is absent entirely — so any response that did not
+   * carry the flag was read as whole. Verified against the bridge source at
+   * `~/.openclaw/workspace/services/ghl-bridge/ghl-bridge.mjs`: both
+   * /payments/* (single-page and paged) and /events set `complete` on every
+   * successful answer, and a malformed page throws rather than returning short.
+   * Requiring `true` therefore changes nothing against the current bridge and
+   * fails closed against an older one, a restarted one mid-deploy, or anything
+   * else answering on :4003 with a shape we do not recognise.
+   *
+   * /opportunities is deliberately not in this list: that bridge route sends no
+   * `complete` flag at all, only GoHighLevel's own metaTotal, so its
+   * completeness is established by the independent count check in
+   * pipelineSnapshot() instead.
+   */
+  const paymentsComplete = rangePayments?.complete === true;
+  const trendComplete = trendPayments?.complete === true;
+  const selectedEvents = rangeEvents && Array.isArray(rangeEvents.events)
+    ? selectAppointmentsInRange(rangeEvents.events, range)
+    : null;
+  const eventsComplete = rangeEvents?.complete === true && selectedEvents !== null
+    && selectedEvents.invalidStartTimes === 0;
   if (rangePayments && !paymentsComplete) incomplete.push("payments");
   if (trendPayments && !trendComplete) incomplete.push("trend");
   if (rangeEvents && !eventsComplete) incomplete.push("appointments");
@@ -235,14 +257,14 @@ export async function GET(request: NextRequest) {
 
   // ---- monthly trend (fixed 8-month window, NOT the picker range) ----
   const trend = trendPayments?.data && trendComplete
-    ? monthlySeries(trendPayments.data, TREND_MONTHS, now)
+    ? monthlySeries(trendPayments.data, TREND_MONTHS, now, BUSINESS_TZ)
     : null;
 
   // ---- appointments ----
-  const appts = rangeEvents?.events && eventsComplete
-    ? summariseAppointments(rangeEvents.events)
+  const appts = selectedEvents && eventsComplete
+    ? summariseAppointments(selectedEvents.events)
     : null;
-  if (!rangeEvents?.events) unavailable.push("appointments");
+  if (!Array.isArray(rangeEvents?.events)) unavailable.push("appointments");
 
   // ---- pipeline stage distribution, point-in-time ----
   let pipelineView: {
@@ -283,11 +305,18 @@ export async function GET(request: NextRequest) {
     unavailable.push("pipeline");
   }
 
-  if (!newie) unavailable.push("recurring");
+  unavailable.push("recurring");
 
   return NextResponse.json({
     generatedAt: now.toISOString(),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    /**
+     * The BUSINESS timezone, which is the one every figure above was actually
+     * computed in — not the host's. The page formats timestamps with this, so a
+     * clock value and its zone label can no longer disagree.
+     */
+    timezone: BUSINESS_TZ,
+    /** Diagnostic only. A mismatch means the host clock moved, not the board. */
+    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     range,
     revenue: pay && {
       collected: pay.collected,
@@ -314,38 +343,10 @@ export async function GET(request: NextRequest) {
       pipelines: pipelineView,
       freshness: evaluateFreshness(pipelineLatest, now, FRESHNESS_THRESHOLD_DAYS.pipeline),
     },
-    /**
-     * Recurring revenue (Newie) — the second business line, deliberately NOT
-     * merged with the GHL figures above.
-     *
-     * Two independent gates, because the two halves of this feed fail
-     * separately. `revenueFreshness` reads the newest DATED payment: the Zap
-     * writes charge rows with a blank Time column, so nothing has been dated
-     * since the 2026-04-04 CSV backfill and this reads STALE. `rosterFreshness`
-     * reads the subscription lifecycle rows, which ARE dated and current, so
-     * MRR and the subscriber count are shown.
-     */
-    recurring: newie && {
-      mrr: newie.mrr ?? null,
-      activeSubscribers: newie.activeSubscribers ?? null,
-      currency: newie.currency ?? "AUD",
-      latestPaymentAt: newie.latestPaymentAt ?? null,
-      /**
-       * All-time total over DATED charge rows, after the backfill
-       * de-duplication. Deliberately not range-scoped: the range picker cannot
-       * be honoured on this line until the rows carry dates, so the tile labels
-       * this as an all-time figure rather than implying it follows the picker.
-       */
-      collectedAllTime: newie.totalRevenue ?? null,
-      datedCount: newie.paymentsCount ?? null,
-      /** Charge rows the Zap wrote with no date. Real money, unplaceable in time. */
-      undatedCount: newie.undated?.count ?? 0,
-      undatedTotal: newie.undated?.total ?? 0,
-      revenueFreshness: evaluateFreshness(
-        newie.latestPaymentAt ?? null, now, FRESHNESS_THRESHOLD_DAYS.newieRecurring),
-      rosterFreshness: evaluateFreshness(
-        newie.latestSubscriptionAt ?? null, now, FRESHNESS_THRESHOLD_DAYS.newieRoster),
-    },
+    // Native account reconciliation has not established an authoritative automatic
+    // source. Never release inferred payment/MRR/roster values, even if fresh.
+    recurring: null,
+    recurringAvailability: "Pending verification: collections, MRR and subscriber count",
     unavailable,
     // Feeds that answered but could not prove they answered in full. The tile
     // shows why instead of a number that is quietly short.
@@ -353,8 +354,19 @@ export async function GET(request: NextRequest) {
     // More than one feed can be short at once, so this names each of them
     // rather than describing only the calendars.
     incompleteDetail: [
+      rangePayments && !paymentsComplete
+        ? `the payments read for this range could not prove it was complete${
+            rangePayments.truncated ? " (page cap reached)" : ""}`
+        : null,
+      trendPayments && !trendComplete
+        ? "the 8-month payments read could not prove it was complete"
+        : null,
       rangeEvents && !eventsComplete
-        ? `${rangeEvents.calendarsFailed ?? "some"} of ${rangeEvents.calendarsQueried ?? "?"} calendars did not answer`
+        ? rangeEvents.complete !== true
+          ? `${rangeEvents.calendarsFailed ?? "some"} of ${rangeEvents.calendarsQueried ?? "?"} calendars did not answer`
+          : selectedEvents
+            ? `${selectedEvents.invalidStartTimes} appointment start time${selectedEvents.invalidStartTimes === 1 ? " is" : "s are"} missing or invalid`
+            : "the appointment read returned an invalid event list"
         : null,
       pipeline && !pipelineComplete
         ? `the opportunity read returned ${pipeline.received} of ${pipeline.expected ?? "an unknown number of"} records`

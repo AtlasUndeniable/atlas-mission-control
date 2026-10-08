@@ -30,93 +30,243 @@
  *     while the correct one is always present, so only the correct one is read.
  */
 
+
+// ===== BUSINESS TIME =====
+
+/**
+ * Every date bound, month bucket and printed timestamp on /exec resolves in ONE
+ * explicit business timezone. It used to resolve in whatever timezone the host
+ * process happened to be in, and print in whatever timezone the browser happened
+ * to be in — while labelling the result with the server's zone string. Rhys
+ * reading the board from a hotel in Los Angeles therefore saw a Los Angeles
+ * clock value stamped "Australia/Melbourne", and "today" meant the Mac's today,
+ * not his.
+ *
+ * Two rules follow from that, and both are load-bearing:
+ *
+ *   1. Calendar arithmetic is done on CIVIL dates (y/m/d), never by adding
+ *      86,400,000ms. On the two days a year a zone shifts, a day is 23 or 25
+ *      hours long, so "today minus 6 days" done in milliseconds lands at 23:00
+ *      or 01:00 of the wrong calendar day and silently moves the window.
+ *   2. A civil day is converted to an instant by solving for the zone's offset
+ *      AT that moment, not by assuming a fixed one.
+ */
+export const DEFAULT_BUSINESS_TIMEZONE = "Australia/Melbourne";
+
+export interface CivilDate { y: number; m: number; d: number }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+function zoneFormatter(tz: string): Intl.DateTimeFormat {
+  let f = formatterCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    formatterCache.set(tz, f);
+  }
+  return f;
+}
+
+export interface ZonedParts { y: number; m: number; d: number; hh: number; mm: number; ss: number }
+
+/** Wall-clock reading of an instant in `tz`. */
+export function zonedParts(instant: Date, tz: string): ZonedParts {
+  const parts = zoneFormatter(tz).formatToParts(instant);
+  const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return {
+    y: read("year"), m: read("month"), d: read("day"),
+    // h23 should never emit 24, but some ICU builds do at midnight.
+    hh: read("hour") % 24, mm: read("minute"), ss: read("second"),
+  };
+}
+
+/** Zone offset in ms at a given instant (positive east of UTC). */
+function offsetMsAt(instant: Date, tz: string): number {
+  const p = zonedParts(instant, tz);
+  const wall = Date.UTC(p.y, p.m - 1, p.d, p.hh, p.mm, p.ss);
+  return wall - Math.floor(instant.getTime() / 1000) * 1000;
+}
+
+/**
+ * The first instant of a civil day in `tz`.
+ *
+ * Solved rather than assumed, because the offset that applies is the offset at
+ * the answer, not at the guess. Both DST pathologies are handled explicitly:
+ * a midnight that happens twice resolves to its FIRST occurrence, and a
+ * midnight that never happens (a zone shifting at 00:00) resolves to the first
+ * instant that day actually has.
+ */
+export function zonedStartOfDay(c: CivilDate, tz: string): Date {
+  const wall = Date.UTC(c.y, c.m - 1, c.d, 0, 0, 0, 0);
+  const candidates = new Set<number>();
+  for (const probeShift of [-26, -12, 0, 12, 26]) {
+    candidates.add(wall - offsetMsAt(new Date(wall + probeShift * HOUR_MS), tz));
+  }
+  const sorted = [...candidates].sort((a, b) => a - b);
+
+  for (const t of sorted) {
+    const p = zonedParts(new Date(t), tz);
+    if (p.y === c.y && p.m === c.m && p.d === c.d && p.hh === 0 && p.mm === 0 && p.ss === 0) {
+      return new Date(t); // earliest exact midnight wins the ambiguous case
+    }
+  }
+  for (const t of sorted) {
+    const p = zonedParts(new Date(t), tz);
+    if (p.y === c.y && p.m === c.m && p.d === c.d) return new Date(t); // midnight skipped
+  }
+  return new Date(sorted[0]);
+}
+
+/** Civil-date arithmetic via UTC, so a 23- or 25-hour day cannot shift a count. */
+export function addCivilDays(c: CivilDate, n: number): CivilDate {
+  const t = new Date(Date.UTC(c.y, c.m - 1, c.d + n));
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
+}
+
+export function addCivilMonths(c: CivilDate, n: number): CivilDate {
+  const t = new Date(Date.UTC(c.y, c.m - 1 + n, 1));
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: 1 };
+}
+
+export function civilToday(now: Date, tz: string): CivilDate {
+  const p = zonedParts(now, tz);
+  return { y: p.y, m: p.m, d: p.d };
+}
+
+export function civilStr(c: CivilDate): string {
+  return `${c.y}-${String(c.m).padStart(2, "0")}-${String(c.d).padStart(2, "0")}`;
+}
+
+export function monthStr(c: CivilDate): string {
+  return `${c.y}-${String(c.m).padStart(2, "0")}`;
+}
+
+export function compareCivil(a: CivilDate, b: CivilDate): number {
+  return a.y - b.y || a.m - b.m || a.d - b.d;
+}
+
+/** Strict YYYY-MM-DD. Rejects 2026-02-31 rather than rolling it into March. */
+export function parseCivil(s: string | null | undefined): CivilDate | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s ?? ""));
+  if (!m) return null;
+  const c = { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  const t = new Date(Date.UTC(c.y, c.m - 1, c.d));
+  if (t.getUTCFullYear() !== c.y || t.getUTCMonth() + 1 !== c.m || t.getUTCDate() !== c.d) return null;
+  return c;
+}
+
 // ===== DATE RANGE =====
 
 export type RangeKey = "today" | "7d" | "30d" | "mtd" | "ytd" | "custom";
 
 export interface ResolvedRange {
   key: RangeKey;
+  /** The business timezone this range was resolved in. Travels with the result
+   *  so the browser labels timestamps with the zone that actually produced them. */
+  timezone: string;
   /** Short human label for the tile footer, e.g. "1 Aug to 12 Aug 2026". */
   label: string;
-  /** Local calendar day, inclusive, YYYY-MM-DD. What /payments/* is given. */
+  /** Business calendar day, inclusive, YYYY-MM-DD. What /payments/* is given. */
   startDate: string;
   endDate: string;
-  /** Local midnight boundaries as ISO. What /events is given (end exclusive). */
+  /** Business midnight boundaries as ISO. What /events is given (end exclusive). */
   startISO: string;
   endISO: string;
   /** True when the range runs up to today, i.e. recency is assertable. */
   includesNow: boolean;
 }
 
-function localDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function startOfLocalDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function formatDayLabel(d: Date): string {
-  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+function formatDayLabel(c: CivilDate, tz: string): string {
+  return zonedStartOfDay(c, tz).toLocaleDateString("en-AU", {
+    timeZone: tz, day: "numeric", month: "short", year: "numeric",
+  });
 }
 
 /**
  * Resolve a preset (or a custom pair) into the exact bounds sent upstream.
- * Boundaries are LOCAL days, because "today" means Rhys's today. The page shows
- * the resolved range on every tile so there is no ambiguity about what a number
- * covers.
+ * Boundaries are business calendar days, because "today" means Rhys's today in
+ * Melbourne — not the host's today and not the travelling browser's today. The
+ * page shows the resolved range on every tile so there is no ambiguity about
+ * what a number covers.
  */
 export function resolveRange(
   key: RangeKey,
   now: Date,
+  tz: string = DEFAULT_BUSINESS_TIMEZONE,
   customStart?: string | null,
   customEnd?: string | null,
 ): ResolvedRange {
-  const today = startOfLocalDay(now);
-  let start: Date;
-  let end: Date = today; // inclusive last day
+  const today = civilToday(now, tz);
+  let start: CivilDate;
+  let end: CivilDate = today; // inclusive last day
 
   switch (key) {
     case "today":
       start = today;
       break;
     case "7d":
-      start = new Date(today.getTime() - 6 * DAY_MS); // 7 days inclusive of today
+      start = addCivilDays(today, -6); // 7 days inclusive of today
       break;
     case "30d":
-      start = new Date(today.getTime() - 29 * DAY_MS);
+      start = addCivilDays(today, -29);
       break;
     case "mtd":
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      start = { y: today.y, m: today.m, d: 1 };
       break;
     case "ytd":
-      start = new Date(now.getFullYear(), 0, 1);
+      start = { y: today.y, m: 1, d: 1 };
       break;
     case "custom": {
-      const s = customStart ? new Date(`${customStart}T00:00:00`) : today;
-      const e = customEnd ? new Date(`${customEnd}T00:00:00`) : today;
-      start = startOfLocalDay(isNaN(s.getTime()) ? today : s);
-      end = startOfLocalDay(isNaN(e.getTime()) ? today : e);
-      if (start.getTime() > end.getTime()) [start, end] = [end, start];
+      start = parseCivil(customStart) ?? today;
+      end = parseCivil(customEnd) ?? today;
+      if (compareCivil(start, end) > 0) [start, end] = [end, start];
       break;
     }
+    default:
+      start = addCivilDays(today, -29);
   }
 
-  const endExclusive = new Date(end.getTime() + DAY_MS);
   return {
     key,
+    timezone: tz,
     label:
-      localDateStr(start) === localDateStr(end)
-        ? formatDayLabel(start)
-        : `${formatDayLabel(start)} to ${formatDayLabel(end)}`,
-    startDate: localDateStr(start),
-    endDate: localDateStr(end),
-    startISO: start.toISOString(),
-    endISO: endExclusive.toISOString(),
-    includesNow: end.getTime() >= today.getTime(),
+      compareCivil(start, end) === 0
+        ? formatDayLabel(start, tz)
+        : `${formatDayLabel(start, tz)} to ${formatDayLabel(end, tz)}`,
+    startDate: civilStr(start),
+    endDate: civilStr(end),
+    startISO: zonedStartOfDay(start, tz).toISOString(),
+    // End-exclusive next business midnight. On a 23- or 25-hour day this span
+    // is 23 or 25 hours, which is exactly what "that calendar day" means.
+    endISO: zonedStartOfDay(addCivilDays(end, 1), tz).toISOString(),
+    includesNow: compareCivil(end, today) >= 0,
   };
+}
+
+/**
+ * The revenue chart's window, resolved from TODAY in the business timezone and
+ * deliberately independent of the range picker.
+ *
+ * The chart is captioned "fixed to the last 8 months". It previously fetched
+ * through the SELECTED range's end date, so choosing a historical custom period
+ * truncated the series to that date and rendered the later months as zero — a
+ * caption and a chart that disagreed. Resolving the end here, from today, is
+ * what makes the caption true.
+ */
+export function fixedTrendWindow(
+  now: Date,
+  months: number,
+  tz: string,
+): { startDate: string; endDate: string } {
+  const today = civilToday(now, tz);
+  const first = addCivilMonths({ y: today.y, m: today.m, d: 1 }, -(months - 1));
+  return { startDate: civilStr(first), endDate: civilStr(today) };
 }
 
 // ===== PAYMENTS =====
@@ -194,13 +344,24 @@ export interface MonthPoint {
   partial: boolean;
 }
 
-/** Collected revenue by calendar month, oldest first, grouped on fulfilledAt. */
-export function monthlySeries(rows: Transaction[], months: number, now: Date): MonthPoint[] {
+/**
+ * Collected revenue by calendar month, oldest first, grouped on fulfilledAt.
+ * Months are business-timezone months: a payment fulfilled at 2026-09-01T00:30
+ * Melbourne is August 31 in UTC and July 31 in Los Angeles, so grouping on the
+ * host's clock moved real money between columns depending on where the process
+ * ran.
+ */
+export function monthlySeries(
+  rows: Transaction[],
+  months: number,
+  now: Date,
+  tz: string = DEFAULT_BUSINESS_TIMEZONE,
+): MonthPoint[] {
+  const today = civilToday(now, tz);
   const buckets = new Map<string, { total: number; count: number }>();
   const keys: string[] = [];
   for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = monthStr(addCivilMonths({ y: today.y, m: today.m, d: 1 }, -i));
     keys.push(key);
     buckets.set(key, { total: 0, count: 0 });
   }
@@ -211,20 +372,22 @@ export function monthlySeries(rows: Transaction[], months: number, now: Date): M
     if (!at) continue;
     const d = new Date(at);
     if (isNaN(d.getTime())) continue;
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const b = buckets.get(key);
+    const p = zonedParts(d, tz);
+    const b = buckets.get(monthStr({ y: p.y, m: p.m, d: 1 }));
     if (!b) continue;                     // outside the window we are charting
     b.total += t.amount as number;
     b.count += 1;
   }
 
-  const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentKey = monthStr({ y: today.y, m: today.m, d: 1 });
   return keys.map((key) => {
     const b = buckets.get(key)!;
     const [y, m] = key.split("-").map(Number);
     return {
       month: key,
-      label: new Date(y, m - 1, 1).toLocaleDateString("en-AU", { month: "short" }),
+      label: new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-AU", {
+        timeZone: "UTC", month: "short",
+      }),
       total: Math.round(b.total * 100) / 100,
       count: b.count,
       partial: key === currentKey,
@@ -250,9 +413,44 @@ export interface AppointmentsSummary {
   latestBookedAt: string | null;
 }
 
+/** Require an explicit instant; never interpret a provider timestamp in the
+ * host or travelling viewer's timezone. Reject rollover dates as malformed. */
+function appointmentStartMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
+  if (!match || !parseCivil(match[1]) || match[2] === "-00:00") return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : null;
+}
+
+/** Provider calendar queries can return events whose starts are outside the
+ * requested day. Count only starts in [start, end), using the
+ * existing business-midnight bounds (including 23- and 25-hour DST days).
+ * Unknown start times prevent a complete metric; they are not silent drops. */
+export function selectAppointmentsInRange(
+  events: AppointmentEvent[],
+  range: Pick<ResolvedRange, "startISO" | "endISO">,
+): { events: AppointmentEvent[]; outsideRange: number; invalidStartTimes: number } {
+  const start = appointmentStartMs(range.startISO);
+  const end = appointmentStartMs(range.endISO);
+  if (start === null || end === null || start >= end) {
+    throw new RangeError("Invalid appointment range");
+  }
+  const selected: AppointmentEvent[] = [];
+  let outsideRange = 0;
+  let invalidStartTimes = 0;
+  for (const event of events) {
+    const at = appointmentStartMs(event?.startTime);
+    if (at === null) invalidStartTimes += 1;
+    else if (at < start || at >= end) outsideRange += 1;
+    else selected.push(event);
+  }
+  return { events: selected, outsideRange, invalidStartTimes };
+}
+
 /**
  * `booked` is every appointment SCHEDULED to start inside the range, which is
- * what the upstream filter selects on. It is not "bookings created in the
+ * enforced by selectAppointmentsInRange at the route. It is not "bookings created in the
  * range" — the tile says so explicitly rather than leaving it to be assumed.
  */
 export function summariseAppointments(events: AppointmentEvent[]): AppointmentsSummary {

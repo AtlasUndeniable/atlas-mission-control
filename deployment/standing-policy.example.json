@@ -1,0 +1,18 @@
+{
+  "policy": null,
+  "version": "standing-v1",
+  "accountId": null,
+  "classificationDecision": null,
+  "disclosureDecision": null,
+  "operatorDecision": null,
+  "coverageActors": [],
+  "operatingStart": null,
+  "operatingEnd": null,
+  "catchupStart": null,
+  "catchupEnd": null,
+  "maxDispatches": 50,
+  "dailyDispatches": 10,
+  "provider": {"provider":"anthropic-vertex","project":null,"region":null,"model":null,"disclosureDecision":null,"budgetDecision":null,"maxPromptCharacters":60000,"maxOutputTokens":4000},
+  "rules": [],
+  "excludedSources": []
+}

@@ -288,11 +288,11 @@ function TaskCard({ task, now, dim }: { task: TaskRow; now: number; dim: boolean
 
 // ===== board =====
 
-export default function ActionBoard() {
+export default function ActionBoard({ initialFilter = "business" }: { initialFilter?: "all" | Lane } = {}) {
   const [data, setData] = useState<BoardPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | Lane>("all");
+  const [filter, setFilter] = useState<"all" | Lane>(initialFilter);
   // Ticks so "synced n min ago" ages between fetches instead of freezing.
   const [now, setNow] = useState(() => Date.now());
 

@@ -1,0 +1,35 @@
+{
+  "enabled": false,
+  "mode": "unbound",
+  "policy": null,
+  "accountId": null,
+  "scopeDecision": null,
+  "operatorDecision": null,
+  "recurring": {
+    "startsAt": null,
+    "endsAt": null,
+    "intervalSeconds": 900,
+    "lookbackDays": 7,
+    "dailyFullSweep": true
+  },
+  "catchUp": {
+    "enabled": false,
+    "startsAt": null,
+    "endsAt": null
+  },
+  "maxPages": 10,
+  "maxSources": 10,
+  "timeoutMs": 60000,
+  "provider": {
+    "provider": "anthropic-vertex",
+    "project": null,
+    "region": null,
+    "model": null,
+    "disclosureDecision": null,
+    "budgetDecision": null,
+    "maxPromptCharacters": 60000,
+    "maxOutputTokens": 4000
+  },
+  "rpcUrl": null,
+  "secretsFile": null
+}

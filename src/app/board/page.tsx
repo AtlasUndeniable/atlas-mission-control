@@ -1,3 +1,4 @@
+import MeetingQueue from "@/components/MeetingQueue";
 import type { Metadata } from "next";
 import ActionBoard from "@/components/ActionBoard";
 
@@ -12,5 +13,5 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default function BoardPage() {
-  return <ActionBoard />;
+  return process.env.ATLAS_MEETING_QUEUE === "1" ? <MeetingQueue /> : <ActionBoard />;
 }

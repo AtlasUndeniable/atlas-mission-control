@@ -1,5 +1,7 @@
+import {pilotCredential,isPilotLogin} from "./lib/artifact-pilot-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { meetingRpc } from "./lib/meetings/transport";
 
 const AUTH_USER = process.env.MISSION_CONTROL_AUTH_USER;
 const AUTH_PASSWORD = process.env.MISSION_CONTROL_AUTH_PASSWORD;
@@ -13,7 +15,33 @@ const RHYS_USER = process.env.MISSION_CONTROL_RHYS_USER;
 const RHYS_PASSWORD = process.env.MISSION_CONTROL_RHYS_PASSWORD;
 
 /** Who is behind this request. Never inferred from a client-supplied header. */
-type Principal = "operator" | "rhys" | "cf-access";
+type Principal = {name: string; kind: "named" | "shared" | "unmapped"; legacy: "operator" | "rhys" | "cf-access" | null};
+
+// Accepted named-identity mechanism, contained to the meeting queue only.
+// Email is a configured login identifier, never trusted from a request header.
+// Existing Rhys/operator pairs retain their installed authentication and reach.
+type NamedCredential = {name:string; user:string; password:string};
+function namedConfiguration(): {credentials:NamedCredential[]; error:boolean} {
+  try {
+    const raw=process.env.MISSION_CONTROL_NAMED_CREDENTIALS;
+    const entries:unknown=raw?.trim()?JSON.parse(raw):[];
+    if(!Array.isArray(entries))throw Error();
+    const names=new Set<string>(),users=new Set<string>(),pairs=new Set<string>();
+    for(const [user,password]of [[AUTH_USER,AUTH_PASSWORD],[RHYS_USER,RHYS_PASSWORD]]) {
+      if(user&&password){users.add(user);pairs.add(JSON.stringify([user,password]));}
+    }
+    const credentials:NamedCredential[]=[];
+    for(const c of entries){
+      if(!c||typeof c!=='object'||Array.isArray(c)||typeof c.name!=='string'||
+        !/^[a-z0-9][a-z0-9_.-]{1,63}$/.test(c.name)||['operator','rhys','cf-access'].includes(c.name)||
+        typeof c.user!=='string'||!c.user||c.user.includes(':')||typeof c.password!=='string'||!c.password||
+        names.has(c.name)||users.has(c.user)||pairs.has(JSON.stringify([c.user,c.password])))throw Error();
+      names.add(c.name);users.add(c.user);pairs.add(JSON.stringify([c.user,c.password]));credentials.push(c);
+    }
+    return {credentials,error:false};
+  } catch {return {credentials:[],error:true};}
+}
+const NAMED=namedConfiguration();
 
 /**
  * Downstream routes read this to know who they are serving. Middleware ALWAYS
@@ -109,10 +137,13 @@ function identifyBasicAuth(request: NextRequest): Principal | null {
     // Rhys first: on an identical pair the narrower principal must win, and
     // rhysCredentialIsDistinct gates /exec separately if they were duplicated.
     if (RHYS_USER && RHYS_PASSWORD && safeEqual(user, RHYS_USER) && safeEqual(pass, RHYS_PASSWORD)) {
-      return "rhys";
+      return {name:"rhys",kind:"named",legacy:"rhys"};
     }
     if (AUTH_USER && AUTH_PASSWORD && safeEqual(user, AUTH_USER) && safeEqual(pass, AUTH_PASSWORD)) {
-      return "operator";
+      return {name:"operator",kind:"shared",legacy:"operator"};
+    }
+    for(const c of NAMED.credentials) {
+      if(safeEqual(user,c.user)&&safeEqual(pass,c.password))return {name:c.name,kind:"named",legacy:null};
     }
     return null;
   } catch {
@@ -130,7 +161,8 @@ function unauthorizedResponse(): NextResponse {
 /** Pass the request through, stamped with the principal we actually verified. */
 function allow(request: NextRequest, principal: Principal): NextResponse {
   const headers = new Headers(request.headers);
-  headers.set(PRINCIPAL_HEADER, principal);   // overwrites any client-sent value
+  headers.set(PRINCIPAL_HEADER, principal.name);
+  headers.set("x-mc-principal-kind", principal.kind);   // overwrites any client-sent value
   return NextResponse.next({ request: { headers } });
 }
 
@@ -141,6 +173,18 @@ export async function middleware(request: NextRequest) {
     return new NextResponse("Mission Control auth not configured", { status: 503 });
   }
 
+  const path=request.nextUrl.pathname;
+  // Dedicated synthetic-review identity: no Rhys, operator or meeting principal inheritance.
+  if(path==='/pilot/artifacts'){
+    if(process.env.ATLAS_DANTE_PILOT_REVIEW_ENABLED!=='1'||!pilotCredential(process.env))return new NextResponse('Pilot review unavailable',{status:503});
+    if(!isPilotLogin(request.headers.get('authorization'),process.env))return new NextResponse('Unauthorized',{status:401,headers:{'WWW-Authenticate':'Basic realm="Atlas Dante synthetic review"'}});
+    return allow(request,{name:'dante-pilot',kind:'named',legacy:null});
+  }
+  if(isPilotLogin(request.headers.get('authorization'),process.env))return new NextResponse('This login is scoped to the synthetic artifact review.',{status:403});
+
+  const isMeeting=path==='/board'||path==='/api/board/meetings'||path.startsWith('/api/board/meetings/');
+  if(process.env.ATLAS_MEETING_QUEUE==='1'&&isMeeting&&NAMED.error)
+    return new NextResponse('Meeting identity configuration invalid',{status:503,headers:{'Cache-Control':'no-store'}});
   const isRhysOnly = RHYS_ONLY_PREFIXES.some(
     (p) => request.nextUrl.pathname === p || request.nextUrl.pathname.startsWith(`${p}/`),
   );
@@ -151,7 +195,7 @@ export async function middleware(request: NextRequest) {
   // deliberately not enough for the executive board.
   if (await checkCfAccessJwt(request)) {
     if (isRhysOnly) return unauthorizedResponse();
-    return allow(request, "cf-access");
+    return allow(request, {name:"cf-access",kind:"unmapped",legacy:"cf-access"});
   }
 
   // Basic Auth on every other request — no bypass. The Host header is
@@ -161,6 +205,21 @@ export async function middleware(request: NextRequest) {
   if (!principal) {
     return unauthorizedResponse();
   }
+
+  if(process.env.ATLAS_MEETING_QUEUE==='1'&&isMeeting) {
+    if(principal.kind!=='named')return unauthorizedResponse();
+    if(principal.legacy==='rhys'&&!rhysCredentialIsDistinct)
+      return new NextResponse('Rhys credential is not distinct',{status:503});
+    try {
+      await meetingRpc(principal.name,'capability');
+      const response=allow(request,principal);
+      response.headers.set('Cache-Control','private, no-store');
+      return response;
+    } catch {return new NextResponse('Meeting queue access denied',{status:403,headers:{'Cache-Control':'no-store'}});}
+  }
+  // New named credentials never fall through to financial, Ask, operational,
+  // legacy board or staff/document endpoints, including when queue is disabled.
+  if(principal.legacy===null)return new NextResponse('This login is scoped to meeting actions.',{status:403,headers:{'Cache-Control':'no-store'}});
 
   if (isRhysOnly) {
     if (!rhysCredentialConfigured) {
@@ -173,12 +232,12 @@ export async function middleware(request: NextRequest) {
       );
     }
     // The operator credential opens every other route and none of this one.
-    if (principal !== "rhys") return unauthorizedResponse();
+    if (principal.legacy !== "rhys") return unauthorizedResponse();
   }
 
   return allow(request, principal);
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|pilot/artifacts/api/(?:list|review|content|approve)$).*)"],
 };

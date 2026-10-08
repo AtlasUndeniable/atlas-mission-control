@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.atlas.recurring-meeting-intake</string>
+<key>Disabled</key><true/>
+<key>ProgramArguments</key><array><string>/opt/homebrew/bin/node</string><string>/Users/atlasai/atlas-mission-control/scripts/meetings/collect-recurring.ts</string><string>/Users/atlasai/.config/atlas/recurring-intake/config.json</string></array>
+<key>WorkingDirectory</key><string>/Users/atlasai/atlas-mission-control</string>
+<key>StartInterval</key><integer>900</integer><key>RunAtLoad</key><false/><key>KeepAlive</key><false/>
+<key>ProcessType</key><string>Background</string><key>ExitTimeOut</key><integer>30</integer>
+<key>StandardOutPath</key><string>/Users/atlasai/.config/atlas/recurring-intake/operator.log</string>
+<key>StandardErrorPath</key><string>/Users/atlasai/.config/atlas/recurring-intake/operator.error.log</string>
+</dict></plist>
