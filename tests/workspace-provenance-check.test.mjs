@@ -8,12 +8,14 @@ import {
   collectWorkspaceProvenance,
   formatWorkspaceProvenance,
 } from "../scripts/check-workspace-provenance.mjs";
+import { SLACK_RUNTIME_FILES } from "../scripts/deploy-openclaw-slack-runtime.mjs";
 
-const RUNTIME_FILES = {
-  "lib/slack-listener-reply.mjs": "reply\n",
-  "lib/slack-listener-reply.test.mjs": "reply test\n",
-  "services/slack-listener/listener.mjs": "listener\n",
-};
+// The collector always walks the deploy script's own manifest, so the
+// synthetic tree has to carry every file on it. Seeding a hand-written subset
+// made this test fail the moment the manifest grew a file the subset lacked.
+const RUNTIME_FILES = Object.fromEntries(
+  SLACK_RUNTIME_FILES.map((relativePath) => [relativePath, `${relativePath}\n`]),
+);
 
 test("workspace provenance check reports roots, processes, git head, and matching runtime files", async () => {
   const root = await mkdtemp(join(tmpdir(), "workspace-provenance-"));

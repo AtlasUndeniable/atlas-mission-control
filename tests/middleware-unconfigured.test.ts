@@ -10,19 +10,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
+import { registerSrcModuleResolve } from "./helpers/src-module-resolve.ts";
 
-// next's package.json has no ESM exports map, so the bare "next/server"
-// specifier used in src does not resolve under plain Node — map it to the
-// real file here rather than de-idiomatising the src import.
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "next/server") {
-      return nextResolve("next/server.js", context);
-    }
-    return nextResolve(specifier, context);
-  },
-});
+// src/ uses the bare "next/server" specifier and extensionless relative
+// imports; neither resolves under plain Node. One shared hook maps both.
+registerSrcModuleResolve();
 
 // Basic Auth env UNSET; CF Access configured — the 503 must still win,
 // before any JWT handling.

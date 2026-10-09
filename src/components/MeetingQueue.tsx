@@ -21,6 +21,14 @@ type ItemDraft={local:{values:Draft;revision:number}|null;note:string;sharedNote
 type Receipt={action:string;actor:string;at:number};
 const label=(key:string)=>({awaiting_source:'Waiting for the recording or summary',processing:'Being read',ready:'Read, ready for you',no_actions:'Nothing to do from this call',held:'Held for review',failed:'Needs another go',todo:'To do',needs_review:'Needs review',atlas_held:'Atlas preparation · held',completed:'Completed'}[key]||key);
 const NAT_KEYS=['nat','fixture.nat'];
+/**
+ * Desktop column layout, one line for the install to pick.
+ *  'wrap'  — the seven columns wrap, 4 + 3 at 1440px, whole board on screen.
+ *  'track' — all seven stay on one row as a horizontal track that snaps
+ *            column by column, so late columns are scrolled to, not wrapped.
+ * The phone is one stacked column either way.
+ */
+const DESKTOP_COLUMNS:'wrap'|'track'='wrap';
 export default function MeetingQueue({engineering=false}:{engineering?:boolean}){
  const {data,error:syncError,loading,fresh,checkedAt,refresh,pause,resume,readable}=useBoardSnapshot<Queue>();
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useState('all'),[actorFilter,setActorFilter]=useState('all'),[context,setContext]=useState<Record<string,string>>({}),[saved,setSaved]=useState('');
@@ -103,7 +111,7 @@ export default function MeetingQueue({engineering=false}:{engineering?:boolean})
  {data.meetings.filter(m=>m.sourceChanged&&m.pending&&data.capability.triage).map(m=><details id={`source-review-${m.id}`} className={styles.revision} key={m.id+m.revision}><summary>The call this came from changed · {m.title}</summary><SourceReview meeting={m} busy={blocked} onSave={p=>operate('source_review',p)}/></details>)}
  {held.length>0&&<p className={styles.heldStrip} role="status"><b>{held.length} {held.length===1?'card is':'cards are'} held.</b> {held.length===1?'It cannot move until someone clears the reason on it.':'They cannot move until someone clears the reasons on them.'}</p>}
  {entries.length===0&&<p className={styles.empty}>Nothing matches this view. Change the filters above, or read the calls strip — an empty board is not the same as nothing to do.</p>}
- <div className={styles.board}>{BOARD_STATUSES.map(key=>{const rows=entries.filter(({s})=>s.status===key);return <section className={styles.column} key={key} data-stage={key}><div className={styles.columnHeading}><h2>{BOARD_STATUS_LABEL[key]}</h2><span>{rows.length}</span></div>{rows.length===0&&<p className={styles.columnEmpty}>Nothing here</p>}{rows.map(({m,i,s})=><div key={`${data.capability.actor}:${i.id}:${m.taskOnly?'limited':'full'}`}>
+ <div className={styles.board} data-layout={DESKTOP_COLUMNS}>{BOARD_STATUSES.map(key=>{const rows=entries.filter(({s})=>s.status===key);return <section className={styles.column} key={key} data-stage={key}><div className={styles.columnHeading}><h2>{BOARD_STATUS_LABEL[key]}</h2><span>{rows.length}</span></div>{rows.length===0&&<p className={styles.columnEmpty}>Nothing here</p>}{rows.map(({m,i,s})=><div key={`${data.capability.actor}:${i.id}:${m.taskOnly?'limited':'full'}`}>
  <ActionItem draftCache={draftCache.current} receipts={receipts.current} status={s} draft={i.task?drafts[i.task.id]??null:null} engineering={engineering} item={i} meeting={m} actor={data.capability.actor} triage={data.capability.triage} canReview={data.capability.review} busy={blocked} pauseReason={busy?'Wait for the current save to finish.':!fresh?'Check the board before continuing.':''} operate={operate} draftAction={draftAction} reviewSource={()=>{const el=document.getElementById(`source-review-${m.id}`) as HTMLDetailsElement|null;if(el){el.open=true;el.scrollIntoView({block:'center'});el.querySelector('select')?.focus()}}} sourceHistory={<><button disabled={blocked} onClick={()=>void showContext(m.id,m.taskOnly?i.id:undefined)}>Show what I am allowed to see</button>{context[m.taskOnly?i.id:m.id]&&<pre className={styles.context}>{context[m.taskOnly?i.id:m.id]}</pre>}</>}/>
  {i.task&&fresh&&engineering&&<TaskWorkingPanel taskId={i.task.id} onChanged={refresh}/>}
  </div>)}</section>})}</div>
@@ -163,9 +171,14 @@ function ActionItem({draftCache,receipts,status:s,draft,engineering,item:i,meeti
  const reviseDraft=!!taskId&&!!draft&&draft.available!==false&&['draft','in_review'].includes(draft.status||'')&&can('revise');
  const reviewing=!!canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review';
  const canSubmit=!!i.task&&i.task.work_status!=='needs_review'&&[i.owner,i.task.executor].includes(actor)&&!terminal;
- const submitReason=!canSubmit?'':busy?pauseReason:dirty?'Save or discard your changes first.':i.task?.executor==='atlas'?'Atlas is not switched on to do work.':note.trim().length<3?'Say what was done before marking it off.':'';
+ const submitReason=!canSubmit?'':busy?pauseReason:dirty?'Save or discard your changes first.':i.task?.executor==='atlas'?'Atlas is not switched on to do work.':note.trim().length<3?'Say what was done under “More options” before marking it off.':'';
  /* Only ask for a note when an action in front of this person needs one. */
  const noteNeeded=reviewing||canSubmit||approveDraft||reviseDraft||handoffDraft;
+ /* The note is folded away to keep a card at rest short, so a button still
+    waiting on one says where to write it rather than sitting inert. Sending a
+    draft on is the one note-bearing action that does not itself need one. */
+ const noteWanted=reviewing||canSubmit||approveDraft||reviseDraft;
+ const noteReason=!terminal&&noteWanted&&note.trim().length<(approveDraft||reviseDraft?10:3)?'Write the note under “More options” first.':'';
  const canDelegate=triage&&!!i.task&&!terminal&&natEligible&&draftValues.executor!==natActor;
  const delegateReason=!triage||!i.task||terminal?'':busy?pauseReason:!natEligible?'Nat cannot be given this yet: she needs the task context reviewed first. Assigning it would not grant her access.':draftValues.executor===natActor?'Already with Nat.':'';
  return <article className={styles.item} data-tone={s.tone} data-status={s.status}>
@@ -192,11 +205,10 @@ function ActionItem({draftCache,receipts,status:s,draft,engineering,item:i,meeti
  </div>}
  {/* A blocked action explains itself quietly. Amber is kept for things a
      person actually has to act on, per the September 18 direction. */}
- {!terminal&&(startReason||delegateReason||submitReason)&&<p className={styles.blockedReason}>{[startReason,delegateReason,submitReason].filter(Boolean)[0]}</p>}
- {!terminal&&triage&&<label className={styles.setDue}>Set due<input type="date" value={draftValues.due} disabled={busy} onChange={e=>field('due',e.target.value)}/></label>}
+ {!terminal&&(startReason||delegateReason||submitReason||noteReason)&&<p className={styles.blockedReason}>{[startReason,delegateReason,submitReason,noteReason].filter(Boolean)[0]}</p>}
  {dirty&&<div className={styles.actions}><button className={styles.primary} disabled={busy||stale||m.sourceChanged||i.reconciliationRequired} onClick={()=>void saveEdits()}>Save changes</button></div>}
- {!terminal&&noteNeeded&&<label className={styles.cardNote}>{canReview?'Private note for the record':'Note about this work'}<input value={note} onChange={e=>setNote(e.target.value)} placeholder={reviewing?'What should change, or why this is right':'What was done'}/></label>}
  <details className={styles.cardDetails}><summary>{terminal?'View details':i.task?'More options':'All details & accept'}</summary>
+ {!terminal&&noteNeeded&&<label className={styles.cardNote}>{canReview?'Private note for the record':'Note about this work'}<input value={note} onChange={e=>setNote(e.target.value)} placeholder={reviewing?'What should change, or why this is right':'What was done'}/></label>}
  <label>Next step<input value={draftValues.title} disabled={busy||terminal||!triage||!!i.taskOnly} onChange={e=>field('title',e.target.value)}/></label>
  <p className={styles.note}>Only people already allowed to see this item are listed. Giving someone a job does not give them access.</p>{!natEligible&&<p className={styles.warning}>Nat cannot take this version: she needs the task context reviewed first. Being on the client alone is not enough.</p>}{i.taskOnly&&<p className={styles.note}>To change these instructions, ask the owner to review the task context. You can change timing and report your work.</p>}<div className={styles.fields}><label>Owner<select value={draftValues.owner} disabled={busy||terminal||!triage} onChange={e=>field('owner',e.target.value)}><option value="">Unassigned</option>{draftValues.owner&&!assignees.some(a=>a.actor===draftValues.owner)&&<option value={draftValues.owner} disabled>{name(draftValues.owner)} · no access</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label><label>Due date<input type="date" value={draftValues.due} disabled={busy||terminal||!triage} onChange={e=>field('due',e.target.value)}/></label>
  {i.task&&<><label>Who is doing it<select value={draftValues.executor} disabled={busy||terminal||!triage} onChange={e=>field('executor',e.target.value)}><option value="">Unassigned</option>{draftValues.executor&&!assignees.some(a=>a.actor===draftValues.executor)&&draftValues.executor!=='atlas'&&<option value={draftValues.executor} disabled>{name(draftValues.executor)} · no access</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}{!i.taskOnly&&!i.sharedCorrectionRequired&&<option value="atlas">Atlas · held</option>}</select>{!natEligible&&<span className={styles.warning}>Nat cannot do this version yet. Ask whoever reviews the call to review a task-only context; changing the owner does not grant access.</span>}<span className={styles.note}>The person doing it can differ from the owner.</span></label><label>Who reviews it<select value={draftValues.reviewer} disabled={busy||terminal||!triage||!!i.task.next_reviewer&&!canReview} onChange={e=>field('reviewer',e.target.value)}><option value="">No review needed</option>{assignees.filter(a=>a.review).map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label></>}</div>

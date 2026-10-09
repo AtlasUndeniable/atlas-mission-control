@@ -17,6 +17,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_BUSINESS_TIMEZONE,
   resolveRange,
   isCollectedPayment,
   summarisePayments,
@@ -52,12 +53,14 @@ test("the events window ends at the NEXT local midnight so the last day is inclu
 });
 
 test("custom ranges are honoured, reversed pairs are repaired, and history is flagged", () => {
-  const r = resolveRange("custom", NOW, "2026-03-01", "2026-03-31");
+  // resolveRange is (key, now, tz, customStart, customEnd) — this case used to
+  // pass the dates into tz and customStart, which threw on the Intl lookup.
+  const r = resolveRange("custom", NOW, DEFAULT_BUSINESS_TIMEZONE, "2026-03-01", "2026-03-31");
   assert.equal(r.startDate, "2026-03-01");
   assert.equal(r.endDate, "2026-03-31");
   assert.equal(r.includesNow, false, "a historical range must not claim to include now");
 
-  const flipped = resolveRange("custom", NOW, "2026-03-31", "2026-03-01");
+  const flipped = resolveRange("custom", NOW, DEFAULT_BUSINESS_TIMEZONE, "2026-03-31", "2026-03-01");
   assert.equal(flipped.startDate, "2026-03-01", "start/end swapped back into order");
   assert.equal(flipped.endDate, "2026-03-31");
 });

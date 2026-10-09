@@ -44,9 +44,7 @@
 
 .quickActions{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0 0}
 .quickActions>button{flex:1 1 auto;min-height:44px}
-.setDue{flex-direction:row!important;align-items:center;gap:10px;margin:13px 0 0;font-size:13px;color:#b9bec7}
-.setDue input{max-width:190px}
-.cardNote{margin:13px 0 0;font-size:13px}
+.cardNote{font-size:13px}
 
 .heldStrip{margin:0 0 14px;padding:11px 14px;border:1px solid #8a5a2e;border-radius:7px;background:#241a11;color:#f0cfa4;font-size:14px;line-height:1.5}
 .heldStrip b{color:#f6dcb8}
@@ -64,8 +62,6 @@
  .item h3{font-size:17px}
  .quickActions{flex-direction:column}
  .quickActions>button{width:100%;flex:none}
- .setDue{flex-direction:column!important;align-items:stretch}
- .setDue input{max-width:none}
  .page button{min-height:44px}
  .cardDetails>summary{display:block;text-align:center;min-height:44px;line-height:30px}
 }
@@ -78,4 +74,16 @@
  .board{gap:20px}
  .columnEmpty{padding:2px 0 0;border:0;font-size:13px}
  .columnHeading{margin-bottom:8px}
+}
+
+/* Desktop column layout, selected by DESKTOP_COLUMNS in MeetingQueue.tsx.
+   'wrap' is the rules above: the seven columns wrap, 4 + 3 at 1440px.
+   'track' keeps all seven on one row and scrolls, snapping column by column.
+   The phone stays one stacked column under either, because a track there
+   would reintroduce the sideways scrolling the phone rules out. */
+.board[data-layout=track]{display:flex;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;padding-bottom:16px}
+.board[data-layout=track]>.column{flex:0 0 300px;scroll-snap-align:start}
+@media(max-width:639px){
+ .board[data-layout=track]{display:grid;overflow-x:visible;scroll-snap-type:none;padding-bottom:0}
+ .board[data-layout=track]>.column{flex:none}
 }
