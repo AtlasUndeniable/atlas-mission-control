@@ -7,3 +7,75 @@
 .page button.primary{background:#e9edeb;color:#18201c;border-color:#e9edeb;font-weight:600}.page button.primary:disabled{background:#343938;color:#929c97;border-color:#4c5550}
 
 .actions>.confirm{flex:1 1 100%;margin:8px 0;padding:10px;border:1px solid #606771;border-radius:5px}.confirm:has(input:disabled){color:#b7bdc6}
+
+/* ===== Customer board: columns, card header, card actions =====
+   Palette and density follow the installed board and the September 18 design
+   direction (near-black page, charcoal cards, amber = a person must act,
+   blue = Atlas-originated, green = genuinely finished). */
+
+/* Seven named statuses. auto-fit keeps columns readable instead of forcing
+   seven into a laptop width; they wrap and finally stack on a phone. */
+.board{grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
+@media(max-width:1199px){.board{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}}
+@media(max-width:639px){.board{grid-template-columns:minmax(0,1fr)}}
+
+.column[data-stage=held] .columnHeading h2{color:#e8cd94}
+.column[data-stage=complete] .columnHeading h2{color:#a3d9af}
+
+.cardTop{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.chip{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:4px 9px;border-radius:999px;border:1px solid #4a5059;color:#d7dbe2;white-space:nowrap}
+.chip[data-tone=review]{border-color:#8a6f2e;background:#2a2213;color:#f1cc76}
+.chip[data-tone=atlas]{border-color:#3f5c8a;background:#161f2d;color:#a6c9ff}
+.chip[data-tone=done]{border-color:#3f6e4c;background:#162119;color:#a3d9af}
+.chip[data-tone=held]{border-color:#8a5a2e;background:#2a1d13;color:#f0b97a}
+.version{font-size:12px;font-weight:600;padding:4px 9px;border-radius:999px;border:1px solid #4a5059;background:#15171a;color:#cdd3dc;white-space:nowrap}
+
+.item[data-tone=held]{border-left:3px solid #e09a4e}
+.reason{font-size:14px;line-height:1.5;color:#c6ccd6;margin:0 0 13px}
+.item[data-tone=held]>.reason{color:#f0cfa4}
+.freshness{font-size:13px;color:#a6adb8;margin:9px 0 0;line-height:1.5}
+.nextStep{margin:12px 0 0}
+.nextStep b{color:#e7e9ed;font-weight:600}
+
+.unsaved{font-size:13px;line-height:1.55;color:#f1cc76;margin:13px 0 0;padding:10px 12px;border:1px solid #6d5a2d;border-radius:6px;background:#221c10}
+.unsaved b{color:#f6dca0}
+.unsaved button{margin-top:8px}
+.savedBy{font-size:13px;color:#a3d9af;margin:13px 0 0}
+
+.quickActions{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0 0}
+.quickActions>button{flex:1 1 auto;min-height:44px}
+.setDue{flex-direction:row!important;align-items:center;gap:10px;margin:13px 0 0;font-size:13px;color:#b9bec7}
+.setDue input{max-width:190px}
+.cardNote{margin:13px 0 0;font-size:13px}
+
+.heldStrip{margin:0 0 14px;padding:11px 14px;border:1px solid #8a5a2e;border-radius:7px;background:#241a11;color:#f0cfa4;font-size:14px;line-height:1.5}
+.heldStrip b{color:#f6dcb8}
+
+.engineering{font-size:13px;color:#aeb6c2;margin:14px 0 0;padding-top:12px;border-top:1px solid #34383f}
+.engineering dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;margin:10px 0 0}
+.engineering dt{color:#9aa2ae}
+.engineering dd{margin:0;font:12px/1.5 monospace;color:#d2d8e2;overflow-wrap:anywhere}
+.engineering span{display:contents}
+
+/* Phone: one column, nothing clipped, every control thumb-sized. */
+@media(max-width:639px){
+ .page{padding:20px 14px}
+ .item{padding:16px 14px}
+ .item h3{font-size:17px}
+ .quickActions{flex-direction:column}
+ .quickActions>button{width:100%;flex:none}
+ .setDue{flex-direction:column!important;align-items:stretch}
+ .setDue input{max-width:none}
+ .page button{min-height:44px}
+ .cardDetails>summary{display:block;text-align:center;min-height:44px;line-height:30px}
+}
+
+.blockedReason{font-size:13px;line-height:1.5;color:#a6adb8;margin:9px 0 0}
+
+/* An empty column still states it is empty, but compactly — on a phone the
+   board is one column, so four dashed boxes would be four screens of nothing. */
+@media(max-width:639px){
+ .board{gap:20px}
+ .columnEmpty{padding:2px 0 0;border:0;font-size:13px}
+ .columnHeading{margin-bottom:8px}
+}

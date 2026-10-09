@@ -1,11 +1,15 @@
 'use client';
 import {operationId} from '@/lib/operation-id';
 import MeetingCoverage from './MeetingCoverage';
-import {useEffect,useRef,useState} from 'react';
+import IntakeStrip from './IntakeStrip';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import styles from './MeetingQueue.module.css';
 import type {ReactNode} from 'react';
 import TaskWorkingPanel from './TaskWorkingPanel';
 import {useBoardSnapshot} from './useBoardSnapshot';
+import {useTaskDrafts} from './useTaskDrafts';
+import {BOARD_STATUSES,BOARD_STATUS_LABEL,deriveBoardStatus,draftingBlock,nextAction,type DraftState} from '@/lib/board/task-status';
+import {actorName as name,dueLabel,freshness,relativeTime} from '@/lib/board/presentation';
 type Candidate={key:string;title:string;quote:string;kind:string;provenance:string;suggestedResponsibility:string|null;uncertainty:string};
 type Assignee={actor:string;review:boolean};
 type Item={sharedCorrection?:string|null;sharedCorrectionRequired?:boolean;taskOnly?:boolean;assignees?:Assignee[];id:string;revision:number;sourceRevision?:string;reconciliationRequired?:boolean;title:string;due:string|null;owner:string|null;state:string;deferred:boolean;evidence:Candidate;task:null|{id:string;executor:string|null;next_reviewer:string|null;work_status:string;receipts:unknown}};
@@ -13,12 +17,15 @@ type Meeting={taskOnly?:boolean;id:string;title:string;instant:string;state:stri
 type Queue={capability:{actor:string;triage:boolean;review:boolean;rhysActor:string|null};meetings:Meeting[];coverage:{start:string;end:string;status:string;observedAt:string}[];coverageBoundary:string};
 type Draft={title:string;owner:string;due:string;executor:string;reviewer:string};
 type ItemDraft={local:{values:Draft;revision:number}|null;note:string;sharedNote:string;confirmationStamp:string|null};
-const label=(key:string)=>({awaiting_source:'Awaiting transcript / summary',processing:'Processing',ready:'Ready for review',no_actions:'No internal actions',held:'Held for review',failed:'Retry needed',todo:'To do',needs_review:'Needs review',atlas_held:'Atlas preparation · held',completed:'Completed'}[key]||key);
-const name=(key:string|null)=>!key?'Unassigned':key==='rhys'?'Rhys':key==='nat'||key==='fixture.nat'?'Nat':key==='atlas'?'Atlas':key.replace('fixture.','');
-export default function MeetingQueue(){
+/** A confirmed write, so a card can say what was saved and who saved it. */
+type Receipt={action:string;actor:string;at:number};
+const label=(key:string)=>({awaiting_source:'Waiting for the recording or summary',processing:'Being read',ready:'Read, ready for you',no_actions:'Nothing to do from this call',held:'Held for review',failed:'Needs another go',todo:'To do',needs_review:'Needs review',atlas_held:'Atlas preparation · held',completed:'Completed'}[key]||key);
+const NAT_KEYS=['nat','fixture.nat'];
+export default function MeetingQueue({engineering=false}:{engineering?:boolean}){
  const {data,error:syncError,loading,fresh,checkedAt,refresh,pause,resume,readable}=useBoardSnapshot<Queue>();
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useState('all'),[actorFilter,setActorFilter]=useState('all'),[context,setContext]=useState<Record<string,string>>({}),[saved,setSaved]=useState('');
  const draftCache=useRef(new Map<string,ItemDraft>());
+ const receipts=useRef(new Map<string,Receipt>());
  const alive=useRef(true),epoch=useRef(0),mutation=useRef(false),previous=useRef('');
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;epoch.current++}},[]);
  useEffect(()=>{
@@ -26,10 +33,40 @@ export default function MeetingQueue(){
   if(previous.current!==stamp||!fresh){epoch.current++;setContext({});previous.current=stamp}
   const permitted=new Set(data?.meetings.flatMap(m=>m.items.map(i=>`${data.capability.actor}:${i.id}:${m.taskOnly?'limited':'full'}`))??[]);
   for(const key of draftCache.current.keys())if(!permitted.has(key))draftCache.current.delete(key);
+  for(const key of receipts.current.keys())if(!permitted.has(key))receipts.current.delete(key);
  },[data,fresh]);
  const blocked=busy||!fresh;
+ const taskIds=useMemo(()=>Array.from(new Set(data?.meetings.flatMap(m=>m.items.map(i=>i.task?.id)).filter((x):x is string=>!!x)??[])).sort(),[data]);
+ // Draft state is read only while the board itself is readable, so a paused or
+ // access-lost board never leaves stale draft badges on screen.
+ const {drafts,refreshDrafts}=useTaskDrafts(taskIds,fresh&&readable.current,checkedAt);
  async function act(action:string,payload:Record<string,unknown>){const r=await fetch('/api/board/meetings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload:{...payload,operationId:operationId()}})});const d=await r.json();if(!r.ok)throw Error(d.error);return d;}
- async function operate(action:string,payload:Record<string,unknown>){if(mutation.current||!readable.current)return false;mutation.current=true;pause();epoch.current++;setBusy(true);setError('');try{await act(action,payload);setSaved('Saved');await refresh();return true}catch(e){await refresh();setError(e instanceof Error?e.message:'Action failed. Check saved status before retrying.');return false}finally{mutation.current=false;resume();setBusy(false)}}
+ /** One canonical write at a time. `receiptKey` records who saved what. */
+ async function operate(action:string,payload:Record<string,unknown>,receiptKey?:string){
+  if(mutation.current||!readable.current)return false;
+  mutation.current=true;pause();epoch.current++;setBusy(true);setError('');
+  try{
+   await act(action,payload);
+   setSaved('Saved');
+   if(receiptKey&&data)receipts.current.set(receiptKey,{action,actor:data.capability.actor,at:Date.now()});
+   refreshDrafts();await refresh();return true;
+  }catch(e){await refresh();setError(e instanceof Error?e.message:'That did not save. Check the card before trying again.');return false}
+  finally{mutation.current=false;resume();setBusy(false)}
+ }
+ /** Lane C's drafting path. Reads are separate; this is the only write into it. */
+ async function draftAction(taskId:string,action:'build'|'revise'|'handoff'|'review',draft:DraftState,note?:string,receiptKey?:string){
+  if(mutation.current||!readable.current)return false;
+  mutation.current=true;pause();epoch.current++;setBusy(true);setError('');
+  try{
+   const current=draft.versions?.find(v=>v.version===draft.currentVersion);
+   const r=await fetch('/api/board/meetings/document',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId,action,operationId:operationId(),revision:draft.revision??0,...(current&&current.hash?{version:current.version,hash:current.hash}:{}),...(note?.trim()?{note}:{})})});
+   const d=await r.json();if(!r.ok)throw Error(d.error);
+   setSaved('Saved');
+   if(receiptKey&&data)receipts.current.set(receiptKey,{action,actor:data.capability.actor,at:Date.now()});
+   refreshDrafts();await refresh();return true;
+  }catch(e){refreshDrafts();await refresh();setError(e instanceof Error?e.message:'That did not save. Check the card before trying again.');return false}
+  finally{mutation.current=false;resume();setBusy(false)}
+ }
  function visible(i:Item){
   const actors=[i.owner,i.task?.executor,i.task?.next_reviewer];
   const match=actorFilter==='all'||(actorFilter==='rhys'?!!data?.capability.rhysActor&&actors.includes(data.capability.rhysActor):actors.some(a=>a&&name(a).toLowerCase()===actorFilter));
@@ -39,30 +76,42 @@ export default function MeetingQueue(){
   if(filter==='review')return i.reconciliationRequired||i.task?.work_status==='needs_review'||(!i.task&&i.state==='pending_approval'&&!i.deferred);
   return !i.deferred&&i.state!=='declined';
  }
- const stage=(i:Item)=>!i.task?'proposed':i.task.work_status==='completed'?'completed':i.task.work_status==='needs_review'?'review':'progress';
+ const statusOf=(i:Item,m:Meeting)=>deriveBoardStatus({hasTask:!!i.task,workStatus:i.task?.work_status,executor:i.task?.executor,itemState:i.state,deferred:i.deferred,sourceChanged:m.sourceChanged,reconciliationRequired:i.reconciliationRequired,sharedCorrection:i.sharedCorrection,draft:i.task?drafts[i.task.id]??null:null});
  async function showContext(id:string,itemId?:string){if(!readable.current||mutation.current)return;const n=epoch.current;try{const r=await fetch('/api/board/meetings?sourceId='+encodeURIComponent(id)+(itemId?'&itemId='+encodeURIComponent(itemId):''),{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error);if(!alive.current||n!==epoch.current)return;setContext(x=>({...x,[itemId||id]:[d.label,d.item?`${d.item.evidence.speaker} · ${d.item.evidence.start}–${d.item.evidence.end}s · passage ${d.item.evidence.passage}\n${d.item.evidence.quote}\n${d.item.evidence.uncertainty}`:'',d.source?.title, ...((d.source?.passages||[]).map((p:{speaker:string;text:string})=>p.speaker+': '+p.text)), d.source?.summary?'Provider summary: '+d.source.summary:'', 'Review history',...((d.history||[]).map((h:{actor:string;operation:string;created_at:string;input:{note?:string}})=>`${name(h.actor)} · ${h.operation} · ${new Date(h.created_at).toLocaleString()} · ${h.input.note||''}`))].join('\n\n')}))}catch(e){if(alive.current&&n===epoch.current)setError(String(e))}}
- const entries=data?.meetings.flatMap(m=>m.items.filter(visible).map(i=>({m,i})))??[];
- const stages=[['proposed','To approve'],['progress','In progress'],['review','Needs review'],['completed','Completed']];
- return <main className={styles.page}><header className={styles.header}><div className={styles.brand}><p className={styles.eyebrow}>UNDENIABLE</p><h1>Action Board</h1></div><div>{data&&<span>Signed in as {name(data.capability.actor)}</span>}<button disabled={busy||loading} onClick={()=>void refresh()}>{loading&&data?'Refreshing…':'Refresh'}</button></div></header>
- <div className={styles.filterBar}><nav className={styles.tabs} aria-label="Responsibility filters">{[['all','All'],['rhys','Rhys'],['nat','Nat'],['atlas','Atlas']].map(([k,l])=><button key={k} aria-pressed={actorFilter===k} onClick={()=>{setActorFilter(k)}}>{l}</button>)}</nav><label className={styles.viewFilter}>Show<select value={filter} onChange={e=>{setFilter(e.target.value)}}><option value="all">Active & completed</option><option value="review">Review needed</option><option value="deferred">Deferred</option><option value="dismissed">Dismissed</option></select></label></div>
- {(error||syncError)&&<div role="alert" className={styles.error}><strong>{syncError?(data?'Board check failed · actions paused':'Board unavailable'):'Action not confirmed'}</strong><p>{syncError||error}</p><button disabled={loading||busy} onClick={()=>void refresh()}>Retry</button></div>}<p role="status" className={styles.status}>{busy?'Saving…':fresh?saved:''}</p><p className={styles.sync} role="status">{fresh?`Board checked ${checkedAt?new Date(checkedAt).toLocaleTimeString():''} · ${loading?'Checking…':'Automatic updates.'}`:checkedAt?`Last successful board check ${new Date(checkedAt).toLocaleTimeString()}. Displayed work may be stale; actions are paused.`:syncError?'No current board check. Retry when access is available.':'Checking permitted board access…'} Task status only; call coverage below.</p>
- <MeetingCoverage/>{!data?(loading?<p role="status" className={styles.empty}>Loading permitted work…</p>:null):<>
- <details className={styles.coverage}><summary>Recent calls & coverage · {data.meetings.length} permitted entries</summary><p>{data.coverageBoundary}</p>{data.coverage.map(c=><p key={c.start+c.end}>{c.start.slice(0,10)} → {c.end.slice(0,10)} · {c.status} · checked {new Date(c.observedAt).toLocaleString()}</p>)}<p>Missing source is never “no actions”. Task-only access does not include the full recording.</p>
- {data.meetings.map(m=><section key={m.id} className={styles.meeting}><h2>{m.title}</h2><p>{new Date(m.instant).toLocaleString()} · {label(m.state)}</p><p>{m.note}</p>{!m.taskOnly&&<button disabled={blocked} onClick={()=>void showContext(m.id)}>Full source & history</button>}{context[m.id]&&<pre className={styles.context}>{context[m.id]}</pre>}</section>)}
- </details>
- {data.meetings.filter(m=>m.sourceChanged&&m.pending&&data.capability.triage).map(m=><details id={`source-review-${m.id}`} className={styles.revision} key={m.id+m.revision}><summary>Changed source requires review · {m.title}</summary><SourceReview meeting={m} busy={blocked} onSave={p=>operate('source_review',p)}/></details>)}
- {entries.length===0&&<p className={styles.empty}>No work matches this view. Check filters or call coverage.</p>}
- <div className={styles.board}>{stages.map(([key,title])=>{const rows=entries.filter(({i})=>stage(i)===key);return <section className={styles.column} key={key} data-stage={key}><div className={styles.columnHeading}><h2>{title}</h2><span>{rows.length}</span></div>{rows.length===0&&<p className={styles.columnEmpty}>No matching work</p>}{rows.map(({m,i})=><div key={`${data.capability.actor}:${i.id}:${m.taskOnly?'limited':'full'}`}>
- <ActionItem draftCache={draftCache.current} item={i} meeting={m} actor={data.capability.actor} triage={data.capability.triage} canReview={data.capability.review} busy={blocked} pauseReason={busy?'Wait for the current save.':!fresh?'Check board status before continuing.':''} operate={operate} reviewSource={()=>{const el=document.getElementById(`source-review-${m.id}`) as HTMLDetailsElement|null;if(el){el.open=true;el.scrollIntoView({block:'center'});el.querySelector('select')?.focus()}}} sourceHistory={<><button disabled={blocked} onClick={()=>void showContext(m.id,m.taskOnly?i.id:undefined)}>Load permitted context</button>{context[m.taskOnly?i.id:m.id]&&<pre className={styles.context}>{context[m.taskOnly?i.id:m.id]}</pre>}</>}/>
- {i.task&&fresh&&<TaskWorkingPanel taskId={i.task.id} onChanged={refresh}/>}
-
+ const entries=data?.meetings.flatMap(m=>m.items.filter(visible).map(i=>({m,i,s:statusOf(i,m)})))??[];
+ /* Who the work can sit with, taken from the work itself rather than a fixed
+    list, so a named person on this board always has a filter of their own. */
+ const actorFilters=useMemo(()=>{
+  const seen=new Map<string,string>();
+  for(const m of data?.meetings??[])for(const i of m.items)for(const a of [i.owner,i.task?.executor,i.task?.next_reviewer])
+   if(a)seen.set(name(a).toLowerCase(),name(a));
+  const viewer=data?.capability.actor?name(data.capability.actor).toLowerCase():null;
+  const keys=[...seen.keys()].sort((a,b)=>a===viewer?-1:b===viewer?1:a.localeCompare(b));
+  return [['all','Everyone'] as const,...keys.map(k=>[k,seen.get(k)!] as const)];
+ },[data]);
+ const held=entries.filter(e=>e.s.status==='held');
+ // Only an actor the queue trusts with triage sees call titles and recordings.
+ const canSeeSources=!!data?.capability.triage&&!data.meetings.some(m=>m.taskOnly);
+ return <main className={styles.page} data-view={engineering?'engineering':'team'}><header className={styles.header}><div className={styles.brand}><p className={styles.eyebrow}>UNDENIABLE</p><h1>{engineering?'Action Board · engineering detail':'Action Board'}</h1></div><div>{data&&<span>Signed in as {name(data.capability.actor)}</span>}<button disabled={busy||loading} onClick={()=>void refresh()}>{loading&&data?'Checking…':'Check for updates'}</button></div></header>
+ <div className={styles.filterBar}><nav className={styles.tabs} aria-label="Who the work sits with">{actorFilters.map(([k,l])=><button key={k} aria-pressed={actorFilter===k} onClick={()=>{setActorFilter(k)}}>{l}</button>)}</nav><label className={styles.viewFilter}>Show<select value={filter} onChange={e=>{setFilter(e.target.value)}}><option value="all">Everything live</option><option value="review">Waiting on a person</option><option value="deferred">Parked</option><option value="dismissed">Decided against</option></select></label></div>
+ {(error||syncError)&&<div role="alert" className={styles.error}><strong>{syncError?(data?'We could not check the board · actions are paused':'Board unavailable'):'That action was not confirmed'}</strong><p>{syncError||error}</p><button disabled={loading||busy} onClick={()=>void refresh()}>Try again</button></div>}<p role="status" className={styles.status}>{busy?'Saving…':fresh?saved:''}</p><p className={styles.sync} role="status">{fresh?`Checked ${checkedAt?new Date(checkedAt).toLocaleTimeString():''} · ${loading?'Checking…':'Updates on its own.'}`:checkedAt?`Last checked ${new Date(checkedAt).toLocaleTimeString()}. What you see may be out of date, so actions are paused.`:syncError?'Not checked yet. Try again when you have access.':'Checking what you are allowed to see…'}</p>
+ {engineering?<MeetingCoverage/>:<IntakeStrip canSeeSources={canSeeSources}/>}
+ {!data?(loading?<p role="status" className={styles.empty}>Loading your work…</p>:null):<>
+ {engineering&&<details className={styles.coverage}><summary>Recent calls & coverage · {data.meetings.length} permitted entries</summary><p>{data.coverageBoundary}</p>{data.coverage.map(c=><p key={c.start+c.end}>{c.start.slice(0,10)} → {c.end.slice(0,10)} · {c.status} · checked {new Date(c.observedAt).toLocaleString()}</p>)}<p>Missing source is never “no actions”. Task-only access does not include the full recording.</p>
+ {data.meetings.map(m=><section key={m.id} className={styles.meeting}><h2>{m.title}</h2><p>{new Date(m.instant).toLocaleString()} · {label(m.state)} · revision {m.revision}</p><p>{m.note}</p>{!m.taskOnly&&<button disabled={blocked} onClick={()=>void showContext(m.id)}>Full source & history</button>}{context[m.id]&&<pre className={styles.context}>{context[m.id]}</pre>}</section>)}
+ </details>}
+ {data.meetings.filter(m=>m.sourceChanged&&m.pending&&data.capability.triage).map(m=><details id={`source-review-${m.id}`} className={styles.revision} key={m.id+m.revision}><summary>The call this came from changed · {m.title}</summary><SourceReview meeting={m} busy={blocked} onSave={p=>operate('source_review',p)}/></details>)}
+ {held.length>0&&<p className={styles.heldStrip} role="status"><b>{held.length} {held.length===1?'card is':'cards are'} held.</b> {held.length===1?'It cannot move until someone clears the reason on it.':'They cannot move until someone clears the reasons on them.'}</p>}
+ {entries.length===0&&<p className={styles.empty}>Nothing matches this view. Change the filters above, or read the calls strip — an empty board is not the same as nothing to do.</p>}
+ <div className={styles.board}>{BOARD_STATUSES.map(key=>{const rows=entries.filter(({s})=>s.status===key);return <section className={styles.column} key={key} data-stage={key}><div className={styles.columnHeading}><h2>{BOARD_STATUS_LABEL[key]}</h2><span>{rows.length}</span></div>{rows.length===0&&<p className={styles.columnEmpty}>Nothing here</p>}{rows.map(({m,i,s})=><div key={`${data.capability.actor}:${i.id}:${m.taskOnly?'limited':'full'}`}>
+ <ActionItem draftCache={draftCache.current} receipts={receipts.current} status={s} draft={i.task?drafts[i.task.id]??null:null} engineering={engineering} item={i} meeting={m} actor={data.capability.actor} triage={data.capability.triage} canReview={data.capability.review} busy={blocked} pauseReason={busy?'Wait for the current save to finish.':!fresh?'Check the board before continuing.':''} operate={operate} draftAction={draftAction} reviewSource={()=>{const el=document.getElementById(`source-review-${m.id}`) as HTMLDetailsElement|null;if(el){el.open=true;el.scrollIntoView({block:'center'});el.querySelector('select')?.focus()}}} sourceHistory={<><button disabled={blocked} onClick={()=>void showContext(m.id,m.taskOnly?i.id:undefined)}>Show what I am allowed to see</button>{context[m.taskOnly?i.id:m.id]&&<pre className={styles.context}>{context[m.taskOnly?i.id:m.id]}</pre>}</>}/>
+ {i.task&&fresh&&engineering&&<TaskWorkingPanel taskId={i.task.id} onChanged={refresh}/>}
  </div>)}</section>})}</div>
  </>}
- <footer className={styles.footer}>Atlas execution is inactive. Completing work does not send a file.</footer>
+ <footer className={styles.footer}>Atlas is not switched on to do work by itself. Finishing a card does not send anything to anyone.{!engineering&&data?.capability.triage?' Hashes, versions and build details are on the engineering board.':''}</footer>
  </main>;
-
 }
-function ActionItem({draftCache,item:i,meeting:m,actor,triage,canReview,busy,pauseReason,sourceHistory,reviewSource,operate}:{draftCache?:Map<string,ItemDraft>;item:Item;meeting:Meeting;actor:string;triage:boolean;canReview:boolean;busy:boolean;pauseReason:string;sourceHistory:ReactNode;reviewSource:()=>void;operate:(a:string,p:Record<string,unknown>)=>Promise<boolean>}){
+function ActionItem({draftCache,receipts,status:s,draft,engineering,item:i,meeting:m,actor,triage,canReview,busy,pauseReason,sourceHistory,reviewSource,operate,draftAction}:{draftCache?:Map<string,ItemDraft>;receipts:Map<string,Receipt>;status:ReturnType<typeof deriveBoardStatus>;draft:DraftState|null;engineering:boolean;item:Item;meeting:Meeting;actor:string;triage:boolean;canReview:boolean;busy:boolean;pauseReason:string;sourceHistory:ReactNode;reviewSource:()=>void;operate:(a:string,p:Record<string,unknown>,k?:string)=>Promise<boolean>;draftAction:(t:string,a:'build'|'revise'|'handoff'|'review',d:DraftState,n?:string,k?:string)=>Promise<boolean>}){
  const cacheKey=`${actor}:${i.id}:${m.taskOnly?'limited':'full'}`;
  const [local,setLocal]=useState<{values:Draft;revision:number}|null>(()=>draftCache?.get(cacheKey)?.local??null),[note,setNote]=useState(()=>draftCache?.get(cacheKey)?.note??''),[sharedNote,setSharedNote]=useState(()=>draftCache?.get(cacheKey)?.sharedNote??''),[confirmationStamp,setConfirmationStamp]=useState<string|null>(()=>draftCache?.get(cacheKey)?.confirmationStamp??null);
  useEffect(()=>{draftCache?.set(cacheKey,{local,note,sharedNote,confirmationStamp})},[draftCache,cacheKey,local,note,sharedNote,confirmationStamp]);
@@ -70,44 +119,101 @@ function ActionItem({draftCache,item:i,meeting:m,actor,triage,canReview,busy,pau
  const [saveNotice,setSaveNotice]=useState('');
  const assignees=i.assignees??m.assignees;
  const ownerEligible=!!i.owner&&assignees.some(a=>a.actor===i.owner);
- const natEligible=assignees.some(a=>a.actor==='nat'||a.actor==='fixture.nat');
+ const natActor=assignees.find(a=>NAT_KEYS.includes(a.actor))?.actor??null;
+ const natEligible=!!natActor;
  function openHistory(){if(historyRef.current){historyRef.current.open=true;historyRef.current.scrollIntoView({block:'nearest'});historyRef.current.querySelector('summary')?.focus()}}
  const evidenceStamp=JSON.stringify([i.id,i.revision,i.sourceRevision,m.revision,i.evidence]);const confirmed=confirmationStamp===evidenceStamp;
- const dirty=local!==null;const draft=local?.values??{title:i.title,owner:i.owner||'',due:i.due||'',executor:i.task?.executor||'',reviewer:i.task?.next_reviewer||''};
+ const dirty=local!==null;const draftValues=local?.values??{title:i.title,owner:i.owner||'',due:i.due||'',executor:i.task?.executor||'',reviewer:i.task?.next_reviewer||''};
  const base={sourceId:m.id,id:i.id,revision:local?.revision??i.revision};const terminal=i.state==='declined'||i.task?.work_status==='completed';const uncertain=i.evidence.kind!=='promise'||!!i.evidence.uncertainty;
- function field(k:keyof Draft,v:string){setSaveNotice('');setLocal({values:{...draft,[k]:v},revision:local?.revision??i.revision});}
+ function field(k:keyof Draft,v:string){setSaveNotice('');setLocal({values:{...draftValues,[k]:v},revision:local?.revision??i.revision});}
  // Never replace unsaved edits on refresh. Version conflict is resolved by explicit reload.
  const stale=dirty&&local.revision!==i.revision;
- const completeReason=busy?pauseReason:dirty?'Save or discard your changes first.':i.task?.executor==='atlas'?'Atlas execution is inactive.':note.trim().length<3?'Add a completion note.':'';
- const reviewReason=busy?pauseReason:dirty?'Save or discard your changes first.':note.trim().length<3?'Add a review note.':'';
- const correctionReason=busy?pauseReason:dirty?'Save or discard your changes first.':(i.sharedCorrectionRequired?sharedNote:note).trim().length<3?'Add a task-safe correction.':'';
+ const completeReason=busy?pauseReason:dirty?'Save or discard your changes first.':i.task?.executor==='atlas'?'Atlas is not switched on to do work.':note.trim().length<3?'Say what was done.':'';
+ const reviewReason=busy?pauseReason:dirty?'Save or discard your changes first.':note.trim().length<3?'Add a short review note.':'';
+ const correctionReason=busy?pauseReason:dirty?'Save or discard your changes first.':(i.sharedCorrectionRequired?sharedNote:note).trim().length<3?'Say what needs to change.':'';
  const confirmationBlocked=busy||dirty||m.sourceChanged||!!i.reconciliationRequired||!ownerEligible;
  const reconfirm=confirmationStamp!==null&&!confirmed;
- const acceptReasons=[busy?pauseReason:'',m.sourceChanged?'The source changed. Review its correspondence before saving or approving.':'',i.reconciliationRequired?'Confirm whether the original obligation remains needed.':'',dirty?(stale?'This item changed while you were editing. Your unsaved edits are retained; discard them to load the saved version.':'Save your owner, due date and other edits first. Then confirm the saved task below.'):'',!i.owner?'Choose an eligible owner, then save edits.':!ownerEligible?'The saved owner no longer has access to this version. Choose an eligible owner and save, or have the task context reviewed.':'',uncertain&&!confirmed?(reconfirm?'The task or source version changed. Your previous confirmation no longer applies; confirm this saved version again.':'Confirm this is still needed using the checkbox beside Approve task.'):''].filter(Boolean);
- return <article className={styles.item} data-tone={i.task?.work_status==='completed'?'done':i.task?.executor==='atlas'?'atlas':!i.task||i.task.work_status==='needs_review'?'review':'work'}>
- <h3>{i.title}</h3><div className={styles.people}><span>Owner <b>{name(i.owner)}</b></span>{i.due&&<span>Due <b>{i.due}</b></span>}</div>
- {(i.task||i.state==='declined'||i.deferred)&&<p className={styles.nextStep}>{i.task?.executor==='atlas'&&i.task.work_status!=='completed'?'Preparation held · Atlas execution is inactive.':i.task?.work_status==='needs_review'?(actor===i.task.next_reviewer?'Ready for your review.':`With ${name(i.task.next_reviewer)} for review.`):i.task?.work_status==='completed'?'Internal work completed.':i.state==='declined'?'Proposal dismissed.':i.deferred?'Proposal deferred.':i.task?(i.sharedCorrection?'Correction requested · update the work and resubmit.':'Accepted work · continue the next step.'):'Approval needed.'}</p>}
- {(m.sourceChanged||i.reconciliationRequired)&&<p className={styles.warning}>Changed source · review required</p>}
- {uncertain&&!i.task&&!confirmed&&<p className={styles.warning}>Needs your confirmation.</p>}
- {i.sharedCorrection&&i.task?.work_status!=='completed'&&<p className={styles.note}>Shared correction: {i.sharedCorrection}</p>}
- <details className={styles.cardDetails}><summary>{terminal?'View details':i.task?.work_status==='needs_review'?'Review work':i.task?'Update work':'Approve task'}</summary>
- <label>Next step<input value={draft.title} disabled={busy||terminal||!triage||!!i.taskOnly} onChange={e=>field('title',e.target.value)}/></label>
- <p className={styles.note}>Only people permitted to access this item are listed. Assignment does not grant access.</p>{!natEligible&&<p className={styles.warning}>Nat is unavailable for this version: she needs permitted source access or a current reviewed task-only context. Her client membership alone is not enough.</p>}{i.taskOnly&&<p className={styles.note}>To change these instructions, ask the accountable owner to review the task context. You can update scheduling and report your work.</p>}<div className={styles.fields}><label>Accountable owner<select value={draft.owner} disabled={busy||terminal||!triage} onChange={e=>field('owner',e.target.value)}><option value="">Unassigned</option>{draft.owner&&!assignees.some(a=>a.actor===draft.owner)&&<option value={draft.owner} disabled>{name(draft.owner)} · access unavailable</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label><label>Due date<input type="date" value={draft.due} disabled={busy||terminal||!triage} onChange={e=>field('due',e.target.value)}/></label>
- {i.task&&<><label>Current executor<select value={draft.executor} disabled={busy||terminal||!triage} onChange={e=>field('executor',e.target.value)}><option value="">Unassigned</option>{draft.executor&&!assignees.some(a=>a.actor===draft.executor)&&draft.executor!=='atlas'&&<option value={draft.executor} disabled>{name(draft.executor)} · access unavailable</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}{!i.taskOnly&&!i.sharedCorrectionRequired&&<option value="atlas">Atlas · preparation held</option>}</select>{!natEligible&&<span className={styles.warning}>Nat cannot execute this version yet. Ask the authorized source reviewer to review a minimal task-only context; changing the owner does not grant access.</span>}<span className={styles.note}>Executor does the work; the accountable owner can remain Rhys.</span></label><label>Next reviewer<select value={draft.reviewer} disabled={busy||terminal||!triage||!!i.task.next_reviewer&&!canReview} onChange={e=>field('reviewer',e.target.value)}><option value="">No extra review required</option>{assignees.filter(a=>a.review).map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label></>}</div>
-
- {dirty&&i.sharedCorrectionRequired&&draft.title===i.title&&draft.due!==(i.due||'')&&<p className={styles.note}>Saving shares the new due date with people who already have valid task-only access. It does not restore stale or revoked access.</p>}{!dirty&&<p role="status" className={styles.note}>{saveNotice||'Showing saved task details.'}</p>}{dirty&&i.sharedCorrectionRequired&&!i.taskOnly&&draft.title!==i.title&&<p className={styles.warning}>Changing the task instructions requires a new task-context review before the existing limited-access context can be used for this version.</p>}{dirty&&<p className={styles.note}>{stale?'Saved version changed. Your edits are still unsaved and have not overwritten it.':'Unsaved changes · the card heading still shows the saved owner and due date.'} <button onClick={()=>setLocal(null)}>Discard local edits</button></p>}
- {!terminal&&<><label>{!i.task?(canReview?'Private decision note':'Decision note'):canReview?'Private review / completion note':'Review / completion note'}<input value={note} onChange={e=>setNote(e.target.value)} placeholder={i.task?"Evidence of completed work":"Optional reason; required to dismiss"}/></label>{canReview&&i.sharedCorrectionRequired&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<label>Shareable correction<input value={sharedNote} onChange={e=>setSharedNote(e.target.value)} placeholder="Only task-safe instructions. Visible to task-context reviewers."/></label>}<div className={styles.actions}>
- {triage&&i.reconciliationRequired&&!m.sourceChanged&&<div><p>The new extraction did not reaffirm this work. Review its original evidence and the changed source before retaining the obligation.</p><button disabled={busy||note.trim().length<3} onClick={()=>void operate('retain_original',{...base,sourceRevision:m.revision,note})}>Retain original obligation</button>{note.trim().length<3&&<p className={styles.warning}>Add a decision note explaining why the original obligation remains needed.</p>}</div>}
- {triage&&<>{dirty&&<button disabled={busy||stale||m.sourceChanged||i.reconciliationRequired} onClick={async()=>{const ok=await operate('edit',{...base,title:draft.title,owner:draft.owner||null,due:draft.due||null,...(i.task?{executor:draft.executor||null,reviewer:draft.reviewer||null}:{}),note});if(ok){setLocal(null);setSaveNotice('Edits saved.')}}}>Save edits</button>}
- {!i.task&&<>{acceptReasons.length>0&&<p role="status" className={styles.warning}>{acceptReasons[0]}</p>}{m.sourceChanged&&(m.pending?<button disabled={busy} onClick={reviewSource}>Review changed source</button>:<p className={styles.warning}>Changed-source review is not available yet. Refresh after source processing.</p>)}{uncertain&&<><button disabled={busy} onClick={openHistory}>Review source evidence</button><label className={styles.confirm}><input type="checkbox" disabled={confirmationBlocked} checked={confirmed} onChange={e=>setConfirmationStamp(e.target.checked?evidenceStamp:null)}/>Confirm this is still needed.</label></>}<button className={styles.primary} disabled={busy||dirty||m.sourceChanged||i.reconciliationRequired||!ownerEligible||(uncertain&&!confirmed)} onClick={()=>void operate('accept',{...base,confirmed,confirmation:confirmed?{itemRevision:i.revision,sourceRevision:m.revision}:null,note})}>Approve task</button><button disabled={busy} onClick={()=>void operate('defer',base)}>{i.deferred?'Return to review':'Defer'}</button><button disabled={busy||note.trim().length<3} onClick={()=>void operate('dismiss',{...base,note})}>Dismiss</button></>}</>}
- {i.task&&i.task.work_status!=='needs_review'&&[i.owner,i.task.executor].includes(actor)&&<div><button className={styles.primary} disabled={busy||dirty||i.task.executor==='atlas'||note.trim().length<3} onClick={()=>void operate('complete',{...base,note})}>{i.task.next_reviewer?'Submit for review':'Mark complete'}</button>{completeReason&&<p className={styles.warning}>{completeReason}</p>}</div>}
- {canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<><button disabled={busy||dirty||(i.sharedCorrectionRequired?sharedNote:note).trim().length<3} onClick={()=>void operate('request_changes',{...base,note:note||sharedNote,...(i.sharedCorrectionRequired?{sharedNote}:{})})}>Request changes</button>{correctionReason&&<p className={styles.warning}>{correctionReason}</p>}<button className={styles.primary} disabled={busy||dirty||note.trim().length<3} onClick={()=>void operate('review',{...base,note})}>Review & complete</button>{reviewReason&&<p className={styles.warning}>{reviewReason}</p>}</>}
+ const acceptReasons=[busy?pauseReason:'',m.sourceChanged?'The call this came from was updated. Check it still means the same thing before accepting.':'',i.reconciliationRequired?'Confirm whether this is still needed.':'',dirty?(stale?'This changed while you were editing. Your unsaved changes are kept; discard them to load the saved version.':'Save your changes first, then accept the saved task.'):'',!i.owner?'Choose who owns this, then save.':!ownerEligible?'The saved owner no longer has access to this version. Choose someone else and save, or have the task context reviewed.':'',uncertain&&!confirmed?(reconfirm?'This changed since you confirmed it. Confirm the current version again.':'Tick the box below to confirm this is still needed.'):''].filter(Boolean);
+ /**
+  * Saving must clear the retained copy as well as local state: a card that
+  * changes column is unmounted and remounted, and would otherwise read the
+  * already-saved edit back out of the cache and show it as unsaved again.
+  */
+ async function saveEdits(){
+  const ok=await operate('edit',{...base,title:draftValues.title,owner:draftValues.owner||null,due:draftValues.due||null,...(i.task?{executor:draftValues.executor||null,reviewer:draftValues.reviewer||null}:{}),note},cacheKey);
+  if(ok){setLocal(null);draftCache?.set(cacheKey,{local:null,note,sharedNote,confirmationStamp});setSaveNotice('Saved.')}
+ }
+ const receipt=receipts.get(cacheKey);
+ const RECEIPT_WORDS:Record<string,string>={accept:'Accepted',edit:'Changes saved',complete:'Marked done',review:'Approved',request_changes:'Changes requested',defer:'Parked',dismiss:'Decided against',retain_original:'Kept as still needed',build:'Draft started',revise:'Changes requested on the draft',handoff:'Sent to the reviewer'};
+ // --- Card actions -------------------------------------------------------
+ const taskId=i.task?.id??null;
+ const can=(r:string)=>!!draft?.rights?.includes(r);
+ const blocked=draftingBlock(draft);
+ const draftUnavailable=!!blocked;
+ // Start is only offered where starting is the thing to do. On work already in
+ // review, finished, or held for another reason it is noise, not an option.
+ const startRelevant=!!taskId&&!terminal&&['accepted','changes_requested'].includes(s.status);
+ const startShown=startRelevant&&(draftUnavailable||!s.draftVersion);
+ const startReason=!startShown?'':busy?pauseReason:dirty?'Save or discard your changes first.':!draft?'Checking whether drafting is available…':blocked?blocked:!can('build')?'You are not the person set up to start this one.':draft.currentVersion?'A draft already exists.':'';
+ const canStart=startRelevant&&!!draft&&draft.available!==false&&can('build')&&!draft.currentVersion&&!busy&&!dirty;
+ // Lane C: an Atlas-drafted task has no handoff step — it goes draft -> accepted
+ // in one move — so Approve follows the review right, not the draft's stage.
+ const approveDraft=!!taskId&&!!draft&&draft.available!==false&&['draft','in_review'].includes(draft.status||'')&&can('review');
+ const handoffDraft=!!taskId&&!!draft&&draft.available!==false&&draft.status==='draft'&&can('handoff');
+ const reviseDraft=!!taskId&&!!draft&&draft.available!==false&&['draft','in_review'].includes(draft.status||'')&&can('revise');
+ const reviewing=!!canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review';
+ const canSubmit=!!i.task&&i.task.work_status!=='needs_review'&&[i.owner,i.task.executor].includes(actor)&&!terminal;
+ const submitReason=!canSubmit?'':busy?pauseReason:dirty?'Save or discard your changes first.':i.task?.executor==='atlas'?'Atlas is not switched on to do work.':note.trim().length<3?'Say what was done before marking it off.':'';
+ /* Only ask for a note when an action in front of this person needs one. */
+ const noteNeeded=reviewing||canSubmit||approveDraft||reviseDraft||handoffDraft;
+ const canDelegate=triage&&!!i.task&&!terminal&&natEligible&&draftValues.executor!==natActor;
+ const delegateReason=!triage||!i.task||terminal?'':busy?pauseReason:!natEligible?'Nat cannot be given this yet: she needs the task context reviewed first. Assigning it would not grant her access.':draftValues.executor===natActor?'Already with Nat.':'';
+ return <article className={styles.item} data-tone={s.tone} data-status={s.status}>
+ <div className={styles.cardTop}><span className={styles.chip} data-tone={s.tone}>{s.label}</span>{s.draftVersion&&<span className={styles.version}>Draft v{s.draftVersion}</span>}</div>
+ <h3>{i.title}</h3>
+ <p className={styles.reason}>{s.reason}</p>
+ <div className={styles.people}><span>Owner <b>{name(i.owner)}</b></span>{i.task&&<span>Doing it <b>{name(i.task.executor)}</b></span>}<span>{dueLabel(i.due)}</span></div>
+ <p className={styles.nextStep}><b>Next:</b> {nextAction(s.status,{owner:i.owner,executor:i.task?.executor,reviewer:i.task?.next_reviewer,viewer:actor,name,heldReason:s.heldReason})}</p>
+ <p className={styles.freshness}>{freshness(m.taskOnly?null:m.title,m.instant)}</p>
+ {dirty&&<p className={styles.unsaved} role="status"><b>Not saved yet.</b> {stale?'This card also changed somewhere else. Your changes are still here and have not overwritten it.':'Your changes are only on this screen until you save them.'} <button onClick={()=>setLocal(null)}>Undo my changes</button></p>}
+ {!dirty&&receipt&&<p className={styles.savedBy} role="status">Saved · {RECEIPT_WORDS[receipt.action]||receipt.action} by {receipt.actor===actor?'you':name(receipt.actor)} {relativeTime(new Date(receipt.at).toISOString())}.</p>}
+ {!terminal&&<div className={styles.quickActions}>
+  {triage&&!i.task&&<button className={styles.primary} disabled={busy||dirty||m.sourceChanged||i.reconciliationRequired||!ownerEligible||(uncertain&&!confirmed)} onClick={()=>void operate('accept',{...base,confirmed,confirmation:confirmed?{itemRevision:i.revision,sourceRevision:m.revision}:null,note},cacheKey)}>Accept</button>}
+  {startShown&&!draftUnavailable&&<button disabled={!canStart} onClick={()=>{if(taskId&&draft)void draftAction(taskId,'build',draft,undefined,cacheKey)}}>Start</button>}
+  {startShown&&draftUnavailable&&<button disabled title={startReason}>Start</button>}
+  {handoffDraft&&<button className={styles.primary} disabled={busy||dirty} onClick={()=>{if(taskId&&draft)void draftAction(taskId,'handoff',draft,note,cacheKey)}}>Send v{draft?.currentVersion} to the reviewer</button>}
+  {approveDraft&&<button className={styles.primary} disabled={busy||dirty||note.trim().length<10} onClick={()=>{if(taskId&&draft)void draftAction(taskId,'review',draft,note,cacheKey)}}>Approve v{draft?.currentVersion}</button>}
+  {!draft?.currentVersion&&canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<button className={styles.primary} disabled={busy||dirty||note.trim().length<3} onClick={()=>void operate('review',{...base,note},cacheKey)}>Approve the work</button>}
+  {reviseDraft&&<button disabled={busy||dirty||note.trim().length<10} onClick={()=>{if(taskId&&draft)void draftAction(taskId,'revise',draft,note,cacheKey)}}>Request changes</button>}
+  {!draft?.currentVersion&&canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<button disabled={busy||dirty||(i.sharedCorrectionRequired?sharedNote:note).trim().length<3} onClick={()=>void operate('request_changes',{...base,note:note||sharedNote,...(i.sharedCorrectionRequired?{sharedNote}:{})},cacheKey)}>Request changes</button>}
+  {canSubmit&&<button className={i.task?.executor===actor?styles.primary:undefined} disabled={busy||dirty||note.trim().length<3} onClick={()=>void operate('complete',{...base,note},cacheKey)}>{i.task?.next_reviewer?'Send for review':'Mark as done'}</button>}
+  {canDelegate&&<button onClick={()=>field('executor',natActor!)}>Delegate to Nat</button>}
+  {i.task&&!canDelegate&&triage&&delegateReason&&<button disabled title={delegateReason}>Delegate to Nat</button>}
+ </div>}
+ {/* A blocked action explains itself quietly. Amber is kept for things a
+     person actually has to act on, per the September 18 direction. */}
+ {!terminal&&(startReason||delegateReason||submitReason)&&<p className={styles.blockedReason}>{[startReason,delegateReason,submitReason].filter(Boolean)[0]}</p>}
+ {!terminal&&triage&&<label className={styles.setDue}>Set due<input type="date" value={draftValues.due} disabled={busy} onChange={e=>field('due',e.target.value)}/></label>}
+ {dirty&&<div className={styles.actions}><button className={styles.primary} disabled={busy||stale||m.sourceChanged||i.reconciliationRequired} onClick={()=>void saveEdits()}>Save changes</button></div>}
+ {!terminal&&noteNeeded&&<label className={styles.cardNote}>{canReview?'Private note for the record':'Note about this work'}<input value={note} onChange={e=>setNote(e.target.value)} placeholder={reviewing?'What should change, or why this is right':'What was done'}/></label>}
+ <details className={styles.cardDetails}><summary>{terminal?'View details':i.task?'More options':'All details & accept'}</summary>
+ <label>Next step<input value={draftValues.title} disabled={busy||terminal||!triage||!!i.taskOnly} onChange={e=>field('title',e.target.value)}/></label>
+ <p className={styles.note}>Only people already allowed to see this item are listed. Giving someone a job does not give them access.</p>{!natEligible&&<p className={styles.warning}>Nat cannot take this version: she needs the task context reviewed first. Being on the client alone is not enough.</p>}{i.taskOnly&&<p className={styles.note}>To change these instructions, ask the owner to review the task context. You can change timing and report your work.</p>}<div className={styles.fields}><label>Owner<select value={draftValues.owner} disabled={busy||terminal||!triage} onChange={e=>field('owner',e.target.value)}><option value="">Unassigned</option>{draftValues.owner&&!assignees.some(a=>a.actor===draftValues.owner)&&<option value={draftValues.owner} disabled>{name(draftValues.owner)} · no access</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label><label>Due date<input type="date" value={draftValues.due} disabled={busy||terminal||!triage} onChange={e=>field('due',e.target.value)}/></label>
+ {i.task&&<><label>Who is doing it<select value={draftValues.executor} disabled={busy||terminal||!triage} onChange={e=>field('executor',e.target.value)}><option value="">Unassigned</option>{draftValues.executor&&!assignees.some(a=>a.actor===draftValues.executor)&&draftValues.executor!=='atlas'&&<option value={draftValues.executor} disabled>{name(draftValues.executor)} · no access</option>}{assignees.map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}{!i.taskOnly&&!i.sharedCorrectionRequired&&<option value="atlas">Atlas · held</option>}</select>{!natEligible&&<span className={styles.warning}>Nat cannot do this version yet. Ask whoever reviews the call to review a task-only context; changing the owner does not grant access.</span>}<span className={styles.note}>The person doing it can differ from the owner.</span></label><label>Who reviews it<select value={draftValues.reviewer} disabled={busy||terminal||!triage||!!i.task.next_reviewer&&!canReview} onChange={e=>field('reviewer',e.target.value)}><option value="">No review needed</option>{assignees.filter(a=>a.review).map(a=><option key={a.actor} value={a.actor}>{name(a.actor)}</option>)}</select></label></>}</div>
+ {dirty&&i.sharedCorrectionRequired&&draftValues.title===i.title&&draftValues.due!==(i.due||'')&&<p className={styles.note}>Saving shares the new due date with people who already have access to this task. It does not restore access anyone has lost.</p>}{!dirty&&<p role="status" className={styles.note}>{saveNotice||'Showing what is saved.'}</p>}{dirty&&i.sharedCorrectionRequired&&!i.taskOnly&&draftValues.title!==i.title&&<p className={styles.warning}>Changing the instructions requires a new task-context review before the existing limited access can be used for this version.</p>}
+ {!terminal&&<>{canReview&&i.sharedCorrectionRequired&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<label>What to tell the person doing it<input value={sharedNote} onChange={e=>setSharedNote(e.target.value)} placeholder="Only task-safe instructions. They will see this."/></label>}<div className={styles.actions}>
+ {triage&&i.reconciliationRequired&&!m.sourceChanged&&<div><p>The newest version of the call did not repeat this. Check the original evidence and the updated call before keeping it.</p><button disabled={busy||note.trim().length<3} onClick={()=>void operate('retain_original',{...base,sourceRevision:m.revision,note},cacheKey)}>Keep it — still needed</button>{note.trim().length<3&&<p className={styles.warning}>Say why it is still needed.</p>}</div>}
+ {triage&&<>{dirty&&<button disabled={busy||stale||m.sourceChanged||i.reconciliationRequired} onClick={()=>void saveEdits()}>Save changes</button>}
+ {!i.task&&<>{acceptReasons.length>0&&<p role="status" className={styles.warning}>{acceptReasons[0]}</p>}{m.sourceChanged&&(m.pending?<button disabled={busy} onClick={reviewSource}>Check the updated call</button>:<p className={styles.warning}>The updated call is not ready to check yet. Try again shortly.</p>)}{uncertain&&<><button disabled={busy} onClick={openHistory}>Read what was said</button><label className={styles.confirm}><input type="checkbox" disabled={confirmationBlocked} checked={confirmed} onChange={e=>setConfirmationStamp(e.target.checked?evidenceStamp:null)}/>Confirm this is still needed.</label></>}<button className={styles.primary} disabled={busy||dirty||m.sourceChanged||i.reconciliationRequired||!ownerEligible||(uncertain&&!confirmed)} onClick={()=>void operate('accept',{...base,confirmed,confirmation:confirmed?{itemRevision:i.revision,sourceRevision:m.revision}:null,note},cacheKey)}>Accept</button><button disabled={busy} onClick={()=>void operate('defer',base,cacheKey)}>{i.deferred?'Put back':'Park it'}</button><button disabled={busy||note.trim().length<3} onClick={()=>void operate('dismiss',{...base,note},cacheKey)}>Decide against it</button></>}</>}
+ {i.task&&i.task.work_status!=='needs_review'&&[i.owner,i.task.executor].includes(actor)&&<div><button className={styles.primary} disabled={busy||dirty||i.task.executor==='atlas'||note.trim().length<3} onClick={()=>void operate('complete',{...base,note},cacheKey)}>{i.task.next_reviewer?'Send for review':'Mark as done'}</button>{completeReason&&<p className={styles.warning}>{completeReason}</p>}</div>}
+ {canReview&&i.task?.next_reviewer===actor&&i.task.work_status==='needs_review'&&<><button disabled={busy||dirty||(i.sharedCorrectionRequired?sharedNote:note).trim().length<3} onClick={()=>void operate('request_changes',{...base,note:note||sharedNote,...(i.sharedCorrectionRequired?{sharedNote}:{})},cacheKey)}>Request changes</button>{correctionReason&&<p className={styles.warning}>{correctionReason}</p>}<button className={styles.primary} disabled={busy||dirty||note.trim().length<3} onClick={()=>void operate('review',{...base,note},cacheKey)}>Approve the work</button>{reviewReason&&<p className={styles.warning}>{reviewReason}</p>}</>}
  </div></>}
  </details>
- <details ref={historyRef} className={styles.history}><summary>Source & history</summary><p>{i.evidence.kind} · {i.evidence.provenance==='provider_summary'?'Provider summary · unverified':'Transcript passage'}</p><blockquote>{i.evidence.quote}</blockquote><p>{i.evidence.uncertainty}</p>{!i.taskOnly&&<a href={`https://app.fireflies.ai/view/${encodeURIComponent(m.id)}`} target="_blank" rel="noreferrer">Open source recording</a>}{i.taskOnly&&<p>Limited task context from a supervised full-transcript review. The full recording is not shared.</p>}{sourceHistory}</details>
+ <details ref={historyRef} className={styles.history}><summary>Where this came from</summary><p>{i.evidence.kind} · {i.evidence.provenance==='provider_summary'?'From an automatic summary · not checked against the recording':'From the recording'}</p><blockquote>{i.evidence.quote}</blockquote><p>{i.evidence.uncertainty}</p>{!i.taskOnly&&<a href={`https://app.fireflies.ai/view/${encodeURIComponent(m.id)}`} target="_blank" rel="noreferrer">Open the recording</a>}{i.taskOnly&&<p>Limited task context from a reviewed full-transcript read. The recording itself is not shared.</p>}{sourceHistory}</details>
+ {engineering&&<details className={styles.engineering}><summary>Engineering detail</summary><dl><dt>Request</dt><dd>{i.id}</dd><dt>Item revision</dt><dd>{i.revision}</dd><dt>Source revision</dt><dd>{i.sourceRevision||m.revision}</dd><dt>Source</dt><dd>{m.id}</dd>{i.task&&<><dt>Task</dt><dd>{i.task.id}</dd><dt>Work status</dt><dd>{i.task.work_status}</dd></>}{draft&&<><dt>Draft state</dt><dd>{draft.status||'—'}</dd><dt>Draft revision</dt><dd>{draft.revision??'—'}</dd>{draft.versions?.map(v=><span key={v.version}><dt>v{v.version} hash</dt><dd>{v.hash||'—'}</dd></span>)}</>}</dl></details>}
  </article>;
 }
 function SourceReview({meeting:m,busy,onSave}:{meeting:Meeting;busy:boolean;onSave:(p:Record<string,unknown>)=>Promise<boolean>}){
  const [mapping,setMapping]=useState<Record<string,string>>({}),[note,setNote]=useState('');
- return <fieldset className={styles.revision}><legend>Review changed source</legend><p>Map each new interpretation to the existing commitment or explicitly identify new work. Dismissed/completed items stay closed; human edits stay intact.</p>{m.pending!.map(c=><label key={c.key}>{c.title}<blockquote>{c.quote}</blockquote><select value={mapping[c.key]??''} onChange={e=>setMapping(x=>({...x,[c.key]:e.target.value}))}><option value="">Choose correspondence</option><option value="new">New, distinct action</option>{m.items.map(i=><option key={i.id} value={i.id}>{i.title} · {i.state}</option>)}</select></label>)}<label>Why this correspondence is correct<input value={note} onChange={e=>setNote(e.target.value)}/></label><button disabled={busy||note.length<3||m.pending!.some(c=>!mapping[c.key])} onClick={()=>void onSave({sourceId:m.id,revision:m.revision,note,mapping:m.pending!.map(c=>({key:c.key,requestId:mapping[c.key]==='new'?null:mapping[c.key]}))})}>Confirm source correspondence</button></fieldset>;
+ return <fieldset className={styles.revision}><legend>Check the updated call</legend><p>For each thing the updated call says, point it at the commitment it matches, or mark it as new. Things already finished or decided against stay closed; your edits stay as they are.</p>{m.pending!.map(c=><label key={c.key}>{c.title}<blockquote>{c.quote}</blockquote><select value={mapping[c.key]??''} onChange={e=>setMapping(x=>({...x,[c.key]:e.target.value}))}><option value="">Choose what it matches</option><option value="new">Something new</option>{m.items.map(i=><option key={i.id} value={i.id}>{i.title} · {i.state}</option>)}</select></label>)}<label>Why these matches are right<input value={note} onChange={e=>setNote(e.target.value)}/></label><button disabled={busy||note.length<3||m.pending!.some(c=>!mapping[c.key])} onClick={()=>void onSave({sourceId:m.id,revision:m.revision,note,mapping:m.pending!.map(c=>({key:c.key,requestId:mapping[c.key]==='new'?null:mapping[c.key]}))})}>Confirm</button></fieldset>;
 }
