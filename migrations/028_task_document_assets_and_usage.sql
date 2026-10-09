@@ -16,8 +16,27 @@ create function app_private.task_document_asset_roots()returns text[] language s
 $$select array['playbooks','frameworks','operating-manual','lead-magnets']$$;
 revoke all on function app_private.task_document_asset_roots()from public,anon,authenticated,service_role;
 
+-- PostgreSQL rejects a subquery inside a CHECK constraint expression, so the three
+-- set-returning predicates below are wrapped in IMMUTABLE SQL functions and called from
+-- the constraints, exactly as 025 does with intake_emails_valid. Each predicate is
+-- row-local: it reads only this row's own column plus the immutable allowlist above, so it
+-- belongs in a CHECK constraint rather than in a trigger like the cross-row rules of 022
+-- and 027. Each tolerates a non-array or null input and returns true rather than raising,
+-- because the shape conjunct in the constraint is what rejects a wrong shape; a CHECK that
+-- raises instead of returning false would abort a restore with an opaque error.
+create function app_private.task_document_roots_valid(roots text[])returns boolean language sql immutable set search_path='' as
+$$select not exists(select 1 from unnest(coalesce(roots,array[]::text[]))r where r<>all(app_private.task_document_asset_roots()))$$;
+create function app_private.task_document_shared_roots_valid(roots jsonb)returns boolean language sql immutable set search_path='' as
+$$select not exists(select 1 from jsonb_array_elements_text(case when jsonb_typeof(roots)='array'then roots else '[]'::jsonb end)r where r<>all(app_private.task_document_asset_roots()))$$;
+create function app_private.task_document_client_dirs_valid(dirs jsonb)returns boolean language sql immutable set search_path='' as
+$$select not exists(select 1 from jsonb_array_elements_text(case when jsonb_typeof(dirs)='array'then dirs else '[]'::jsonb end)d where d!~'^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$')$$;
+revoke all on function app_private.task_document_roots_valid(text[]),app_private.task_document_shared_roots_valid(jsonb),app_private.task_document_client_dirs_valid(jsonb)from public,anon,authenticated,service_role;
+
 alter table app_private.task_documents
- -- Source-owner release scope. Null means asset retrieval is not released for this task.
+ -- Source-owner release scope. Null means no release decision has been recorded, which
+ -- task_document_packet below resolves to the shared Atlas method roots only, with no
+ -- client source material. An explicit release, including one with an empty
+ -- clientDirectories array, is used exactly as recorded.
  add column asset_release jsonb,
  -- Shared roots that may reach a builder-role audience. Never widened by the runtime.
  add column builder_safe_roots text[] not null default array[]::text[],
@@ -32,17 +51,20 @@ alter table app_private.task_documents
    and length(coalesce(asset_release->>'decision',''))>=10
    and jsonb_typeof(asset_release->'sharedRoots')='array'
    and jsonb_typeof(asset_release->'clientDirectories')='array'
-   and not exists(select 1 from jsonb_array_elements_text(asset_release->'sharedRoots')r where r<>all(app_private.task_document_asset_roots()))
-   and not exists(select 1 from jsonb_array_elements_text(asset_release->'clientDirectories')d where d!~'^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$')
+   and app_private.task_document_shared_roots_valid(asset_release->'sharedRoots')
+   and app_private.task_document_client_dirs_valid(asset_release->'clientDirectories')
   )),
  add constraint task_documents_atlas_executor_decision check(not atlas_executor or length(coalesce(atlas_executor_decision,''))>=10),
- add constraint task_documents_builder_safe_roots check(not exists(select 1 from unnest(builder_safe_roots)r where r<>all(app_private.task_document_asset_roots())));
+ add constraint task_documents_builder_safe_roots check(app_private.task_document_roots_valid(builder_safe_roots));
 
 -- The usage ledger for drafting. One row per reserved invocation, as for intake.
 alter table app_private.task_document_attempts
  -- Worst-case charge computed from the UTF-8 byte floor before the key is ever read.
  add column cost_bound_bytes integer check(cost_bound_bytes is null or cost_bound_bytes>0),
- add column cost_bound_micros bigint check(cost_bound_micros is null or cost_bound_micros>0),
+ -- A local provider with no price has a truthful worst-case charge of zero, so zero is a
+ -- permitted recorded bound. The 'check' action below still refuses a dispatch whose cost
+ -- bound is absent, and the trigger above still forbids revising a recorded bound.
+ add column cost_bound_micros bigint check(cost_bound_micros is null or cost_bound_micros>=0),
  add column input_tokens integer check(input_tokens is null or input_tokens>=0),
  add column output_tokens integer check(output_tokens is null or output_tokens>=0),
  add column usage_at timestamptz,
@@ -69,12 +91,22 @@ create trigger task_document_release_fence after update on app_private.task_docu
 create or replace function app_private.task_document_packet(did uuid,person text,needed text)returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare d app_private.task_documents;a app_private.workspace_actors;t public.tasks;q public.requests;i app_private.meeting_items;
- g app_private.meeting_task_grants;r record;e record;entries jsonb;fingerprint text;binding jsonb;epochs jsonb;
+ g app_private.meeting_task_grants;r record;e record;entries jsonb;fingerprint text;binding jsonb;epochs jsonb;release jsonb;
 begin
  perform pg_advisory_xact_lock(hashtext('atlas.meeting.queue'));
  perform 1 from app_private.meetings m join app_private.meeting_items mi on mi.source_id=m.source_id join app_private.task_documents doc on doc.request_id=mi.request_id where doc.id=did for update of m;
  select * into d from app_private.task_documents where id=did for update;
  if not found or not d.enabled then raise exception 'document_unavailable'using errcode='42501';end if;
+ -- An absent release decision is not a release of nothing: it means this task may draft from
+ -- the shared Atlas method roots only, with no client material at all. The default is
+ -- materialised here, once, so that the builder fence below, the binding fingerprint and the
+ -- packet returned to the runtime all see a real release rather than skipping a null. An
+ -- explicit release -- including one with an empty clientDirectories array -- is used as
+ -- recorded and is unchanged by this.
+ release:=coalesce(d.asset_release,jsonb_build_object(
+  'decision','default release: shared Atlas method roots only, no client source material',
+  'sharedRoots',to_jsonb(app_private.task_document_asset_roots()),
+  'clientDirectories',jsonb_build_array()));
  select * into a from app_private.workspace_actors where actor=person and active for share;
  if not found then raise exception 'document_denied'using errcode='42501';end if;
  perform 1 from app_private.task_document_grants where document_id=did for share;
@@ -103,8 +135,8 @@ begin
  end loop;
  -- A builder audience, Nat included, receives only shared roots separately marked safe for
  -- a builder. Her existing financial and full-source restrictions are unchanged below.
- if d.asset_release is not null and exists(select 1 from app_private.task_document_grants dg join app_private.workspace_actors wa on wa.actor=dg.actor where dg.document_id=did and dg.active and wa.role='builder')
-  and exists(select 1 from jsonb_array_elements_text(d.asset_release->'sharedRoots')root where root<>all(d.builder_safe_roots))
+ if exists(select 1 from app_private.task_document_grants dg join app_private.workspace_actors wa on wa.actor=dg.actor where dg.document_id=did and dg.active and wa.role='builder')
+  and exists(select 1 from jsonb_array_elements_text(release->'sharedRoots')root where root<>all(d.builder_safe_roots))
   then raise exception 'asset_release_builder_denied'using errcode='42501';end if;
  entries:=jsonb_build_array(jsonb_build_object('id','commitment','version',g.source_revision,'sourceHash',d.projection_hash,'kind','commitment','title',g.projection->>'title','text',g.projection->'evidence'->>'quote','display',true,'use',true,'sourceRef',jsonb_build_object('sourceId',i.source_id),'reviewReference',g.review_reference,'observedAt',clock_timestamp()));
  if jsonb_array_length(entries)>12 or (select count(*)from app_private.task_document_evidence where document_id=did)>11 then raise exception 'packet_limit';end if;
@@ -117,9 +149,9 @@ begin
  select jsonb_agg(jsonb_build_array(dg.actor,dg.epoch,wa.epoch,wc.epoch,dg.rights)order by dg.actor)into epochs from app_private.task_document_grants dg join app_private.workspace_actors wa on wa.actor=dg.actor join app_private.workspace_clients wc on wc.actor=dg.actor and wc.client=q.client where dg.document_id=did and dg.active;
  -- Lifecycle-only canonical revision advances do not release new content. Content/grant,
  -- release-scope and Atlas-execution changes do.
- binding:=jsonb_build_object('task',d.task_id,'requestHash',q.input_hash,'source',d.source_revision,'projection',g.projection_hash,'authorityEpoch',d.authorization_epoch,'audience',epochs,'evidence',(select jsonb_agg(x-'observedAt')from jsonb_array_elements(entries)x),'configuration',d.configuration_hash,'decision',d.decision_reference,'assetRelease',d.asset_release,'builderSafeRoots',d.builder_safe_roots,'atlasExecutor',d.atlas_executor);
+ binding:=jsonb_build_object('task',d.task_id,'requestHash',q.input_hash,'source',d.source_revision,'projection',g.projection_hash,'authorityEpoch',d.authorization_epoch,'audience',epochs,'evidence',(select jsonb_agg(x-'observedAt')from jsonb_array_elements(entries)x),'configuration',d.configuration_hash,'decision',d.decision_reference,'assetRelease',release,'builderSafeRoots',d.builder_safe_roots,'atlasExecutor',d.atlas_executor);
  fingerprint:=encode(extensions.digest(binding::text,'sha256'),'hex');
- return jsonb_build_object('fingerprint',fingerprint,'workspaceId',a.workspace_id,'taskId',t.id,'requestId',q.id,'client',q.client,'owner',d.owner,'title',d.title,'workflow',d.workflow,'audience','internal_review','entries',entries,'missingContext',d.missing_context,'assetRelease',d.asset_release);
+ return jsonb_build_object('fingerprint',fingerprint,'workspaceId',a.workspace_id,'taskId',t.id,'requestId',q.id,'client',q.client,'owner',d.owner,'title',d.title,'workflow',d.workflow,'audience','internal_review','entries',entries,'missingContext',d.missing_context||case when d.asset_release is null then jsonb_build_array('No asset release decision is recorded for this task, so the draft uses shared Atlas method material only and no client source material.')else jsonb_build_array()end,'assetRelease',release);
 end$$;
 revoke all on function app_private.task_document_packet(uuid,text,text)from public,anon,authenticated,service_role;
 
@@ -148,7 +180,9 @@ begin
   if coalesce(payload->>'promptHash','')!~'^[0-9a-f]{64}$'then raise exception 'prompt_binding_required';end if;
   -- The asset set is bound before dispatch, so a draft can always be traced to the exact
   -- released sources it was given, independently of the prompt bytes.
-  if d.asset_release is not null and coalesce(payload->>'assetDigest','')!~'^[0-9a-f]{64}$'then raise exception 'asset_binding_required';end if;
+  -- Unconditional: every document now has an effective release, explicit or defaulted, so
+  -- every dispatch binds the exact asset set it was given. An empty set still has a digest.
+  if coalesce(payload->>'assetDigest','')!~'^[0-9a-f]{64}$'then raise exception 'asset_binding_required';end if;
   -- The worst-case charge enters the ledger before the provider is ever contacted, so no
   -- dispatch can exist outside a reservation that already accounts for its cost.
   if (payload->'costBound'->>'requestBytes')::integer is null or (payload->'costBound'->>'micros')::bigint is null

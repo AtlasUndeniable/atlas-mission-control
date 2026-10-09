@@ -1,7 +1,7 @@
 {
   "synthetic": true,
   "provider": "loopback fixture only",
-  "task": "7a6c00ab-45d8-4712-a0d6-3235321a6918",
+  "task": "ab38a30d-5d88-4828-9ee0-54b82a69474a",
   "checks": [
     "Accepted canonical task opens explicit working context",
     "Built app generates v1 with synthetic provider",
@@ -30,7 +30,7 @@
     "Status, revision, handoff and acceptance never resend or reinvoke generation",
     "Both immutable versions remain accessible to current permitted audience"
   ],
-  "v1Hash": "543f08576d9bf8fae27ae278c3248de43b8dc697bf4968bc405b410686d674be",
-  "v2Hash": "24b4440ea779634eb936e56d90e5964b66f173382df62cb6989863ebcf182563",
+  "v1Hash": "be55b4edf7fe90aa0a0dc49c2b5007cc5ff041fdee5939ef2c0e59fe8c53daa1",
+  "v2Hash": "2769543f318f892cb0a2b84f80c1ae840d42304b2840cacf15c7e27b0659f022",
   "liveUsefulnessProven": false
 }

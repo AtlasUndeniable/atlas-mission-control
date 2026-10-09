@@ -91,7 +91,14 @@ export type DocumentModel={configurationHash:string;system:string|null;costBound
 export async function documentModel(config:DocumentConfig&Partial<DocumentRuntimePaths>,transport:typeof fetch=fetch,hooks:DocumentModelHooks={}):Promise<DocumentModel>{
  if(config.provider!=='anthropic-direct'){
   const model=documentTransport(config,transport,process.env);
-  return {configurationHash:model.configurationHash,system:null,costBound:null,invoke:(prompt,attempt)=>model.invoke(prompt,attempt)};
+  // Every adapter accounts for its worst-case charge before dispatch, so migration 028's
+  // rule -- no dispatch outside a reservation that already accounts for its cost -- holds
+  // for all of them rather than exempting whichever adapter happens to be selected. A local
+  // fixture provider has no price, so its truthful worst-case charge is zero micros: that is
+  // a recorded accounting, not a missing one, and the byte floor and output ceiling are real.
+  return {configurationHash:model.configurationHash,system:null,
+   costBound:(prompt:string)=>({requestBytes:Buffer.byteLength(prompt,'utf8'),maxOutputTokens:config.maxOutputTokens,micros:0}),
+   invoke:(prompt,attempt)=>model.invoke(prompt,attempt)};
  }
  if(config.mode!=='live')throw Error('anthropic_direct_requires_live_mode');
  if(process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION!=='reviewed')throw Error('live_staff_transport_disabled');

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {documentPrompt,renderDocument,dispatchedPacket,DOCUMENT_CONTRACT_KEYS,type DocumentPacket,type DocumentEntry} from '../src/lib/task-document-codec.ts';
-import {createLedger,LedgerRefusal,type LedgerActor,type LedgerDocument} from './document-ledger.ts';
+import {createLedger,LedgerRefusal,type LedgerActor,type LedgerDocument,DEFAULT_ASSET_RELEASE,DEFAULT_RELEASE_NOTE} from './document-ledger.ts';
 
 /** The two ledger return shapes these tests read. */
 type Reserved={dispatch:boolean;replay?:boolean;attempt:string;token:string;state?:string;packet:DocumentPacket;revisionNote:string|null;previous:{version:number;hash:string;markdown:string}|null};
@@ -225,6 +225,52 @@ test('Nat as executor sees only task-scoped context and no builder-unsafe root',
  const assets=await taskAssetEntries(assetRelease(packet.assetRelease),packet,atlasAssetRoots(BRAIN));
  assert.ok(!assets.entries.some(e=>JSON.stringify(e.sourceRef).includes('kestrel')));
  assert.ok(assets.entries.every(e=>e.id.startsWith('asset:playbooks:')||e.id.startsWith('asset:client-work:northwind-pilates/')));
+});
+
+test('an absent release decision means shared method roots only, and the draft says so', async () => {
+ // Finding B1-2. A task that carries no recorded release decision is not dead: it drafts
+ // from the shared Atlas method roots and from no client material at all.
+ const ledger=createLedger(document({assetRelease:null}),ACTORS(),[COMMITMENT],CLIENT);
+ const packet=ledger.packet('rhys','build');
+ assert.deepEqual(packet.assetRelease,DEFAULT_ASSET_RELEASE);
+ assert.deepEqual(packet.assetRelease?.clientDirectories,[],'no client directory is released by default');
+ // The absence of a decision is disclosed in the packet's own missing-context section,
+ // which renders into the draft's Missing facts list.
+ assert.ok(packet.missingContext.includes(DEFAULT_RELEASE_NOTE));
+ const assets=await taskAssetEntries(assetRelease(packet.assetRelease),packet,atlasAssetRoots(BRAIN));
+ assert.ok(assets.entries.length>0,'shared method assets are still retrievable');
+ assert.ok(!assets.entries.some(e=>e.kind==='client_asset'),'no client asset enters the default packet');
+ assert.ok(!assets.entries.some(e=>e.id.includes('northwind')||e.id.includes('kestrel')));
+ assert.ok(assets.notes.some(n=>n.includes('No client-specific asset directory is released')));
+ // And the whole flow completes, which is what unblocked the database-backed suites.
+ const first=await startDraft(ledger);
+ assert.equal(first.version,1);
+ assert.ok(first.content.includes(DEFAULT_RELEASE_NOTE),'the rendered draft discloses the defaulted release');
+});
+
+test('a defaulted release is still fenced by the builder-safe roots', async () => {
+ // The default must not become a way around the builder fence: with no release recorded and
+ // no root marked builder-safe, Nat's whole packet is refused exactly as for an explicit one.
+ const actors=[...ACTORS(),{actor:'nat',role:'builder' as const,rights:['context','build','output','revise','handoff'],active:true}];
+ const denied=createLedger(document({executor:'nat',atlasExecutor:false,atlasExecutorDecision:null,assetRelease:null,builderSafeRoots:[]}),actors,[COMMITMENT],CLIENT);
+ assert.throws(()=>denied.packet('nat','build'),/asset_release_builder_denied/);
+ const partial=createLedger(document({executor:'nat',atlasExecutor:false,atlasExecutorDecision:null,assetRelease:null,builderSafeRoots:['playbooks']}),actors,[COMMITMENT],CLIENT);
+ assert.throws(()=>partial.packet('nat','build'),/asset_release_builder_denied/);
+ const safe=createLedger(document({executor:'nat',atlasExecutor:false,atlasExecutorDecision:null,assetRelease:null,builderSafeRoots:[...DEFAULT_ASSET_RELEASE.sharedRoots]}),actors,[COMMITMENT],CLIENT);
+ assert.ok(safe.packet('nat','build').assetRelease,'all defaulted roots marked builder-safe is permitted');
+});
+
+test('an explicit empty release releases nothing, and is not the default', async () => {
+ // An explicit decision to release nothing is a decision, and stays exactly as Lane C
+ // defined it: no shared root, no client directory, and no defaulting over the top of it.
+ const empty={decision:'fixture-empty-release-2026-10-09',sharedRoots:[] as string[],clientDirectories:[] as string[]};
+ const ledger=createLedger(document({assetRelease:empty}),ACTORS(),[COMMITMENT],CLIENT);
+ const packet=ledger.packet('rhys','build');
+ assert.deepEqual(packet.assetRelease,empty);
+ assert.ok(!packet.missingContext.includes(DEFAULT_RELEASE_NOTE),'a recorded decision is not reported as absent');
+ const assets=await taskAssetEntries(assetRelease(packet.assetRelease),packet,atlasAssetRoots(BRAIN));
+ assert.equal(assets.entries.length,0,'an explicit empty release retrieves nothing');
+ assert.ok(assets.notes.some(n=>n.includes('no released source that matches this task')));
 });
 
 test('CITATION: the draft lists the sources it used and cannot cite outside the packet', async () => {

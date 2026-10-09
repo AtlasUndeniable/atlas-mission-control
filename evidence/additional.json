@@ -13,7 +13,7 @@
     "Fenced attempt created no version",
     "Duplicate canonical acceptance preserves the same task identity"
   ],
-  "concurrentTask": "6580c37d-2de6-4992-ab9e-8b24c8688335",
-  "invalidTask": "a1049d3f-1998-471e-9387-400dc15a3acf",
-  "fencedTask": "52c42064-dbef-40c4-9a81-c70037ca470b"
+  "concurrentTask": "9c1db10d-6aab-4bf4-a6a0-d7e5134b8405",
+  "invalidTask": "85f5d13a-5875-4895-8ccb-1ac41b98e5b9",
+  "fencedTask": "d6e53df1-fdbe-4d00-a7c7-bb8d0da29feb"
 }

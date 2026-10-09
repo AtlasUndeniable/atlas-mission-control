@@ -1,7 +1,8 @@
 {
   "synthetic": true,
   "actor": "nat",
-  "task": "ba837a63-97b1-4d74-bdbe-8a05ccb45c6e",
+  "task": "8afe73c0-8922-45b5-a4b9-264a9eded0e6",
+  "route": "/board",
   "mobile": false,
   "panelOverflow": false,
   "errors": [],
