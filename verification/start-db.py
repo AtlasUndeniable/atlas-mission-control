@@ -1,7 +1,10 @@
 from pathlib import Path
 import subprocess,time,json,os,sys
-R=Path(__file__).resolve().parents[1];S=R/('verification/private-clean' if '--clean-check' in sys.argv else 'verification/private');S.mkdir(exist_ok='--resume' in sys.argv);S.chmod(0o700)
-name='atlas-task-docs-20260922'+('-clean' if '--clean-check' in sys.argv else '');net=name+'-net';rest=name+'-rest'
+R=Path(__file__).resolve().parents[1];S=R/('verification/private-clean' if '--clean-check' in sys.argv else 'verification/private');S.mkdir(exist_ok=('--resume' in sys.argv or os.environ.get('ATLAS_FIXTURE_REUSE_DIR')=='1'));S.chmod(0o700)
+base=os.environ.get('ATLAS_FIXTURE_CONTAINER_BASE','atlas-task-docs-20260922')
+name=base+('-clean' if '--clean-check' in sys.argv else '');net=name+'-net';rest=name+'-rest'
+PG=os.environ.get('ATLAS_FIXTURE_CLEAN_PG_PORT','55834')if '--clean-check' in sys.argv else os.environ.get('ATLAS_FIXTURE_PG_PORT','55824')
+RESTPORT=os.environ.get('ATLAS_FIXTURE_REST_PORT','55825')
 def run(*args,**kw):return subprocess.run(args,check=True,text=True,capture_output=True,**kw)
 def sql(s,user='postgres'):
  r=subprocess.run(['docker','exec','-i',name,'psql','-X','-U',user,'-d','docs','-v','ON_ERROR_STOP=1'],input=s,text=True,capture_output=True)
@@ -9,7 +12,7 @@ def sql(s,user='postgres'):
  if r.returncode:raise RuntimeError(r.stderr[-2500:])
 if '--resume'not in sys.argv:
  run('docker','network','create',net)
- run('docker','run','--pull=never','-d','--name',name,'--network',net,'--network-alias','pg','-p',('127.0.0.1:55834:5432' if '--clean-check' in sys.argv else '127.0.0.1:55824:5432'),'-e','POSTGRES_PASSWORD=synthetic-docs-only','-e','POSTGRES_DB=docs','public.ecr.aws/supabase/postgres:17.6.1.132')
+ run('docker','run','--pull=never','-d','--name',name,'--network',net,'--network-alias','pg','-p','127.0.0.1:'+PG+':5432','-e','POSTGRES_PASSWORD=synthetic-docs-only','-e','POSTGRES_DB=docs','public.ecr.aws/supabase/postgres:17.6.1.132')
  (S/'processes.json').write_text(json.dumps({'pg':name,'rest':rest,'network':net}))
  for _ in range(60):
   if subprocess.run(['docker','exec',name,'pg_isready','-U','postgres','-d','docs'],capture_output=True).returncode==0:break
@@ -44,5 +47,5 @@ sql((R/'migrations/022_task_documents.sql').read_text())
 if '--clean-check' in sys.argv:
  print('Final migration applied cleanly; no seed or runtime grants.');sys.exit(0)
 run('docker','exec',name,'psql','-U','supabase_admin','-d','docs','-c',"alter role authenticator with login password 'synthetic-docs-only';")
-run('docker','run','--pull=never','-d','--name',rest,'--network',net,'-p','127.0.0.1:55825:3000','-e','PGRST_DB_URI=postgres://authenticator:synthetic-docs-only@pg:5432/docs','-e','PGRST_DB_SCHEMAS=public','-e','PGRST_DB_ANON_ROLE=anon','-e','PGRST_JWT_SECRET=task-document-synthetic-only-2026-0000000001','public.ecr.aws/supabase/postgrest:v14.12')
+run('docker','run','--pull=never','-d','--name',rest,'--network',net,'-p','127.0.0.1:'+RESTPORT+':3000','-e','PGRST_DB_URI=postgres://authenticator:synthetic-docs-only@pg:5432/docs','-e','PGRST_DB_SCHEMAS=public','-e','PGRST_DB_ANON_ROLE=anon','-e','PGRST_JWT_SECRET=task-document-synthetic-only-2026-0000000001','public.ecr.aws/supabase/postgrest:v14.12')
 print('Isolated matching schema and migration ready on55824/55825. No hosted writes.')
