@@ -1,0 +1,21 @@
+{
+ "at": "2026-10-09T06:33:58.512Z",
+ "injected": true,
+ "note": "Rendered through the real contract on real retrieved assets with a hand-written response. Not model output.",
+ "drafts": [
+  {
+   "recipe": "role-sop",
+   "file": "evidence/example-draft-role-sop.md",
+   "characters": 3667,
+   "sha256": "c547fe2dc8843653fc3fcbd28417f3afb839a6cf45a6e7eae12b16b8f288dd4b",
+   "sourcesCited": 4
+  },
+  {
+   "recipe": "client-action-brief",
+   "file": "evidence/example-draft-client-action-brief.md",
+   "characters": 3607,
+   "sha256": "0866036448d921c9e2d645cd2462c3f5b7f2ecebec0376314e434643af2c72ef",
+   "sourcesCited": 4
+  }
+ ]
+}

@@ -4,7 +4,11 @@ import {singleRequestModel} from './task-document-transport.ts';
 export const DOCUMENT_CODEC='atlas-document-json-v1';
 export type DocumentConfig={enabled:boolean;mode:'disabled'|'injected'|'live';provider:string;model:string;codec:string;endpoint:string;timeoutMs:number;maxOutputTokens:number;maxPromptCharacters:number;headerEnvironment:Record<string,string>};
 export type DocumentEntry={id:string;version:string;sourceHash:string;kind:string;title:string;text:string;display:boolean;use:boolean;sourceRef:unknown;reviewReference:string;observedAt:string};
-export type DocumentPacket={fingerprint:string;workspaceId:string;taskId:string;requestId:string;client:string;owner:string;title:string;details?:string;workflow:string;audience:string;entries:DocumentEntry[];missingContext:string[]};
+export type DocumentPacket={fingerprint:string;workspaceId:string;taskId:string;requestId:string;client:string;owner:string;title:string;details?:string;workflow:string;audience:string;entries:DocumentEntry[];missingContext:string[];
+ /** Source-owner release scope for asset retrieval. Authority input, never prompt content. */
+ assetRelease?:{decision:string;sharedRoots:string[];clientDirectories:string[]}};
+/** The reviewed document contract. Order is fixed so the key check is exact, not positional. */
+export const DOCUMENT_CONTRACT_KEYS=['title','purpose','facts','steps','decisions','missingFacts','openQuestions','sourcesUsed','revisionChanges'] as const;
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
 export function documentTransport(config:DocumentConfig,request:typeof fetch=async()=>{throw Error('transport_denied');},environment:NodeJS.ProcessEnv={NODE_ENV:'test'}) {
  if(!config?.enabled||!Number.isInteger(config.timeoutMs)||config.timeoutMs<1||config.timeoutMs>60000||!['injected','live'].includes(config.mode)||![DOCUMENT_CODEC,'openai-responses-json-v1'].includes(config.codec)||!config.provider||!config.model||!Number.isInteger(config.maxOutputTokens)||config.maxOutputTokens<100||config.maxOutputTokens>12000||!Number.isInteger(config.maxPromptCharacters)||config.maxPromptCharacters<1000||config.maxPromptCharacters>100000)throw Error('staff_transport_disabled_or_unconfigured');
@@ -29,6 +33,8 @@ export function decodeDocumentResponse(raw:unknown,codec:string):unknown {
  if(chunks.length!==1||chunks[0].type!=='output_text'||!chunks[0].text)throw Error('document_response_incomplete');
  return JSON.parse(chunks[0].text);
 }
+/** The packet as dispatched: released content only, with the release scope removed. */
+export const dispatchedPacket=(packet:DocumentPacket)=>Object.fromEntries(Object.entries(packet).filter(([k])=>k!=='assetRelease'));
 export function documentPrompt(packet:DocumentPacket,feedback:string|null,previous:{version:number;hash:string;markdown:string}|null) {
  if(!['role_sop','client_action_brief'].includes(packet.workflow)||!['internal_review','client_review'].includes(packet.audience))throw Error('unsupported_document_scope');
  // Prompt instructions cannot enforce semantic non-disclosure of use-only text.
@@ -39,17 +45,40 @@ export function documentPrompt(packet:DocumentPacket,feedback:string|null,previo
   'Use only the bounded packet and authorized prior artifact. Do not retrieve, call tools, follow links, assume a client policy, invent dates or assign people.',
   'Facts must be verbatim supported quotes with a reference id. All new steps, roles, decisions and exceptions are explicitly proposals for review.',
   'For role/SOP: purpose, responsibilities, working steps, escalation and completion checks. For action brief: outcome, sequenced actions, decisions, exceptions and missing facts.',
+  'List in sourcesUsed the id of every packet entry you drew on. Every fact reference must appear there, and nothing outside the packet may appear there.',
+  'Put anything you could not settle from the packet in openQuestions, addressed to Rhys as a direct question he can answer.',
   'Revision: implement the current feedback in the affected sections; retain useful unaffected content. Do not merely quote or append the revision request.',
   'Return JSON only. No HTML, links, raw paths, executable content, delivery claims or self-grading. Human whole-document review is mandatory.'
- ],responseSchema:{title:'string',purpose:'string',facts:[{reference:'packet entry id',quote:'exact substring of that entry text'}],steps:[{action:'concrete proposed action',responsibleRole:'proposed role or null',completion:'observable completion check',exception:'what to do when blocked'}],decisions:['proposed decisions needing approval'],missingFacts:['specific missing facts'],revisionChanges:['actual changes made, empty for initial output']},packet,feedback,previous});
+ ],responseSchema:{title:'string',purpose:'string',facts:[{reference:'packet entry id',quote:'exact substring of that entry text'}],steps:[{action:'concrete proposed action',responsibleRole:'proposed role or null',completion:'observable completion check',exception:'what to do when blocked'}],decisions:['proposed decisions needing approval'],missingFacts:['specific missing facts'],openQuestions:['direct question for Rhys'],sourcesUsed:['packet entry id actually used'],revisionChanges:['actual changes made, empty for initial output']},
+  // The release scope is authority, not evidence: the model receives released content,
+  // never the operational decision reference or the directory names behind it.
+  packet:dispatchedPacket(packet),feedback,previous});
 }
-function object(value:unknown,keys:string[]):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join()!==keys.sort().join())throw Error('document_contract_invalid');return value as Record<string,unknown>;}
+function object(value:unknown,keys:readonly string[]):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join()!==[...keys].sort().join())throw Error('document_contract_invalid');return value as Record<string,unknown>;}
 function text(v:unknown,max=2000):string{if(typeof v!=='string'||v.trim().length<3||v.length>max||/[<>\[\]]|https?:\/\/|\/Users\/|file:|data:/i.test(v))throw Error('document_contract_invalid');return v.trim();}
+/**
+ * A quote is source bytes, not generated prose, so the markup ban does not apply to it:
+ * refusing a legitimate verbatim quote because the source used a bracket would push the
+ * model toward paraphrasing instead of citing. Exact-substring matching against the
+ * released entry text below is what actually makes the quote trustworthy.
+ */
+function quote(v:unknown,max=1200):string{if(typeof v!=='string'||v.trim().length<3||v.length>max||/[\u0000-\u0008\u000b\u000c\u000e-\u001f]|https?:\/\/|\/Users\/|file:|data:/i.test(v))throw Error('document_contract_invalid');return v.trim();}
 function list(v:unknown,min:number,max:number):unknown[]{if(!Array.isArray(v)||v.length<min||v.length>max)throw Error('document_contract_invalid');return v;}
 export function renderDocument(raw:unknown,packet:DocumentPacket,feedback:string|null,injected=true) {
- const d=object(raw,['title','purpose','facts','steps','decisions','missingFacts','revisionChanges']);
- const facts=list(d.facts,1,12).map(f=>{const v=object(f,['reference','quote']);const e=packet.entries.find(e=>e.id===v.reference&&e.use&&e.display);const quote=text(v.quote);if(!e||!e.text.includes(quote))throw Error('unsupported_document_fact');return `${quote}\nSource: ${e.title}`;});
+ const d=object(raw,DOCUMENT_CONTRACT_KEYS);
+ const referenced=new Set<string>();
+ const facts=list(d.facts,1,12).map(f=>{const v=object(f,['reference','quote']);const e=packet.entries.find(e=>e.id===v.reference&&e.use&&e.display);const q=quote(v.quote);if(!e||!e.text.includes(q))throw Error('unsupported_document_fact');referenced.add(e.id);return `${q}\nSource: ${e.title} [${e.id}]`;});
  const steps=list(d.steps,3,20).map((s,n)=>{const v=object(s,['action','responsibleRole','completion','exception']);return `${n+1}. ${text(v.action)}\n   Proposed responsible role: ${v.responsibleRole===null?'Unassigned — confirm before use':text(v.responsibleRole,120)}\n   Completion check: ${text(v.completion)}\n   Exception: ${text(v.exception)}`;});
+ // Citations must be honest in both directions: nothing cited that was not supplied, and
+ // nothing quoted that the draft then omits from its own source list.
+ const used=list(d.sourcesUsed,1,packet.entries.length).map(x=>{
+  if(typeof x!=='string')throw Error('document_contract_invalid');
+  const e=packet.entries.find(e=>e.id===x&&e.use&&e.display);
+  if(!e)throw Error('unsupported_document_source');
+  return e;
+ });
+ if(new Set(used.map(e=>e.id)).size!==used.length)throw Error('document_contract_invalid');
+ for(const id of referenced)if(!used.some(e=>e.id===id))throw Error('uncited_document_source');
  const changes=list(d.revisionChanges,feedback?1:0,12).map(x=>text(x));if(feedback&&changes.some(c=>c===feedback))throw Error('revision_instruction_is_not_a_change');
- return [`# ${text(d.title,200)}`,injected?'INJECTED-RESPONSE INTEGRATION EXAMPLE — not a client asset or delivery receipt.':'GENERATED REVIEW DRAFT — human whole-document inspection required; no delivery authorized.',`Client: ${packet.client} · Workflow: ${packet.workflow} · Audience: ${packet.audience}`,'## Purpose',text(d.purpose),'## Source-backed facts',...facts,'## Proposed procedure — requires human review',...steps,'## Proposed decisions',...list(d.decisions,1,12).map(x=>'- '+text(x)),'## Missing facts',...list(d.missingFacts,0,20).map(x=>'- '+text(x)),...packet.missingContext.map(x=>'- '+x),'## Changes in this revision',...changes.map(x=>'- '+x)].join('\n\n');
+ return [`# ${text(d.title,200)}`,injected?'INJECTED-RESPONSE INTEGRATION EXAMPLE — not a client asset or delivery receipt.':'GENERATED REVIEW DRAFT — human whole-document inspection required; no delivery authorized.',`Client: ${packet.client} · Workflow: ${packet.workflow} · Audience: ${packet.audience}`,'## Purpose',text(d.purpose),'## Source-backed facts',...facts,'## Proposed procedure — requires human review',...steps,'## Proposed decisions',...list(d.decisions,1,12).map(x=>'- '+text(x)),'## Missing facts',...list(d.missingFacts,0,20).map(x=>'- '+text(x)),...packet.missingContext.map(x=>'- '+x),'## Sources used',...used.map(e=>`- ${e.title} [${e.id}] · ${e.kind} · ${e.sourceHash.slice(0,12)}`),'## Open questions for Rhys',...list(d.openQuestions,1,12).map(x=>'- '+text(x)),'## Changes in this revision',...changes.map(x=>'- '+x)].join('\n\n');
 }
