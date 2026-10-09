@@ -1,6 +1,6 @@
 from pathlib import Path
-import json,subprocess,hashlib
-R=Path(__file__).resolve().parents[1];name='atlas-task-docs-20260922-clean'
+import json,subprocess,hashlib,os
+R=Path(__file__).resolve().parents[1];name=os.environ.get('ATLAS_FIXTURE_CONTAINER_BASE','atlas-task-docs-20260922')+'-clean'
 def query(s):
  return subprocess.run(['docker','exec',name,'psql','-X','-U','postgres','-d','docs','-At','-c',s],check=True,capture_output=True,text=True).stdout.strip()
 checks=[];differences=[]
