@@ -2,7 +2,7 @@
   "enabled": false,
   "mode": "unbound",
   "policy": null,
-  "accountId": null,
+  "accountId": "PWyr21Wqqq",
   "scopeDecision": null,
   "operatorDecision": null,
   "recurring": {
@@ -10,7 +10,8 @@
     "endsAt": null,
     "intervalSeconds": 900,
     "lookbackDays": 7,
-    "dailyFullSweep": true
+    "dailyFullSweep": true,
+    "ongoing": true
   },
   "catchUp": {
     "enabled": false,
@@ -20,16 +21,48 @@
   "maxPages": 10,
   "maxSources": 10,
   "timeoutMs": 60000,
+  "providerNote": "Exactly one adapter is selected by provider.provider. Both examples are disabled bindings, not approvals. keyFile and credential files are never committed, logged or copied into a receipt.",
   "provider": {
-    "provider": "anthropic-vertex",
-    "project": null,
-    "region": null,
-    "model": null,
+    "provider": "anthropic-direct",
+    "model": "claude-sonnet-5-5",
     "disclosureDecision": null,
     "budgetDecision": null,
-    "maxPromptCharacters": 60000,
-    "maxOutputTokens": 4000
+    "maxPromptCharacters": 100000,
+    "maxOutputTokens": 4000,
+    "requestProfile": "sonnet-5-5-extraction-v1",
+    "keyFile": "/Users/atlasai/.config/atlas/credentials/anthropic-intake.key"
+  },
+  "providerExampleVertexParked": {
+    "provider": "anthropic-vertex",
+    "project": "atlas-undeniable-2026",
+    "region": "global",
+    "model": "claude-sonnet-5-5",
+    "disclosureDecision": null,
+    "budgetDecision": null,
+    "maxPromptCharacters": 100000,
+    "maxOutputTokens": 4000,
+    "credentialBinding": {
+      "type": "service_account",
+      "projectId": "atlas-undeniable-2026",
+      "clientEmail": "atlas-meeting-intake@atlas-undeniable-2026.iam.gserviceaccount.com",
+      "keyId": null
+    },
+    "requestProfile": "sonnet-5-5-extraction-v1"
   },
   "rpcUrl": null,
-  "secretsFile": null
+  "secretsFile": null,
+  "budgetProposal": {
+    "approved": false,
+    "currency": "USD",
+    "monthlyMicros": 50000000,
+    "monthlyRequests": 100,
+    "dailyRequests": 12,
+    "inputMicrosPerToken": 2,
+    "outputMicrosPerToken": 10,
+    "maxInputTokens": 100000,
+    "maxOutputTokens": 4000,
+    "boundNote": "maxInputTokens is the byte floor: the request body cannot exceed maxPromptCharacters UTF-8 bytes, so its input tokens cannot either. No provider token-count request is made.",
+    "note": "Server approved policy enforces limits; this JSON is not an approval or a binding."
+  },
+  "providerDiagnosticsFile": null
 }

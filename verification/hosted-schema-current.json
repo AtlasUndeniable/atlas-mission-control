@@ -1,0 +1,1189 @@
+{
+  "roles": [
+    {
+      "name": "atlas_meeting_nat_web",
+      "login": false,
+      "bypassRls": false,
+      "superuser": false
+    },
+    {
+      "name": "atlas_meeting_rhys_web",
+      "login": false,
+      "bypassRls": false,
+      "superuser": false
+    },
+    {
+      "name": "atlas_meeting_astra_20260911_ingest",
+      "login": false,
+      "bypassRls": false,
+      "superuser": false
+    }
+  ],
+  "tables": [
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_history",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "notNull": false
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "operation_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "input",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "result",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER meeting_history_immutable BEFORE DELETE OR UPDATE ON app_private.meeting_history FOR EACH ROW EXECUTE FUNCTION app_private.task_history_immutable()"
+      ],
+      "constraints": [
+        "UNIQUE (actor, operation_id)",
+        "PRIMARY KEY (id)",
+        "FOREIGN KEY (request_id) REFERENCES requests(id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_items",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "commitment_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "evidence",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "reviewed_revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "deferred",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "continuity_revision",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (request_id)",
+        "FOREIGN KEY (request_id) REFERENCES requests(id)",
+        "UNIQUE (source_id, commitment_key)",
+        "FOREIGN KEY (source_id) REFERENCES app_private.meetings(source_id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_keys",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "commitment_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (source_id, commitment_key)",
+        "FOREIGN KEY (request_id) REFERENCES requests(id)",
+        "FOREIGN KEY (source_id) REFERENCES app_private.meetings(source_id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_policy",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "db_role",
+          "type": "name",
+          "notNull": true
+        },
+        {
+          "name": "ingestion_actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "review_reference",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "UNIQUE (db_role)",
+        "PRIMARY KEY (id)",
+        "CHECK ((length(review_reference) > 0))",
+        "FOREIGN KEY (workspace_id) REFERENCES projects(id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_reviewers",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "rhys_actor",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "can_triage",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "can_review",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "review_reference",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "FOREIGN KEY (actor) REFERENCES app_private.workspace_actors(actor)",
+        "PRIMARY KEY (actor)",
+        "CHECK ((length(review_reference) > 0))",
+        "FOREIGN KEY (rhys_actor) REFERENCES app_private.workspace_actors(actor)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_scans",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "policy",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "ids",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "notNull": false
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "CHECK ((ends_at > starts_at))",
+        "PRIMARY KEY (policy, starts_at, ends_at)",
+        "FOREIGN KEY (policy) REFERENCES app_private.meeting_policy(id)",
+        "CHECK ((status = ANY (ARRAY['scanning'::text, 'covered'::text, 'failed'::text])))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_scope",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "policy",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "client",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "review_reference",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (source_id)",
+        "FOREIGN KEY (policy) REFERENCES app_private.meeting_policy(id)",
+        "CHECK ((length(review_reference) > 0))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_source_people",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "review_reference",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "FOREIGN KEY (actor) REFERENCES app_private.workspace_actors(actor)",
+        "PRIMARY KEY (source_id, actor)",
+        "CHECK ((length(review_reference) > 0))",
+        "FOREIGN KEY (source_id) REFERENCES app_private.meeting_scope(source_id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_task_events",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "history_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "grant_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "safe_note",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER meeting_task_events_immutable BEFORE DELETE OR UPDATE ON app_private.meeting_task_events FOR EACH ROW EXECUTE FUNCTION app_private.task_history_immutable()"
+      ],
+      "constraints": [
+        "FOREIGN KEY (grant_id) REFERENCES app_private.meeting_task_grants(id)",
+        "FOREIGN KEY (history_id) REFERENCES app_private.meeting_history(id)",
+        "PRIMARY KEY (history_id, grant_id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meeting_task_grants",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "client",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "commitment_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "item_revision",
+          "type": "bigint",
+          "notNull": true
+        },
+        {
+          "name": "evidence_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "projection",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "projection_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "reviewed_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "review_reference",
+          "type": "text",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "FOREIGN KEY (actor) REFERENCES app_private.meeting_reviewers(actor)",
+        "UNIQUE (actor, request_id)",
+        "CHECK ((projection_hash = encode(digest((projection)::text, 'sha256'::text), 'hex'::text)))",
+        "PRIMARY KEY (id)",
+        "FOREIGN KEY (request_id) REFERENCES app_private.meeting_items(request_id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "meetings",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "policy",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "instant",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "lease_token",
+          "type": "uuid",
+          "notNull": false
+        },
+        {
+          "name": "lease_until",
+          "type": "timestamp with time zone",
+          "notNull": false
+        },
+        {
+          "name": "pending",
+          "type": "jsonb",
+          "notNull": false
+        },
+        {
+          "name": "extraction_revision",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "source_review_required",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (source_id)",
+        "FOREIGN KEY (policy) REFERENCES app_private.meeting_policy(id)",
+        "CHECK ((state = ANY (ARRAY['awaiting_source'::text, 'processing'::text, 'ready'::text, 'no_actions'::text, 'held'::text, 'failed'::text])))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "workspace_actors",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "db_role",
+          "type": "name",
+          "notNull": true
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "epoch",
+          "type": "bigint",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "UNIQUE (actor)",
+        "PRIMARY KEY (db_role)",
+        "CHECK ((role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'builder'::text])))",
+        "FOREIGN KEY (workspace_id) REFERENCES projects(id)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "workspace_clients",
+      "schema": "app_private",
+      "columns": [
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "client",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "epoch",
+          "type": "bigint",
+          "notNull": true
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "FOREIGN KEY (actor) REFERENCES app_private.workspace_actors(actor)",
+        "PRIMARY KEY (actor, client)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "intake_sources",
+      "schema": "public",
+      "columns": [
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_path",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "extraction",
+          "type": "jsonb",
+          "notNull": false
+        },
+        {
+          "name": "extraction_revision",
+          "type": "text",
+          "notNull": false
+        }
+      ],
+      "triggers": null,
+      "constraints": [
+        "PRIMARY KEY (source_id)",
+        "FOREIGN KEY (source_id, revision) REFERENCES intake_source_versions(source_id, revision)"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "requests",
+      "schema": "public",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "adapter",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "requester_principal",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "requested_by",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "requester_role",
+          "type": "citext",
+          "notNull": true
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "client",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "project_key",
+          "type": "citext",
+          "notNull": false
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "origin_ref",
+          "type": "jsonb",
+          "notNull": false
+        },
+        {
+          "name": "permitted_audience",
+          "type": "text[]",
+          "notNull": true
+        },
+        {
+          "name": "requested",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "input_version",
+          "type": "integer",
+          "notNull": true
+        },
+        {
+          "name": "input_hash",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "notNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER meeting_request_guard BEFORE DELETE OR UPDATE ON public.requests FOR EACH ROW EXECUTE FUNCTION app_private.meeting_write_guard()",
+        "CREATE TRIGGER requests_derive_and_freeze BEFORE INSERT OR UPDATE ON public.requests FOR EACH ROW EXECUTE FUNCTION app_private.requests_derive_and_freeze()",
+        "CREATE TRIGGER requests_set_updated_at BEFORE UPDATE ON public.requests FOR EACH ROW EXECUTE FUNCTION app_private.set_updated_at()"
+      ],
+      "constraints": [
+        "CHECK (((state <> 'approved'::text) OR (task_id IS NOT NULL)))",
+        "CHECK (((client IS NULL) OR (((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120)) AND (client !~ '[[:cntrl:]]'::text))))",
+        "CHECK ((((length(btrim(idempotency_key)) >= 8) AND (length(btrim(idempotency_key)) <= 200)) AND (idempotency_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+        "UNIQUE (adapter, idempotency_key)",
+        "CHECK ((input_hash ~ '^[0-9a-f]{64}$'::text))",
+        "CHECK ((input_version >= 1))",
+        "CHECK (((origin_ref IS NULL) OR (jsonb_typeof(origin_ref) = 'object'::text)))",
+        "CHECK ((array_length(permitted_audience, 1) >= 1))",
+        "PRIMARY KEY (id)",
+        "FOREIGN KEY (project_key) REFERENCES projects(key)",
+        "CHECK (app_private.is_person_key(requested_by))",
+        "FOREIGN KEY (requester_role) REFERENCES roles(key)",
+        "CHECK (((source_id IS NULL) OR (((length(btrim(source_id)) >= 1) AND (length(btrim(source_id)) <= 200)) AND (source_id !~ '[[:cntrl:]]'::text))))",
+        "CHECK ((source_type = ANY (ARRAY['web_form'::text, 'call'::text, 'slack_message'::text, 'operator_note'::text])))",
+        "CHECK ((state = ANY (ARRAY['pending_approval'::text, 'approved'::text, 'declined'::text])))",
+        "FOREIGN KEY (task_id) REFERENCES tasks(id)",
+        "UNIQUE (task_id)",
+        "CHECK (((task_id IS NULL) OR (state = 'approved'::text)))"
+      ]
+    },
+    {
+      "acl": [
+        "postgres=arwdDxtm/postgres"
+      ],
+      "rls": true,
+      "name": "tasks",
+      "schema": "public",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "client",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "lane",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "owner",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "due",
+          "type": "date",
+          "notNull": false
+        },
+        {
+          "name": "source_quote",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "created_by",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "declined_reason",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "stale_flagged_at",
+          "type": "timestamp with time zone",
+          "notNull": false
+        },
+        {
+          "name": "receipts",
+          "type": "jsonb",
+          "notNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "sent_back_reason",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "task_revision",
+          "type": "bigint",
+          "notNull": true
+        },
+        {
+          "name": "due_origin",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "execution_gate",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "meeting_action",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "executor",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "next_reviewer",
+          "type": "text",
+          "notNull": false
+        },
+        {
+          "name": "work_status",
+          "type": "text",
+          "notNull": false
+        }
+      ],
+      "triggers": [
+        "CREATE TRIGGER meeting_task_guard BEFORE DELETE OR UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION app_private.meeting_write_guard()",
+        "CREATE TRIGGER tasks_enforce_entry_state BEFORE INSERT ON public.tasks FOR EACH ROW EXECUTE FUNCTION app_private.tasks_enforce_entry_state()",
+        "CREATE TRIGGER tasks_enforce_transition BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION app_private.tasks_enforce_transition()",
+        "CREATE TRIGGER tasks_set_updated_at BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION app_private.set_updated_at()"
+      ],
+      "constraints": [
+        "CHECK (((work_status IS NULL) OR (work_status = ANY (ARRAY['todo'::text, 'needs_review'::text, 'completed'::text, 'atlas_held'::text]))))",
+        "CHECK (((client IS NULL) OR (((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120)) AND (client !~ '[[:cntrl:]]'::text))))",
+        "CHECK (app_private.is_person_key(created_by))",
+        "CHECK (((state <> 'declined'::text) OR (declined_reason IS NOT NULL)))",
+        "CHECK (((declined_reason IS NULL) OR ((length(btrim(declined_reason)) >= 1) AND (length(btrim(declined_reason)) <= 1000))))",
+        "CHECK (((state <> 'delivered'::text) OR (receipts IS NOT NULL)))",
+        "CHECK ((due_origin = ANY (ARRAY['original'::text, 'owner_override'::text])))",
+        "CHECK ((execution_gate = ANY (ARRAY['ready'::text, 'review_required'::text, 'sent_back'::text, 'declined'::text])))",
+        "CHECK ((kind = ANY (ARRAY['doc'::text, 'audit'::text, 'generic'::text])))",
+        "CHECK ((lane = ANY (ARRAY['business'::text, 'engineering'::text])))",
+        "CHECK ((origin = ANY (ARRAY['slack_request'::text, 'atlas_signal'::text, 'operator'::text])))",
+        "CHECK (app_private.is_person_key(owner))",
+        "PRIMARY KEY (id)",
+        "CHECK (((declined_reason IS NULL) OR (state = 'declined'::text)))",
+        "CHECK (((receipts IS NULL) OR (jsonb_typeof(receipts) = 'object'::text)))",
+        "CHECK (((sent_back_reason IS NULL) OR ((length(btrim(sent_back_reason)) >= 1) AND (length(btrim(sent_back_reason)) <= 1000))))",
+        "CHECK (((sent_back_reason IS NULL) OR (state = 'sent_back'::text)))",
+        "CHECK (((source_quote IS NULL) OR ((length(source_quote) >= 1) AND (length(source_quote) <= 2000))))",
+        "CHECK ((state = ANY (ARRAY['queued'::text, 'needs_approval'::text, 'approved'::text, 'in_build'::text, 'delivered'::text, 'declined'::text, 'sent_back'::text])))",
+        "CHECK ((((length(btrim(title)) >= 1) AND (length(btrim(title)) <= 300)) AND (title !~ '[[:cntrl:]]'::text)))"
+      ]
+    }
+  ],
+  "policies": [],
+  "readOnly": "on",
+  "functions": [
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "e5e5831a6d7c70bd5992f338d3b6105b",
+      "name": "meeting_actor",
+      "schema": "app_private",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_actor()\n RETURNS app_private.workspace_actors\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare a app_private.workspace_actors:=app_private.workspace_actor();\nbegin\n perform 1 from app_private.meeting_reviewers where actor=a.actor and active for share;\n if not found then raise exception 'meeting_access_denied' using errcode='42501'; end if;return a;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "36c66e45f36bf2f27167f1aff9121537",
+      "name": "meeting_add_item",
+      "schema": "app_private",
+      "arguments": "sid text, candidate jsonb, creator text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_add_item(sid text, candidate jsonb, creator text)\n RETURNS uuid\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare m app_private.meetings;s app_private.meeting_scope;p app_private.meeting_policy;rid uuid; requested jsonb;\nbegin\n select * into m from app_private.meetings where source_id=sid;\n select * into s from app_private.meeting_scope where source_id=sid and active;\n select * into p from app_private.meeting_policy where id=m.policy and active;\n if s.source_id is null or p.id is null then raise exception 'source_not_released' using errcode='42501';end if;\n if candidate->>'key' !~ '^mc2:[a-f0-9]{32}$' or length(candidate->>'title') not between 1 and 300\n or length(candidate->>'quote') not between 1 and 2000 or candidate->>'sourceRevision' is distinct from m.revision\n or candidate->>'kind' not in ('promise','request','suggestion') or candidate->>'provenance' not in ('transcript','provider_summary') then raise exception 'invalid_candidate';end if;\n select request_id into rid from app_private.meeting_keys where source_id=sid and commitment_key=candidate->>'key';if found then return rid;end if;\n if exists(select 1 from public.requests where idempotency_key=candidate->>'key') or exists(select 1 from public.request_source_bindings where commitment_key=candidate->>'key') then raise exception 'existing_commitment_requires_lineage_review';end if;\n requested:=jsonb_build_object('title',candidate->>'title','lane','business','kind','generic','owner',null,'due',candidate->'due','source_quote',candidate->>'quote');\n insert into public.requests(adapter,requester_principal,requested_by,requester_role,idempotency_key,client,project_key,source_type,source_id,origin_ref,permitted_audience,requested,input_hash)\n values('meeting_intake',creator,creator,'worker',candidate->>'key',s.client,(select key from public.projects where id=p.workspace_id),'call',sid,jsonb_build_object('provider','fireflies','revision',m.revision),array[creator],requested,repeat('0',64)) returning id into rid;\n insert into app_private.meeting_items(request_id,source_id,commitment_key,evidence,reviewed_revision)values(rid,sid,candidate->>'key',candidate,m.revision);\n insert into app_private.meeting_keys values(sid,candidate->>'key',rid);\n return rid;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "4cbe610843cb00cd583ce934fd4c1725",
+      "name": "meeting_binding_guard",
+      "schema": "app_private",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_binding_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n if exists(select 1 from app_private.meeting_items where request_id=case when tg_op='DELETE' then old.request_id else new.request_id end)then raise exception 'meeting_requires_scoped_source_review' using errcode='42501';end if;\n if tg_op='DELETE'then return old;end if;return new;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "8a2fbe98c98d59b464b92705fc40c2df",
+      "name": "meeting_can_read",
+      "schema": "app_private",
+      "arguments": "sid text, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_can_read(sid text, person text)\n RETURNS boolean\n LANGUAGE sql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n select exists(select 1 from app_private.meeting_scope s join app_private.meeting_policy p on p.id=s.policy\n join app_private.workspace_actors a on a.actor=person and a.workspace_id=p.workspace_id and a.active\n join app_private.meeting_reviewers r on r.actor=a.actor and r.active\n join app_private.workspace_clients c on c.actor=a.actor and c.client=s.client and c.active\n join app_private.meeting_source_people sp on sp.source_id=s.source_id and sp.actor=a.actor and sp.active\n where s.source_id=sid and s.active and p.active)\n$function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "50dfdd876ed53825bfbf13887f6bdf6f",
+      "name": "meeting_item_access",
+      "schema": "app_private",
+      "arguments": "rid uuid, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_item_access(rid uuid, person text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n select exists(select 1 from app_private.meeting_items i where i.request_id=rid and\n (app_private.meeting_can_read(i.source_id,person) or app_private.meeting_task_valid(rid,person)))\n$function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "c44d275bf1ca845215ac0181ac99b95e",
+      "name": "meeting_item_lock",
+      "schema": "app_private",
+      "arguments": "rid uuid, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_item_lock(rid uuid, person text)\n RETURNS void\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$begin\n perform 1 from app_private.meeting_items i join app_private.meeting_scope s on s.source_id=i.source_id\n join app_private.meeting_policy p on p.id=s.policy\n join app_private.workspace_actors wa on wa.actor=person and wa.workspace_id=p.workspace_id\n join app_private.meeting_reviewers r on r.actor=wa.actor\n join app_private.workspace_clients wc on wc.actor=person and wc.client=s.client\n where i.request_id=rid for share of s,p,wa,r,wc;\n perform 1 from app_private.meeting_task_grants where request_id=rid and actor=person for share;\n perform 1 from app_private.meeting_source_people sp join app_private.meeting_items i on i.source_id=sp.source_id where i.request_id=rid and sp.actor=person for share of sp;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "7d838171b3d491ca2993f81b74ef9211",
+      "name": "meeting_task_history",
+      "schema": "app_private",
+      "arguments": "rid uuid, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_task_history(rid uuid, person text)\n RETURNS jsonb\n LANGUAGE sql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n select coalesce(jsonb_agg(jsonb_build_object('actor',h.actor,'operation',h.operation,'created_at',h.created_at,'input',jsonb_build_object('note',e.safe_note))order by h.created_at),'[]')\n from app_private.meeting_task_grants g join app_private.meeting_task_events e on e.grant_id=g.id join app_private.meeting_history h on h.id=e.history_id\n where g.request_id=rid and g.actor=person and app_private.meeting_task_valid(rid,person)\n$function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "08d8e7c07ad526bbfb8b4435560f0ed6",
+      "name": "meeting_task_item",
+      "schema": "app_private",
+      "arguments": "rid uuid, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_task_item(rid uuid, person text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare g app_private.meeting_task_grants;i app_private.meeting_items;q public.requests;t public.tasks;p jsonb;e jsonb;\nbegin\n if not app_private.meeting_task_valid(rid,person)then raise exception 'item_context_denied'using errcode='42501';end if;\n select * into g from app_private.meeting_task_grants where request_id=rid and actor=person;\n select * into i from app_private.meeting_items where request_id=rid;\n select * into q from public.requests where id=rid;select * into t from public.tasks where id=q.task_id;p:=g.projection;e:=p->'evidence';\n return jsonb_build_object('id',rid,'revision',i.revision,'sourceRevision',g.source_revision,'taskOnly',true,'sharedCorrectionRequired',true,'projectionHash',g.projection_hash,\n 'sharedCorrection',(select ev.safe_note from app_private.meeting_task_events ev join app_private.meeting_history h on h.id=ev.history_id where ev.grant_id=g.id and h.operation='request_changes' order by h.created_at desc limit 1),\n 'title',p->>'title','due',p->'due','owner',p->'owner','state',q.state,'deferred',i.deferred,'reconciliationRequired',false,\n 'evidence',jsonb_build_object('key',g.commitment_key,'title',p->>'title','kind',e->>'kind','provenance','transcript','quote',e->>'quote','speaker',e->>'speaker','start',e->'start','end',e->'end','passage',e->'passage','suggestedResponsibility',e->'suggestedResponsibility','uncertainty',e->>'uncertainty'),\n 'task',case when t.id is null then null else jsonb_build_object('id',t.id,'executor',t.executor,'next_reviewer',t.next_reviewer,'work_status',t.work_status,'receipts',null)end,\n 'assignees',(select coalesce(jsonb_agg(jsonb_build_object('actor',wa.actor,'review',r.can_review)),'[]')from app_private.workspace_actors wa join app_private.meeting_reviewers r on r.actor=wa.actor where app_private.meeting_item_access(rid,wa.actor)));\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "a6bee4dfe34d38185cdbfae7b5ddfb60",
+      "name": "meeting_task_valid",
+      "schema": "app_private",
+      "arguments": "rid uuid, person text",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_task_valid(rid uuid, person text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n select exists(select 1 from app_private.meeting_task_grants g\n join app_private.meeting_items i on i.request_id=g.request_id\n join public.requests q on q.id=i.request_id\n join app_private.meetings m on m.source_id=i.source_id\n join public.intake_sources src on src.source_id=m.source_id\n join app_private.meeting_scope s on s.source_id=m.source_id\n join app_private.meeting_policy p on p.id=s.policy\n join app_private.workspace_actors wa on wa.actor=g.actor and wa.workspace_id=p.workspace_id\n join app_private.meeting_reviewers r on r.actor=wa.actor\n join app_private.workspace_clients wc on wc.actor=wa.actor and wc.client=s.client\n where g.request_id=rid and g.actor=person and g.active and s.active and p.active and wa.active and r.active and wc.active\n and g.client=s.client and g.client=q.client and g.source_id=i.source_id and g.commitment_key=i.commitment_key\n and g.source_revision=m.revision and g.source_revision=src.revision and g.source_revision=i.reviewed_revision\n and not m.source_review_required and g.item_revision=i.revision\n and g.evidence_hash=encode(extensions.digest(i.evidence::text,'sha256'),'hex')\n and g.projection_hash=encode(extensions.digest(g.projection::text,'sha256'),'hex'))\n$function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "64771873b5b13e01bc10335c20d0727b",
+      "name": "meeting_write_guard",
+      "schema": "app_private",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.meeting_write_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n if (tg_table_name='requests' and exists(select 1 from app_private.meeting_items where request_id=old.id))\n or (tg_table_name='tasks' and (to_jsonb(old)->>'meeting_action')::boolean) then\n  if tg_op='DELETE' or current_setting('atlas.meeting_write',true) is distinct from 'authorized' then\n   raise exception 'meeting_requires_scoped_transition' using errcode='42501'; end if;\n  perform app_private.meeting_actor();\n end if;\n if tg_op='DELETE' then return old; end if;return new;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "50e50dfa0d092829c91cd40b33f173da",
+      "name": "task_history_immutable",
+      "schema": "app_private",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.task_history_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$begin raise exception 'immutable_task_history' using errcode='42501';end $function$\n",
+      "securityDefiner": false
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "650593977678e421225f14d532978ff3",
+      "name": "workspace_actor",
+      "schema": "app_private",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION app_private.workspace_actor()\n RETURNS app_private.workspace_actors\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare a app_private.workspace_actors;\nbegin\n select * into a from app_private.workspace_actors where db_role=current_setting('role',true)::name and active for share;\n if not found then raise exception 'workspace_access_denied' using errcode='42501'; end if;\n return a;\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres",
+        "atlas_meeting_nat_web=X/postgres",
+        "atlas_meeting_rhys_web=X/postgres"
+      ],
+      "md5": "1ae8b11667143bf1a79ed569f11a0ed7",
+      "name": "meeting_capability",
+      "schema": "public",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION public.meeting_capability()\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare a app_private.workspace_actors:=app_private.meeting_actor();r app_private.meeting_reviewers;\nbegin select * into r from app_private.meeting_reviewers where actor=a.actor;return jsonb_build_object('actor',a.actor,'triage',r.can_triage,'review',r.can_review,'rhysActor',r.rhys_actor);end $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "md5": "7120c71c99b342ed7c31634de29633eb",
+      "name": "meeting_ingest",
+      "schema": "public",
+      "arguments": "action text, payload jsonb",
+      "definition": "CREATE OR REPLACE FUNCTION public.meeting_ingest(action text, payload jsonb DEFAULT '{}'::jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare p app_private.meeting_policy;m app_private.meetings;entry jsonb;source jsonb;c jsonb;sid text:=payload->>'id';rid uuid;\nbegin\n select * into p from app_private.meeting_policy where db_role=current_setting('role',true)::name and active for share;\n if not found then raise exception 'ingestion_capability_denied' using errcode='42501';end if;\n if action in ('scan_start','scan_fail','inventory') then\n  if payload->>'policy' is distinct from p.id or (payload->>'start')::timestamptz<p.starts_at or (payload->>'end')::timestamptz>clock_timestamp()+interval '1 day' then raise exception 'window_outside_policy' using errcode='42501';end if;\n  insert into app_private.meeting_scans(policy,starts_at,ends_at,status,ids,note)values(p.id,(payload->>'start')::timestamptz,(payload->>'end')::timestamptz,case action when 'scan_start' then 'scanning' when 'scan_fail' then 'failed' else 'covered' end,coalesce(payload->'meetings','[]'),payload->>'note')\n  on conflict(policy,starts_at,ends_at) do update set status=excluded.status,ids=excluded.ids,note=excluded.note,observed_at=clock_timestamp();\n  if action='inventory' then\n   for entry in select * from jsonb_array_elements(payload->'meetings') loop\n    if (entry->>'instant')::timestamptz < (payload->>'start')::timestamptz or (entry->>'instant')::timestamptz >= (payload->>'end')::timestamptz then raise exception 'meeting_outside_window';end if;\n    if (entry->>'live')::boolean then continue;end if;\n    insert into app_private.meetings(source_id,policy,title,instant,state,note)values(entry->>'id',p.id,entry->>'title',(entry->>'instant')::timestamptz,'awaiting_source','Awaiting transcript or provider summary')on conflict(source_id)do nothing;\n   end loop;\n  end if;return jsonb_build_object('ok',true);\n end if;\n select * into m from app_private.meetings where source_id=sid and policy=p.id for update;\n if not found then raise exception 'meeting_not_in_inventory';end if;\n if action='source_state' then return jsonb_build_object('revision',m.revision);end if;\n perform 1 from app_private.meeting_scope where source_id=sid for share;\n if not exists(select 1 from app_private.meeting_scope where source_id=sid and policy=p.id and active) then\n  update app_private.meetings set state='held',note='Source scope/release decision required' where source_id=sid;\n  return jsonb_build_object('settled',true,'held',true);\n end if;\n if action='capture' then\n  source:=payload->'source';\n  if m.revision is null and (sid='01M1XBMMKJZSV91JHJ5G1Z7WS7' or exists(select 1 from public.intake_sources where source_id=sid))then\n   update app_private.meetings set state='held',note='Existing accepted source lineage belongs to another intake lane; explicit correspondence decision required' where source_id=sid;\n   return jsonb_build_object('settled',true,'held',true);\n  end if;\n  if m.revision is distinct from payload->>'expected' then raise exception 'source_CAS_conflict' using errcode='PT409';end if;\n  if source->>'id' is distinct from sid or (source->>'live')::boolean or source->>'revision' !~ '^[a-f0-9]{64}$' then raise exception 'invalid_source';end if;\n  if m.revision=source->>'revision' then return jsonb_build_object('settled',m.extraction_revision=m.revision and m.state in ('ready','no_actions','held'));end if;\n  perform public.intake_source_capture(jsonb_build_object('source_id',sid,'revision',source->>'revision','raw',source,'source_path','content/calls/'||sid||'.md','expected_prior_revision',m.revision));\n  update app_private.meetings set revision=source->>'revision',state='awaiting_source',lease_token=null,lease_until=null,\n   source_review_required=exists(select 1 from app_private.meeting_items where source_id=sid),note='New source captured; extraction pending' where source_id=sid;\n  return jsonb_build_object('settled',false);\n end if;\n if action in ('waiting','source_fail') then\n  if m.revision is distinct from payload->>'revision' then raise exception 'stale_wait' using errcode='PT409';end if;\n  update app_private.meetings set state=case action when 'waiting' then 'awaiting_source' else 'failed' end,note=coalesce(payload->>'note','Awaiting transcript or summary') where source_id=sid;return '{}';\n end if;\n if m.revision is distinct from payload->>'revision' then raise exception 'obsolete_source' using errcode='PT409';end if;\n if action='claim' then\n  if m.lease_token is not null then\n   if m.lease_until<clock_timestamp() then update app_private.meetings set state='held',note='Interrupted extraction: unknown provider outcome. Operator reconciliation required.' where source_id=sid;end if;\n   return jsonb_build_object('held',true);\n  end if;\n  update app_private.meetings set state='processing',lease_token=extensions.gen_random_uuid(),lease_until=clock_timestamp()+interval '2 minutes' where source_id=sid returning * into m;\n  return jsonb_build_object('token',m.lease_token);\n end if;\n if m.lease_token is null or m.lease_token::text is distinct from payload->>'token' or m.lease_until<clock_timestamp() then raise exception 'lease_expired_or_stale' using errcode='PT409';end if;\n if action='fail' then update app_private.meetings set state='held',note=payload->>'note' where source_id=sid;return '{}';end if;\n if action<>'publish' or jsonb_typeof(payload->'items')<>'array' or jsonb_array_length(payload->'items')>100 then raise exception 'invalid_publication';end if;\n if jsonb_typeof(payload->'complete') is distinct from 'boolean' then raise exception 'invalid_completion_contract';end if;\n if payload->>'complete'='true' then\n  source:=public.intake_source_current(sid)->'raw';\n  if jsonb_typeof(source->'passages') is distinct from 'array' or jsonb_array_length(source->'passages')=0\n   or payload->'coverage'->>'completeTranscript' is distinct from 'true'\n   or payload->'coverage'->>'sourceRevision' is distinct from m.revision\n   or payload->'coverage'->>'passageCount' is distinct from jsonb_array_length(source->'passages')::text then raise exception 'complete_transcript_receipt_required';end if;\n end if;\n -- Initial candidates create canonical proposals. Reprocessing can NEVER overwrite them.\n if not m.source_review_required then\n  for c in select * from jsonb_array_elements(payload->'items')loop\n   rid:=app_private.meeting_add_item(sid,c,p.ingestion_actor);\n  end loop;\n end if;\n update app_private.meetings set pending=payload->'items',extraction_revision=m.revision,lease_token=null,lease_until=null,\n state=case when m.source_review_required then 'held' when jsonb_array_length(payload->'items')>0 then 'ready' when (payload->>'complete')::boolean then 'no_actions' else 'held' end,\n note=case when m.source_review_required then 'Source changed. Review correspondence before using new evidence.' else payload->>'note' end where source_id=sid;\n return jsonb_build_object('ok',true);\nend $function$\n",
+      "securityDefiner": true
+    },
+    {
+      "acl": [
+        "postgres=X/postgres",
+        "atlas_meeting_nat_web=X/postgres",
+        "atlas_meeting_rhys_web=X/postgres"
+      ],
+      "md5": "940060da2e26207b0b4c0795ca2b16f2",
+      "name": "meeting_queue",
+      "schema": "public",
+      "arguments": "action text, payload jsonb",
+      "definition": "CREATE OR REPLACE FUNCTION public.meeting_queue(action text DEFAULT 'list'::text, payload jsonb DEFAULT '{}'::jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare a app_private.workspace_actors;r app_private.meeting_reviewers;m app_private.meetings;i app_private.meeting_items;\n q public.requests;t public.tasks;rows jsonb:='[]';items jsonb;v jsonb;c jsonb;mapping jsonb;newq jsonb;rid uuid;\n partial boolean:=false; safe_assignment boolean:=false; grants_before uuid[]; shared_note text; hid uuid; g app_private.meeting_task_grants; safe_projection jsonb;\n prior app_private.meeting_history;opid uuid;result jsonb;target text;sid text:=payload->>'sourceId';note text:=btrim(coalesce(payload->>'note',''));\nbegin\n -- Same lock for source capture/publication and review: source cannot move during acceptance.\n if action<>'list' then select * into m from app_private.meetings where source_id=sid for update;end if;\n a:=app_private.meeting_actor();select * into r from app_private.meeting_reviewers where actor=a.actor and active for share;\n if action='list' then\n  for m in select mm.* from app_private.meetings mm where app_private.meeting_can_read(mm.source_id,a.actor) order by instant desc,source_id for update loop\n   perform 1 from app_private.meeting_scope s join app_private.meeting_policy p on p.id=s.policy join app_private.workspace_clients wc on wc.client=s.client and wc.actor=a.actor join app_private.meeting_source_people sp on sp.source_id=s.source_id and sp.actor=a.actor where s.source_id=m.source_id for share of s,p,wc,sp;\n   if not app_private.meeting_can_read(m.source_id,a.actor)then continue;end if;\n   if m.revision is distinct from (select revision from public.intake_sources where source_id=m.source_id)then m.state:='held';m.note:='Canonical source changed; intake reconciliation required';m.source_review_required:=true;m.pending:=null;end if;\n   select coalesce(jsonb_agg(jsonb_build_object('sharedCorrectionRequired',exists(select 1 from app_private.meeting_task_grants gg where gg.request_id=mi.request_id and app_private.meeting_task_valid(mi.request_id,gg.actor)),'assignees',(select coalesce(jsonb_agg(jsonb_build_object('actor',wa.actor,'review',mr.can_review)),'[]')from app_private.workspace_actors wa join app_private.meeting_reviewers mr on mr.actor=wa.actor where app_private.meeting_item_access(mi.request_id,wa.actor)),'id',mi.request_id,'revision',mi.revision,'title',rq.requested->>'title','due',rq.requested->'due','owner',rq.requested->'owner','state',rq.state,'deferred',mi.deferred,'evidence',mi.evidence,'sourceRevision',mi.reviewed_revision,'reconciliationRequired',(rq.state<>'declined' and coalesce(tt.work_status,'todo')<>'completed' and (m.source_review_required or (mi.reviewed_revision is distinct from m.revision and mi.continuity_revision is distinct from m.revision))),'task',to_jsonb(tt)) order by rq.created_at),'[]')into items\n   from app_private.meeting_items mi join public.requests rq on rq.id=mi.request_id left join public.tasks tt on tt.id=rq.task_id where mi.source_id=m.source_id;\n   rows:=rows||jsonb_build_array(jsonb_build_object('id',m.source_id,'title',m.title,'instant',m.instant,'state',m.state,'note',m.note,'revision',m.revision,'sourceChanged',m.source_review_required,'pending',case when m.source_review_required then m.pending else null end,'items',items,'assignees',(select coalesce(jsonb_agg(jsonb_build_object('actor',wa.actor,'review',mr.can_review)),'[]')from app_private.workspace_actors wa join app_private.meeting_reviewers mr on mr.actor=wa.actor where app_private.meeting_can_read(m.source_id,wa.actor))));\n  end loop;\n  -- Task-only meetings are constructed solely from the reviewed allowlist, never from m/pending/raw.\n  for m in select mm.* from app_private.meetings mm where not app_private.meeting_can_read(mm.source_id,a.actor)\n    and exists(select 1 from app_private.meeting_task_grants gg where gg.source_id=mm.source_id and gg.actor=a.actor)\n    order by instant desc,source_id for update loop\n   items:='[]';safe_projection:=null;\n   for g in select * from app_private.meeting_task_grants where source_id=m.source_id and actor=a.actor order by request_id loop\n    perform app_private.meeting_item_lock(g.request_id,a.actor);\n    perform 1 from public.intake_sources where source_id=m.source_id for share;\n    if app_private.meeting_task_valid(g.request_id,a.actor)then\n     items:=items||jsonb_build_array(app_private.meeting_task_item(g.request_id,a.actor));safe_projection:=g.projection;\n    end if;\n   end loop;\n   if jsonb_array_length(items)>0 then rows:=rows||jsonb_build_array(jsonb_build_object('id',m.source_id,'title',safe_projection->>'meetingTitle','clientLabel',safe_projection->>'clientLabel','instant',safe_projection->'instant','state','ready','note','Limited task context from a supervised full-transcript review. Later fulfilment is unverified.','revision',m.revision,'taskOnly',true,'sourceChanged',false,'pending',null,'items',items,'assignees','[]'::jsonb));end if;\n  end loop;\n  return jsonb_build_object('capability',public.meeting_capability(),'meetings',rows,'coverage',\n   (select coalesce(jsonb_agg(jsonb_build_object('start',s.starts_at,'end',s.ends_at,'status',s.status,'observedAt',s.observed_at,'note',s.note)),'[]')from app_private.meeting_scans s join app_private.meeting_policy p on p.id=s.policy where p.workspace_id=a.workspace_id and p.active and exists(select 1 from app_private.meetings mm where mm.policy=p.id and app_private.meeting_can_read(mm.source_id,a.actor))),\n   'coverageBoundary','Fireflies recorded meetings in approved windows. Missing recordings require an independent expected-meeting roster.');\n end if;\n rid:=case when payload->>'id' is null then null else (payload->>'id')::uuid end;\n if rid is not null then perform app_private.meeting_item_lock(rid,a.actor);end if;\n partial:=not app_private.meeting_can_read(sid,a.actor);\n if m.source_id is null or (partial and (action in('source_review','retain_original') or rid is null or not exists(select 1 from app_private.meeting_items where request_id=rid and source_id=sid) or not app_private.meeting_task_valid(rid,a.actor)))then raise exception 'meeting_scope_denied'using errcode='42501';end if;\n if not partial then\n\n -- Lock live policy/scope/client rows so a concurrent revocation linearizes with this action.\n perform 1 from app_private.meeting_scope s join app_private.meeting_policy p on p.id=s.policy join app_private.workspace_clients wc on wc.client=s.client and wc.actor=a.actor join app_private.meeting_source_people sp on sp.source_id=s.source_id and sp.actor=a.actor where s.source_id=sid for share of s,p,wc,sp;\n if not app_private.meeting_can_read(sid,a.actor) then raise exception 'meeting_scope_denied' using errcode='42501';end if;\n end if;\n perform 1 from public.intake_sources where source_id=sid for share;\n if m.revision is distinct from (select revision from public.intake_sources where source_id=sid) then raise exception 'canonical_source_changed_reconcile_first' using errcode='PT409';end if;\n if action='context' then\n  if partial then return jsonb_build_object('taskOnly',true,'label','Limited task context from a supervised full-transcript review','item',app_private.meeting_task_item(rid,a.actor),'history',app_private.meeting_task_history(rid,a.actor));end if;\n  return jsonb_build_object('source',public.intake_source_current(sid)->'raw','history',(select coalesce(jsonb_agg(to_jsonb(h) order by h.created_at),'[]')from app_private.meeting_history h where h.source_id=sid));\n end if;\n if not r.can_triage and action not in ('complete','review','request_changes') then raise exception 'triage_denied' using errcode='42501';end if;\n opid:=(payload->>'operationId')::uuid;if opid is null then raise exception 'operation_id_required';end if;\n select * into prior from app_private.meeting_history where actor=a.actor and operation_id=opid;\n if found then if prior.input is distinct from payload or prior.operation<>action then raise exception 'idempotency_conflict' using errcode='PT409';end if;if partial then if prior.request_id is distinct from rid then raise exception 'meeting_scope_denied'using errcode='42501';end if;return jsonb_build_object('ok',true,'replay',true,'item',app_private.meeting_task_item(rid,a.actor));end if;return prior.result;end if;\n perform set_config('atlas.meeting_write','authorized',true);\n if action='source_review' then\n  if payload->>'revision' is distinct from m.revision or not m.source_review_required or m.extraction_revision is distinct from m.revision then raise exception 'source_review_stale' using errcode='PT409';end if;\n  if length(note)<3 or jsonb_array_length(payload->'mapping')<>jsonb_array_length(m.pending) then raise exception 'full_correspondence_review_required';end if;\n  if (select count(distinct x->>'key')from jsonb_array_elements(payload->'mapping')x)<>jsonb_array_length(m.pending) then raise exception 'duplicate_mapping';end if;\n  if (select count(*)from jsonb_array_elements(payload->'mapping')x where x->>'requestId' is not null)<>(select count(distinct x->>'requestId')from jsonb_array_elements(payload->'mapping')x where x->>'requestId' is not null)then raise exception 'ambiguous_correspondence';end if;\n  for c in select * from jsonb_array_elements(m.pending)loop\n   select x into mapping from jsonb_array_elements(payload->'mapping')x where x->>'key'=c->>'key';if mapping is null then raise exception 'missing_mapping';end if;\n   if mapping->>'requestId' is null then\n    if exists(select 1 from app_private.meeting_keys where source_id=sid and commitment_key=c->>'key')then raise exception 'existing_commitment_must_be_mapped';end if;\n    rid:=app_private.meeting_add_item(sid,c,a.actor);\n   else\n    rid:=(mapping->>'requestId')::uuid;\n    if exists(select 1 from app_private.meeting_keys where source_id=sid and commitment_key=c->>'key' and request_id<>rid)then raise exception 'commitment_lineage_conflict';end if;\n    update app_private.meeting_items set evidence=c,reviewed_revision=m.revision,revision=revision+1 where request_id=rid and source_id=sid;\n    if not found then raise exception 'mapping_outside_source';end if;\n    insert into app_private.meeting_keys values(sid,c->>'key',rid)on conflict(source_id,commitment_key)do nothing;\n   end if;\n  end loop;\n  -- Unmatched reviewed work remains tracked with its original evidence; no resurrection/deletion.\n  update app_private.meetings set source_review_required=false,state='ready',note='Source correspondence reviewed; human task fields preserved' where source_id=sid;\n elsif action in ('edit','accept','defer','dismiss','complete','review','request_changes','retain_original') then\n  select * into i from app_private.meeting_items where request_id=(payload->>'id')::uuid and source_id=sid for update;\n  if not found then raise exception 'item_not_visible' using errcode='42501';end if;\n  select * into q from public.requests where id=i.request_id for update;\n  if i.revision is distinct from (payload->>'revision')::bigint then raise exception 'item_changed_refresh' using errcode='PT409';end if;\n  if action in ('edit','accept') and (m.source_review_required or (i.reviewed_revision is distinct from m.revision and i.continuity_revision is distinct from m.revision)) then raise exception 'source_review_required' using errcode='PT409';end if;\n  if q.state='declined' then raise exception 'dismissed_item_is_terminal' using errcode='PT409';end if;\n  -- Snapshot valid grants before any canonical mutation. A stale private/source revision cannot be revived.\n  perform 1 from app_private.meeting_task_grants where request_id=i.request_id for update;\n  select array_agg(gg.id) into grants_before from app_private.meeting_task_grants gg where gg.request_id=i.request_id and app_private.meeting_task_valid(i.request_id,gg.actor);\n  if partial and action not in('edit','accept','defer','dismiss','complete')then raise exception 'item_action_denied'using errcode='42501';end if;\n  if action in ('edit','accept') then\n   foreach target in array array[case when action='edit' and payload?'owner' then payload->>'owner' else q.requested->>'owner' end,case when payload?'executor'then payload->>'executor'else(select executor from public.tasks where id=q.task_id)end,case when payload?'reviewer'then payload->>'reviewer'else(select next_reviewer from public.tasks where id=q.task_id)end]loop\n    if target='atlas' and exists(select 1 from app_private.meeting_task_grants where request_id=i.request_id and active)then raise exception 'assignment_scope_denied'using errcode='42501';end if;\n    if target is not null and target<>'atlas' then\n     perform app_private.meeting_item_lock(i.request_id,target);\n     perform 1 from app_private.workspace_actors wa join app_private.meeting_reviewers mr on mr.actor=wa.actor join app_private.workspace_clients wc on wc.actor=wa.actor join app_private.meeting_scope ms on ms.client=wc.client join app_private.meeting_source_people sp on sp.source_id=ms.source_id and sp.actor=wa.actor where wa.actor=target and ms.source_id=sid for share of wa,mr,wc,sp;\n     if not app_private.meeting_item_access(i.request_id,target)then raise exception 'assignment_scope_denied' using errcode='42501';end if;\n    end if;\n   end loop;\n  end if;\n  if action='retain_original' then\n   if m.source_review_required or m.extraction_revision is distinct from m.revision or payload->>'sourceRevision' is distinct from m.revision then raise exception 'source_review_stale' using errcode='PT409';end if;\n   if i.reviewed_revision=m.revision or i.continuity_revision=m.revision then raise exception 'item_already_reconciled' using errcode='PT409';end if;\n   if length(note)<3 then raise exception 'original_obligation_reason_required';end if;\n   if q.task_id is not null and exists(select 1 from public.tasks where id=q.task_id and work_status='completed')then raise exception 'completed_item_is_terminal';end if;\n   -- A human confirms continuity, not new source support. Original evidence/revision remain intact.\n   update app_private.meeting_items set continuity_revision=m.revision where request_id=i.request_id;\n  elsif action='edit' then\n   if q.task_id is not null then select * into t from public.tasks where id=q.task_id for update;if t.work_status='completed'then raise exception 'completed_item_is_terminal';end if;end if;\n   newq:=q.requested;\n   if payload ? 'title' then if jsonb_typeof(payload->'title') is distinct from 'string' or length(btrim(payload->>'title')) not between 1 and 300 or payload->>'title'~'[[:cntrl:]]'then raise exception 'invalid_next_step';end if;newq:=jsonb_set(newq,'{title}',payload->'title');end if;\n   if payload ? 'due' then if jsonb_typeof(payload->'due') not in ('string','null') then raise exception 'invalid_due';end if;if payload->>'due' is not null then perform (payload->>'due')::date;if payload->>'due' !~ '^\\d{4}-\\d{2}-\\d{2}$'then raise exception 'invalid_due';end if;end if;newq:=jsonb_set(newq,'{due}',payload->'due');end if;\n   if payload ? 'owner' then target:=payload->>'owner';if target is not null and not app_private.meeting_item_access(i.request_id,target)then raise exception 'assignment_scope_denied' using errcode='42501';end if;newq:=jsonb_set(newq,'{owner}',payload->'owner');end if;\n   if q.task_id is not null and newq->>'owner' is null then raise exception 'task_owner_required';end if;\n   safe_assignment:=newq->'title' is not distinct from q.requested->'title' and newq->'due' is not distinct from q.requested->'due';\n   update public.requests set requested=newq,input_version=input_version+case when newq<>q.requested then 1 else 0 end where id=q.id;\n   if q.task_id is not null then\n    foreach target in array array[payload->>'executor',payload->>'reviewer']loop\n     if target is not null and target<>'atlas' and not app_private.meeting_item_access(i.request_id,target)then raise exception 'assignment_scope_denied' using errcode='42501';end if;\n    end loop;\n    if exists(select 1 from app_private.meeting_task_grants where request_id=i.request_id and active) and payload?'reviewer' and payload->>'reviewer' is distinct from r.rhys_actor then raise exception 'required_reviewer_change_denied'using errcode='42501';end if;\n    if t.next_reviewer is not null and payload?'reviewer' and payload->>'reviewer' is distinct from t.next_reviewer and not r.can_review then raise exception 'required_reviewer_change_denied' using errcode='42501';end if;\n    if payload->>'reviewer' is not null and not exists(select 1 from app_private.meeting_reviewers where actor=payload->>'reviewer' and can_review and active)then raise exception 'reviewer_denied';end if;\n    update public.tasks set title=newq->>'title',owner=newq->>'owner',due=(newq->>'due')::date,due_origin=case when payload ? 'due' then 'owner_override' else due_origin end,\n     executor=case when payload?'executor' then payload->>'executor' else executor end,next_reviewer=case when payload?'reviewer' then payload->>'reviewer' else next_reviewer end,\n     work_status=case when payload?'executor' and payload->>'executor' is distinct from executor then case when payload->>'executor'='atlas' then 'atlas_held' else 'todo' end else work_status end,task_revision=task_revision+1 where id=q.task_id;\n   end if;\n  elsif action='accept' then\n   if q.task_id is not null then result:=jsonb_build_object('taskId',q.task_id,'replay',true);\n   else\n    target:=q.requested->>'owner';if target is null or not app_private.meeting_item_access(i.request_id,target)then raise exception 'accountable_owner_required';end if;\n    if (i.evidence->>'kind'<>'promise' or i.evidence->>'uncertainty'<>'') and (payload->>'confirmed' is distinct from 'true' or payload->'confirmation'->>'itemRevision' is distinct from i.revision::text or payload->'confirmation'->>'sourceRevision' is distinct from m.revision) then raise exception 'uncertainty_confirmation_required';end if;\n    insert into public.tasks(title,client,lane,owner,origin,state,due,source_quote,created_by,meeting_action,executor,work_status,execution_gate)\n     values(q.requested->>'title',q.client,'business',target,'atlas_signal','queued',(q.requested->>'due')::date,i.evidence->>'quote',a.actor,true,target,'todo','review_required')returning * into t;\n    if exists(select 1 from app_private.meeting_task_grants where request_id=i.request_id and active) then\n     perform app_private.meeting_item_lock(i.request_id,r.rhys_actor);\n     if r.rhys_actor is null or not app_private.meeting_item_access(i.request_id,r.rhys_actor) or not exists(select 1 from app_private.meeting_reviewers where actor=r.rhys_actor and can_review and active)then raise exception 'required_reviewer_unavailable'using errcode='42501';end if;\n     update public.tasks set next_reviewer=r.rhys_actor where id=t.id;\n    end if;\n    update public.requests set state='approved',task_id=t.id where id=q.id;result:=jsonb_build_object('taskId',t.id);\n   end if;\n  elsif action='defer' then if q.task_id is not null then raise exception 'accepted_work_stays_tracked';end if;update app_private.meeting_items set deferred=not deferred where request_id=q.id;\n  elsif action='dismiss' then if q.task_id is not null then raise exception 'accepted_work_requires_completion';end if;if length(note)<3 then raise exception 'dismiss_reason_required';end if;update public.requests set state='declined' where id=q.id;\n  else\n   select * into t from public.tasks where id=q.task_id for update;\n   if t.id is null or t.work_status='completed' then raise exception 'no_open_task';end if;\n   if action in ('review','request_changes') then\n    if not r.can_review or t.next_reviewer is distinct from a.actor or t.work_status<>'needs_review' then raise exception 'review_denied'using errcode='42501';end if;\n   elsif t.executor is distinct from a.actor and t.owner is distinct from a.actor then raise exception 'completion_denied' using errcode='42501';end if;\n   if t.executor='atlas' then raise exception 'atlas_executor_unavailable' using errcode='42501';end if;\n   if length(note)<3 then raise exception 'completion_evidence_required';end if;\n   if action='request_changes' and grants_before is not null then\n    shared_note:=btrim(coalesce(payload->>'sharedNote',''));\n    if length(shared_note) not between 3 and 2000 then raise exception 'shareable_correction_required';end if;\n   end if;\n   -- Generic work completion is an attributed receipt, not an invented document or external delivery.\n   update public.tasks set work_status=case when action='request_changes' then 'todo' when action='complete' and next_reviewer is not null then 'needs_review' else 'completed' end,\n    receipts=jsonb_build_object('kind',case when action='request_changes' then 'review_changes_requested' else 'internal_work_completion' end,'actor',a.actor,'note',note,'at',clock_timestamp()),task_revision=task_revision+1 where id=t.id;\n  end if;\n  update app_private.meeting_items set revision=revision+1 where request_id=i.request_id;\n else raise exception 'unsupported_meeting_action';end if;\n if action in ('source_review','retain_original') then\n  update app_private.meetings mm set state=case when exists(select 1 from app_private.meeting_items mi join public.requests rq on rq.id=mi.request_id left join public.tasks tt on tt.id=rq.task_id where mi.source_id=sid and rq.state<>'declined' and coalesce(tt.work_status,'todo')<>'completed' and mi.reviewed_revision is distinct from mm.revision and mi.continuity_revision is distinct from mm.revision)then 'held'else 'ready'end,\n   note='Source correspondence reviewed. Unmatched outstanding items require explicit original-obligation review; prior evidence remains intact.' where mm.source_id=sid;\n end if;\n result:=coalesce(result,'{}')||jsonb_build_object('ok',true);\n insert into app_private.meeting_history(source_id,request_id,actor,operation,operation_id,input,result)values(sid,i.request_id,a.actor,action,opid,payload,result) returning id into hid;\n -- Nat-authored task edits are explicitly in the shared task workspace. A private full-source edit is NOT.\n -- Nontext lifecycle changes may advance the binding; canonical receipts/history are never copied.\n if i.request_id is not null and (partial or (action='edit' and safe_assignment) or action in('accept','defer','dismiss','complete','review') or (action='request_changes' and shared_note is not null))then\n  for g in select * from app_private.meeting_task_grants where id=any(grants_before)loop\n   safe_projection:=g.projection;\n   if action='edit' then\n    if partial then\n    if payload?'title'then safe_projection:=jsonb_set(safe_projection,'{title}',payload->'title');end if;\n    if payload?'due'then safe_projection:=jsonb_set(safe_projection,'{due}',payload->'due');end if;\n    end if;\n    if payload?'owner'then safe_projection:=jsonb_set(safe_projection,'{owner}',payload->'owner');end if;\n   end if;\n   update app_private.meeting_task_grants set item_revision=(select revision from app_private.meeting_items where request_id=i.request_id),projection=safe_projection,projection_hash=encode(extensions.digest(safe_projection::text,'sha256'),'hex')where id=g.id;\n   insert into app_private.meeting_task_events(history_id,grant_id,safe_note)values(hid,g.id,case when partial then left(note,2000)when action='request_changes'then shared_note else 'Workflow state updated; private notes are withheld.'end);\n  end loop;\n end if;\n if partial then return jsonb_build_object('ok',true,'item',app_private.meeting_task_item(rid,a.actor));end if;\n return result;\nexception when others then\n -- RPC errors can include user/provider text (casts, constraints). Do not expose it to any web caller.\n if sqlstate='42501'then raise exception 'Meeting permission denied.'using errcode='42501';\n elsif sqlstate='PT409'then raise exception 'Item or source changed. Refresh before continuing.'using errcode='PT409';\n else raise exception 'Review operation refused. Check the current item, assignment and required note.'using errcode='22023';end if;\nend $function$\n",
+      "securityDefiner": true
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "synthetic": true,
+  "checks": [
+    "Explicitly granted limited context works",
+    "No raw financial source/title/history leaks",
+    "Another actor cannot read same task document",
+    "Nat full source remains refused",
+    "Denied: document_denied",
+    "Denied: document_denied",
+    "Denied: document_unavailable",
+    "Denied: document_context_changed",
+    "Denied: document_context_changed",
+    "Denied: document_context_changed",
+    "Denied: document_context_changed",
+    "Denied: reviewer_unavailable",
+    "Denied: workspace_access_denied|document_denied",
+    "Denied: permission denied",
+    "Denied: permission denied",
+    "Generic completion cannot bypass exact document handoff",
+    "Denied: permission denied",
+    "Supplemental permitted history is usable",
+    "Denied: financial_output_denied",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale",
+    "Denied: evidence_denied_or_stale"
+  ]
+}

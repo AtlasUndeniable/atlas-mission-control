@@ -1,0 +1,40 @@
+{
+  "syntheticSchemaOnly": true,
+  "tableDefinitionsMatched": [
+    "app_private.meeting_history",
+    "app_private.meeting_items",
+    "app_private.meeting_keys",
+    "app_private.meeting_policy",
+    "app_private.meeting_reviewers",
+    "app_private.meeting_scans",
+    "app_private.meeting_scope",
+    "app_private.meeting_source_people",
+    "app_private.meeting_task_events",
+    "app_private.meeting_task_grants",
+    "app_private.meetings",
+    "app_private.workspace_actors",
+    "app_private.workspace_clients",
+    "public.intake_sources",
+    "public.requests",
+    "public.tasks",
+    "public.evidence_revisions",
+    "public.intake_source_versions",
+    "public.memory_note_versions",
+    "public.memory_notes",
+    "public.projects",
+    "public.request_source_bindings"
+  ],
+  "compared": [
+    "columns",
+    "constraints",
+    "preexisting triggers",
+    "ACL",
+    "RLS"
+  ],
+  "newAuthorityTriggersExcludedFromBaselineComparison": true,
+  "migrationSha256": "ced17bbcab58270f4265155577361fe9aac154b66b900f27ca4673ff5235c7f2",
+  "capturedConstraintFormattingDifferences": "Seven associative AND groupings across four tables; exact differences retained and manually inspected",
+  "cleanInstall": true,
+  "noDocumentsOrRpcGrantsSeeded": true,
+  "repeatRefused": true
+}

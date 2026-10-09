@@ -1,0 +1,6 @@
+{
+  "candidateBuild": "NsBlj8Vcbr-iUGXlZ0ZCj",
+  "installedBuildUnchanged": "v6ZtYwepyahA5KetEuE_2",
+  "buildCommand": "next build --webpack",
+  "productionInstalled": false
+}

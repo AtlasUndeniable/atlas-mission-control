@@ -40,15 +40,16 @@ export function validateExtraction(source:MeetingSource,raw:unknown):Proposal[]{
  });
 }
 export type Rpc=(action:string,payload:Record<string,unknown>)=>Promise<Record<string,unknown>>;
-export type CatalogEntry={id:string;title:string;instant:string;live:boolean;accountId?:string|null;organizer?:string|null;domains?:unknown[]};
+export type CatalogEntry={id:string;title:string;instant:string;live:boolean;accountId?:string|null;organizer?:string|null;domains?:unknown[];participants?:string[]};
 export class SourceReadError extends Error { reason:string;constructor(reason:string){super(reason);this.reason=reason} }
 export class GlobalIntakeError extends Error {}
 export interface Catalog {metadata?(id:string):Promise<CatalogEntry>;page(start:string,end:string,skip:number):Promise<CatalogEntry[]>;source(id:string):Promise<Record<string,unknown>>}
 /** Offset APIs have no snapshot token. Repeat the entire fixed window and require a stable ID set. */
 export async function enumerate(catalog:Catalog,start:string,end:string,maxPages=100,signal?:AbortSignal):Promise<CatalogEntry[]>{
+ const starts=Date.parse(start),ends=Date.parse(end);if(!Number.isFinite(starts)||!Number.isFinite(ends)||ends<=starts)throw Error('Invalid catalog window');
  async function scan(){const ids=new Map<string,CatalogEntry>();for(let page=0;page<maxPages;page++){
   if(signal?.aborted)throw Error('Catalog cancelled');const rows=await catalog.page(start,end,page*50);if(rows.length>50)throw Error('Invalid page size');
-  for(const m of rows){if(ids.has(m.id))throw Error('Catalog shifted during pagination');if(m.instant>=start&&m.instant<end)ids.set(m.id,m)}
+  for(const m of rows){if(ids.has(m.id))throw Error('Catalog shifted during pagination');const instant=Date.parse(m.instant);if(!Number.isFinite(instant))throw Error('Invalid catalog timestamp');if(instant>=starts&&instant<ends)ids.set(m.id,m)}
   if(rows.length<50)return [...ids.values()].sort((a,b)=>a.id.localeCompare(b.id));
  }throw Error('Catalog page cap reached; coverage incomplete')}
  const a=await scan(),b=await scan();if(hash(a)!==hash(b))throw Error('Catalog changed; rescan whole window');return b;

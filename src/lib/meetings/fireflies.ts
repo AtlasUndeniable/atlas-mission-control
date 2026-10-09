@@ -2,7 +2,8 @@ import {intakeJSON}from './intake-http.ts';
 import {GlobalIntakeError,SourceReadError,type Catalog,type CatalogEntry}from './intake-core.ts';
 export function sourceMetadata(raw:Record<string,any>){
  const emails=Array.isArray(raw.participants)?raw.participants:[];
- return {accountId:typeof raw.user?.user_id==='string'?raw.user.user_id:null,organizer:typeof raw.organizer_email==='string'?raw.organizer_email.toLowerCase():null,domains:emails.length&&emails.every((x:unknown)=>typeof x==='string'&&/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))?[...new Set(emails.map((x:string)=>x.split('@')[1].toLowerCase()))].sort():[]};
+ const participants=emails.length&&emails.every((x:unknown)=>typeof x==='string'&&/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x.trim()))?[...new Set(emails.map((x:string)=>x.trim().toLowerCase()))].sort():[];
+ return {accountId:typeof raw.user?.user_id==='string'?raw.user.user_id:null,organizer:typeof raw.organizer_email==='string'?raw.organizer_email.trim().toLowerCase():null,participants,domains:participants.length?[...new Set(participants.map((x:string)=>x.split('@')[1]))].sort():[]};
 }
 /** Metadata discovery only, before transcript access. Never summary/title-based permission. */
 export function firefliesCatalog(key:string,signal?:AbortSignal,accountId?:string,transport:typeof fetch=fetch):Catalog{

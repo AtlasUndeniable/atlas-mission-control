@@ -1,0 +1,122 @@
+{
+ "at": "2026-10-09T06:32:14.768Z",
+ "model": "claude-sonnet-5-5",
+ "thinking": "adaptive",
+ "effort": "medium",
+ "maxOutputTokens": 8000,
+ "dispatches": 2,
+ "brandKit": "/Users/atlasai/atlas-brain/brain/UNDENIABLE_BRAND_KIT.md",
+ "brandKitHash": "9f88eaa59e98c93909b5704b47cde1d915f287c039c1b3f5fcdba1426b0f2706",
+ "results": [
+  {
+   "recipe": "role-sop",
+   "workflow": "role_sop",
+   "attempt": "8f746c55-067f-4551-a567-07aa1aa60956",
+   "assetsSupplied": [
+    {
+     "id": "asset:client-work:northwind-pilates/check-in-change-brief.md",
+     "hash": "00e7634bfd64"
+    },
+    {
+     "id": "asset:operating-manual:business-operating-manual.md",
+     "hash": "79f4d6f8ded1"
+    },
+    {
+     "id": "asset:lead-magnets:the-scaling-sops-2026.md",
+     "hash": "b47d808eb607"
+    },
+    {
+     "id": "asset:frameworks:frameworks.md",
+     "hash": "f0cd76d7f7f8"
+    },
+    {
+     "id": "asset:playbooks:retention-playbook.md",
+     "hash": "c526e33cbd61"
+    }
+   ],
+   "assetCandidates": 5,
+   "assetsScanned": 6,
+   "promptCharacters": 8006,
+   "systemCharacters": 3918,
+   "costBound": {
+    "requestBytes": 12674,
+    "maxOutputTokens": 8000,
+    "micros": 105348
+   },
+   "usage": null,
+   "costUSD": null,
+   "contractAccepted": false,
+   "error": "provider_outcome_unresolved",
+   "diagnostics": [
+    {
+     "category": "http_error",
+     "httpStatus": 400,
+     "requestId": "req_011CfrCGFYNmL3YQAVWYdSig",
+     "providerErrorType": "invalid_request_error"
+    }
+   ],
+   "contentHash": null,
+   "contentCharacters": null
+  },
+  {
+   "recipe": "client-action-brief",
+   "workflow": "client_action_brief",
+   "attempt": "8b65de4f-375d-47c1-8878-1bafec95a19c",
+   "assetsSupplied": [
+    {
+     "id": "asset:client-work:northwind-pilates/check-in-change-brief.md",
+     "hash": "00e7634bfd64"
+    },
+    {
+     "id": "asset:operating-manual:business-operating-manual.md",
+     "hash": "79f4d6f8ded1"
+    },
+    {
+     "id": "asset:lead-magnets:the-scaling-sops-2026.md",
+     "hash": "b47d808eb607"
+    },
+    {
+     "id": "asset:frameworks:frameworks.md",
+     "hash": "f0cd76d7f7f8"
+    },
+    {
+     "id": "asset:playbooks:retention-playbook.md",
+     "hash": "c526e33cbd61"
+    }
+   ],
+   "assetCandidates": 5,
+   "assetsScanned": 6,
+   "promptCharacters": 8007,
+   "systemCharacters": 3918,
+   "costBound": {
+    "requestBytes": 12675,
+    "maxOutputTokens": 8000,
+    "micros": 105350
+   },
+   "usage": null,
+   "costUSD": null,
+   "contractAccepted": false,
+   "error": "provider_outcome_unresolved",
+   "diagnostics": [
+    {
+     "category": "http_error",
+     "httpStatus": 400,
+     "requestId": "req_011CfrCGHd9D14RHxGAX5SM8",
+     "providerErrorType": "invalid_request_error"
+    }
+   ],
+   "contentHash": null,
+   "contentCharacters": null
+  }
+ ],
+ "totalCostUSD": 0,
+ "note": "Synthetic task and fictional client content. Real provider dispatch. Not a client asset and not a delivery.",
+ "blocked": {
+  "cause": "provider_credit_balance",
+  "evidence": "evidence/live-drafting-blocked.md",
+  "billedTokens": 0,
+  "spendUSD": 0,
+  "diagnosticProbeRequestId": "req_011CfrCJDuhiW2a95KPcpL7X",
+  "note": "Both product dispatches returned HTTP 400 before inference. Request shape accepted; billing check failed. Live generation remains unverified."
+ }
+}

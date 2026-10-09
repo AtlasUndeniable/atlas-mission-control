@@ -1,0 +1,69 @@
+▲ Next.js 16.2.0 (webpack)
+
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+✓ Compiled successfully in 1413ms
+  Running TypeScript ...
+  Finished TypeScript in 2.1s ...
+  Collecting page data using 13 workers ...
+  Generating static pages using 13 workers (0/19) ...
+  Generating static pages using 13 workers (4/19) 
+  Generating static pages using 13 workers (9/19) 
+  Generating static pages using 13 workers (14/19) 
+✓ Generating static pages using 13 workers (19/19) in 105ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/activity
+├ ƒ /api/approvals
+├ ƒ /api/approvals/[id]
+├ ƒ /api/approvals/[id]/redraft
+├ ƒ /api/ask
+├ ƒ /api/board
+├ ƒ /api/board/meetings
+├ ƒ /api/board/meetings/document
+├ ƒ /api/briefing
+├ ƒ /api/exec/metrics
+├ ƒ /api/health
+├ ƒ /api/meeting-prep
+├ ƒ /api/monday
+├ ƒ /api/overview
+├ ƒ /api/pipelines
+├ ƒ /api/reaper
+├ ƒ /api/rhys-tasks
+├ ƒ /api/rhys-tasks/[id]/complete
+├ ƒ /api/rhys-tasks/[id]/draft-followup
+├ ƒ /api/rhys-tasks/[id]/reopen
+├ ƒ /api/rhys-tasks/[id]/send-draft
+├ ƒ /api/workspace-demo/artifacts/[id]
+├ ƒ /api/workspace-demo/capabilities
+├ ƒ /api/workspace-demo/connectors
+├ ƒ /api/workspace-demo/local-run
+├ ƒ /api/workspace-demo/sessions
+├ ƒ /api/workspace/approvals
+├ ƒ /api/workspace/artifacts
+├ ƒ /api/workspace/artifacts/[id]/file
+├ ƒ /api/workspace/audit-runs
+├ ƒ /api/workspace/audits
+├ ƒ /api/workspace/jobs
+├ ƒ /api/workspace/local-jobs
+├ ƒ /api/workspace/memory-maintenance
+├ ƒ /api/workspace/runs
+├ ƒ /board
+├ ƒ /exec
+├ ○ /pat
+├ ƒ /pilot/artifacts
+├ ƒ /pilot/artifacts/api/[operation]
+├ ○ /reaper
+├ ○ /workspace
+└ ƒ /workspace-demo
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

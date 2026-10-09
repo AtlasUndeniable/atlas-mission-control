@@ -1,0 +1,6 @@
+
+/Users/atlasai/atlas-astra-handoff-2026-09-10/implementation/task-linked-drafts-20260922/src/components/TaskWorkingPanel.tsx
+  11:75  warning  The ref value 'epoch.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'epoch.current' to a variable inside the effect, and use that variable in the cleanup function  react-hooks/exhaustive-deps
+
+✖ 1 problem (0 errors, 1 warning)
+

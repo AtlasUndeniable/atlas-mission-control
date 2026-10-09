@@ -45,3 +45,6 @@ next-env.d.ts
 # design sprint artifacts (local reference only)
 ATLAS-UI-SOUL.md.pdf
 DESIGN-SPRINT-CONTINUATION.md
+verification/private/
+verification/browser-profile/
+verification/private-*/

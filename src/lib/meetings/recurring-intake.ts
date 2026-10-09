@@ -1,7 +1,7 @@
 /** No production provider default, scheduling side effects or downstream integrations. */
 import {sourceMetadata}from './fireflies.ts';
 import {enumerate,normalize,validateExtraction,hash,SourceReadError,GlobalIntakeError,type Catalog,type MeetingSource,type Rpc} from './intake-core.ts';
-export type Extractor={configurationHash:string;invoke:(source:MeetingSource,attempt:string,signal:AbortSignal)=>Promise<unknown>};
+export type Extractor={configurationHash:string;preflight?:(source:MeetingSource)=>void;requestBytes?:(source:MeetingSource)=>number;invoke:(source:MeetingSource,attempt:string,signal:AbortSignal)=>Promise<unknown>};
 export type Sweep={enabled:boolean;start:string;end:string;maxSources:number;maxPages:number;timeoutMs:number;run?:string;signal?:AbortSignal;discoveryOnly?:boolean};
 export function validatedExtraction(source:MeetingSource,raw:unknown){
  const items=validateExtraction(source,raw);
@@ -33,14 +33,23 @@ export async function processMeeting(catalog:Catalog,rpc:Rpc,extractor:Extractor
     if(eligible.allowed===true){
      let rawSource;try{rawSource=await catalog.source(row.id)}catch(e){if(e instanceof GlobalIntakeError)throw e;throw new SourceReadError('read_unavailable')}
      if(!rawSource)throw new SourceReadError('read_unavailable');
-     if(row.accountId!==undefined&&hash(sourceMetadata(rawSource))!==hash({accountId:row.accountId,organizer:row.organizer,domains:row.domains}))throw new SourceReadError('metadata_changed');
+     if(row.accountId!==undefined){
+      const metadata=sourceMetadata(rawSource);
+      // Legacy domain-only rows compare their original fields. Participant policies
+      // require nonempty server metadata and compare exact identities before capture.
+      const {participants,...legacy}=metadata;
+      if(hash(row.participants===undefined?legacy:metadata)!==hash({accountId:row.accountId,organizer:row.organizer,...(row.participants===undefined?{}:{participants:row.participants}),domains:row.domains}))throw new SourceReadError('metadata_changed');
+     }
      let source;try{source=normalize(rawSource)}catch{throw new SourceReadError('transcript_incomplete')}
      if(options.signal?.aborted)throw Error('cancelled_before_capture');
      if(source.id!==row.id||source.live||Date.parse(source.instant)!==Date.parse(row.instant))throw new SourceReadError('metadata_changed');
      const captured=await rpc('capture',{id:row.id,source,expected:eligible.revision??null,authority:eligible.authority});
      if(!source.passages.length)throw new SourceReadError('transcript_incomplete');
      if(captured.held!==true&&source.passages.length){
-      const reserved=await rpc('reserve',{id:row.id,revision:source.revision,configurationHash:extractor.configurationHash,...(reprocessId?{reprocessId}:{})});
+      // Deterministic complete-source envelope checks and the byte-floor cost bound before any allowance or dispatch.
+      let requestBytes:number|undefined;
+      try{extractor.preflight?.(source);requestBytes=extractor.requestBytes?.(source)}catch{throw new SourceReadError('extraction_input_incomplete')}
+      const reserved=await rpc('reserve',{id:row.id,revision:source.revision,configurationHash:extractor.configurationHash,...(requestBytes===undefined?{}:{requestBytes}),...(reprocessId?{reprocessId}:{})});
       if(reserved.attempt)attempt=String(reserved.attempt);
       if(reserved.dispatch===true&&attempt){
        const bound=attempt;const controller=new AbortController();
@@ -55,7 +64,7 @@ export async function processMeeting(catalog:Catalog,rpc:Rpc,extractor:Extractor
         if(options.signal?.aborted){await rpc('cancel',{attempt:bound});throw Error('cancelled');}
         let items;try{items=validatedExtraction(source,raw)}catch{await rpc('invalid',{attempt:bound});throw Error('invalid_extraction');}
         await rpc('record',{attempt:bound,response:raw,items});await rpc('publish',{attempt:bound});
-       }catch{await rpc(options.signal?.aborted?'cancel':'unknown',{attempt:bound});}
+       }catch(error){await rpc(options.signal?.aborted?'cancel':error instanceof Error&&error.message==='provider_response_incomplete'?'invalid':'unknown',{attempt:bound});}
        finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}
       }else if(reserved.state==='recorded'&&attempt){await rpc('publish',{attempt});}
      }
@@ -121,21 +130,28 @@ export async function sweep(catalog:Catalog,rpc:Rpc,extractor:Extractor,options:
  return {run:id,state:options.signal?.aborted?'cancelled':cursor<rows.length?'incomplete':'finished',cursor};
 }
 /** Injectable scheduler. Production binding is deliberately absent; no module-load work. */
-export async function recurring(catalog:Catalog,rpc:Rpc,extractor:Extractor,config:{enabled:boolean;startsAt:string;endsAt:string;intervalSeconds:number;lookbackDays:number;maxPages:number;maxSources:number;timeoutMs:number},signal:AbortSignal){
+export async function recurring(catalog:Catalog,rpc:Rpc,extractor:Extractor,config:{enabled:boolean;startsAt:string;endsAt:string|null;intervalSeconds:number;lookbackDays:number;maxPages:number;maxSources:number;timeoutMs:number},signal:AbortSignal){
  if(!config.enabled)throw Error('collector_disabled');
- if(!Number.isInteger(config.intervalSeconds)||config.intervalSeconds<60||config.intervalSeconds>86400||!Number.isInteger(config.lookbackDays)||config.lookbackDays<1||config.lookbackDays>30||!(Date.parse(config.endsAt)>Date.parse(config.startsAt)))throw Error('schedule_invalid');
- while(!signal.aborted&&Date.now()<Date.parse(config.endsAt)){
+ if(!Number.isInteger(config.intervalSeconds)||config.intervalSeconds<60||config.intervalSeconds>86400||!Number.isInteger(config.lookbackDays)||config.lookbackDays<1||config.lookbackDays>30||(config.endsAt!==null&&!(Date.parse(config.endsAt)>Date.parse(config.startsAt))))throw Error('schedule_invalid');
+ while(!signal.aborted&&(config.endsAt===null||Date.now()<Date.parse(config.endsAt))){
   if(Date.now()>=Date.parse(config.startsAt))await intakeTick(catalog,rpc,extractor,config,signal);
   if(!signal.aborted)await new Promise<void>(resolve=>{const stop=()=>{clearTimeout(timer);signal.removeEventListener('abort',stop);resolve()};const timer=setTimeout(stop,config.intervalSeconds*1000);signal.addEventListener('abort',stop,{once:true})});
  }
 }
 
 /** One launchd tick. Checkpoints and daily sweep due time are server-owned across restarts. */
-export async function intakeTick(catalog:Catalog,rpc:Rpc,extractor:Extractor,config:{startsAt:string;endsAt:string;lookbackDays:number;maxPages:number;maxSources:number;timeoutMs:number},signal:AbortSignal,now=Date.now()){
+export async function intakeTick(catalog:Catalog,rpc:Rpc,extractor:Extractor,config:{startsAt:string;endsAt:string|null;lookbackDays:number;maxPages:number;maxSources:number;timeoutMs:number},signal:AbortSignal,now=Date.now()){
  if(!Number.isInteger(config.lookbackDays)||config.lookbackDays<1||config.lookbackDays>30)throw Error('invalid_lookback');
- if(now<Date.parse(config.startsAt)||now>=Date.parse(config.endsAt))throw Error('outside_operating_period');
- const pending=await rpc('pending_run',{}),end=new Date(Math.min(now,Date.parse(config.endsAt))).toISOString();
- const start=pending.fullSweepDue===true?new Date(config.startsAt).toISOString():new Date(Math.max(Date.parse(config.startsAt),now-config.lookbackDays*86400000)).toISOString();
+ if(!Number.isFinite(Date.parse(config.startsAt))||config.endsAt!==null&&!Number.isFinite(Date.parse(config.endsAt)))throw Error('invalid_operating_period');
+ if(now<Date.parse(config.startsAt)||(config.endsAt!==null&&now>=Date.parse(config.endsAt)))throw Error('outside_operating_period');
+ const pending=await rpc('pending_run',{}),end=new Date(Math.min(now,config.endsAt===null?Infinity:Date.parse(config.endsAt))).toISOString();
+ const start=new Date(Math.max(Date.parse(config.startsAt),now-config.lookbackDays*86400000)).toISOString();
  if(pending.coalesced!==true)throw Error('coalesced_operational_schema_required');
- return sweep(catalog,rpc,extractor,{enabled:true,start,end,...config,signal});
+ // Fresh arrivals always get a scan, even if an old audit slice is unavailable.
+ const result=await sweep(catalog,rpc,extractor,{enabled:true,start,end,...config,signal});
+ if(pending.auditStart&&pending.auditEnd&&!signal.aborted){
+  const audit=await sweep(catalog,rpc,extractor,{enabled:true,start:String(pending.auditStart),end:String(pending.auditEnd),...config,maxSources:0,discoveryOnly:true,signal});
+  return {...result,audit};
+ }
+ return result;
 }

@@ -1,0 +1,140 @@
+[
+  {
+    "relation": "public.requests",
+    "field": "constraints",
+    "local": [
+      "CHECK (((client IS NULL) OR ((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120) AND (client !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((length(btrim(idempotency_key)) >= 8) AND (length(btrim(idempotency_key)) <= 200) AND (idempotency_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+      "CHECK (((origin_ref IS NULL) OR (jsonb_typeof(origin_ref) = 'object'::text)))",
+      "CHECK (((source_id IS NULL) OR ((length(btrim(source_id)) >= 1) AND (length(btrim(source_id)) <= 200) AND (source_id !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((state <> 'approved'::text) OR (task_id IS NOT NULL)))",
+      "CHECK (((task_id IS NULL) OR (state = 'approved'::text)))",
+      "CHECK ((array_length(permitted_audience, 1) >= 1))",
+      "CHECK ((input_hash ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((input_version >= 1))",
+      "CHECK ((source_type = ANY (ARRAY['web_form'::text, 'call'::text, 'slack_message'::text, 'operator_note'::text])))",
+      "CHECK ((state = ANY (ARRAY['pending_approval'::text, 'approved'::text, 'declined'::text])))",
+      "CHECK (app_private.is_person_key(requested_by))",
+      "FOREIGN KEY (project_key) REFERENCES projects(key)",
+      "FOREIGN KEY (requester_role) REFERENCES roles(key)",
+      "FOREIGN KEY (task_id) REFERENCES tasks(id)",
+      "PRIMARY KEY (id)",
+      "UNIQUE (adapter, idempotency_key)",
+      "UNIQUE (task_id)"
+    ],
+    "captured": [
+      "CHECK ((((length(btrim(idempotency_key)) >= 8) AND (length(btrim(idempotency_key)) <= 200)) AND (idempotency_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+      "CHECK (((client IS NULL) OR (((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120)) AND (client !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((origin_ref IS NULL) OR (jsonb_typeof(origin_ref) = 'object'::text)))",
+      "CHECK (((source_id IS NULL) OR (((length(btrim(source_id)) >= 1) AND (length(btrim(source_id)) <= 200)) AND (source_id !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((state <> 'approved'::text) OR (task_id IS NOT NULL)))",
+      "CHECK (((task_id IS NULL) OR (state = 'approved'::text)))",
+      "CHECK ((array_length(permitted_audience, 1) >= 1))",
+      "CHECK ((input_hash ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((input_version >= 1))",
+      "CHECK ((source_type = ANY (ARRAY['web_form'::text, 'call'::text, 'slack_message'::text, 'operator_note'::text])))",
+      "CHECK ((state = ANY (ARRAY['pending_approval'::text, 'approved'::text, 'declined'::text])))",
+      "CHECK (app_private.is_person_key(requested_by))",
+      "FOREIGN KEY (project_key) REFERENCES projects(key)",
+      "FOREIGN KEY (requester_role) REFERENCES roles(key)",
+      "FOREIGN KEY (task_id) REFERENCES tasks(id)",
+      "PRIMARY KEY (id)",
+      "UNIQUE (adapter, idempotency_key)",
+      "UNIQUE (task_id)"
+    ]
+  },
+  {
+    "relation": "public.tasks",
+    "field": "constraints",
+    "local": [
+      "CHECK (((client IS NULL) OR ((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120) AND (client !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((declined_reason IS NULL) OR ((length(btrim(declined_reason)) >= 1) AND (length(btrim(declined_reason)) <= 1000))))",
+      "CHECK (((declined_reason IS NULL) OR (state = 'declined'::text)))",
+      "CHECK (((length(btrim(title)) >= 1) AND (length(btrim(title)) <= 300) AND (title !~ '[[:cntrl:]]'::text)))",
+      "CHECK (((receipts IS NULL) OR (jsonb_typeof(receipts) = 'object'::text)))",
+      "CHECK (((sent_back_reason IS NULL) OR ((length(btrim(sent_back_reason)) >= 1) AND (length(btrim(sent_back_reason)) <= 1000))))",
+      "CHECK (((sent_back_reason IS NULL) OR (state = 'sent_back'::text)))",
+      "CHECK (((source_quote IS NULL) OR ((length(source_quote) >= 1) AND (length(source_quote) <= 2000))))",
+      "CHECK (((state <> 'declined'::text) OR (declined_reason IS NOT NULL)))",
+      "CHECK (((state <> 'delivered'::text) OR (receipts IS NOT NULL)))",
+      "CHECK (((work_status IS NULL) OR (work_status = ANY (ARRAY['todo'::text, 'needs_review'::text, 'completed'::text, 'atlas_held'::text]))))",
+      "CHECK ((due_origin = ANY (ARRAY['original'::text, 'owner_override'::text])))",
+      "CHECK ((execution_gate = ANY (ARRAY['ready'::text, 'review_required'::text, 'sent_back'::text, 'declined'::text])))",
+      "CHECK ((kind = ANY (ARRAY['doc'::text, 'audit'::text, 'generic'::text])))",
+      "CHECK ((lane = ANY (ARRAY['business'::text, 'engineering'::text])))",
+      "CHECK ((origin = ANY (ARRAY['slack_request'::text, 'atlas_signal'::text, 'operator'::text])))",
+      "CHECK ((state = ANY (ARRAY['queued'::text, 'needs_approval'::text, 'approved'::text, 'in_build'::text, 'delivered'::text, 'declined'::text, 'sent_back'::text])))",
+      "CHECK (app_private.is_person_key(created_by))",
+      "CHECK (app_private.is_person_key(owner))",
+      "PRIMARY KEY (id)"
+    ],
+    "captured": [
+      "CHECK ((((length(btrim(title)) >= 1) AND (length(btrim(title)) <= 300)) AND (title !~ '[[:cntrl:]]'::text)))",
+      "CHECK (((client IS NULL) OR (((length(btrim(client)) >= 1) AND (length(btrim(client)) <= 120)) AND (client !~ '[[:cntrl:]]'::text))))",
+      "CHECK (((declined_reason IS NULL) OR ((length(btrim(declined_reason)) >= 1) AND (length(btrim(declined_reason)) <= 1000))))",
+      "CHECK (((declined_reason IS NULL) OR (state = 'declined'::text)))",
+      "CHECK (((receipts IS NULL) OR (jsonb_typeof(receipts) = 'object'::text)))",
+      "CHECK (((sent_back_reason IS NULL) OR ((length(btrim(sent_back_reason)) >= 1) AND (length(btrim(sent_back_reason)) <= 1000))))",
+      "CHECK (((sent_back_reason IS NULL) OR (state = 'sent_back'::text)))",
+      "CHECK (((source_quote IS NULL) OR ((length(source_quote) >= 1) AND (length(source_quote) <= 2000))))",
+      "CHECK (((state <> 'declined'::text) OR (declined_reason IS NOT NULL)))",
+      "CHECK (((state <> 'delivered'::text) OR (receipts IS NOT NULL)))",
+      "CHECK (((work_status IS NULL) OR (work_status = ANY (ARRAY['todo'::text, 'needs_review'::text, 'completed'::text, 'atlas_held'::text]))))",
+      "CHECK ((due_origin = ANY (ARRAY['original'::text, 'owner_override'::text])))",
+      "CHECK ((execution_gate = ANY (ARRAY['ready'::text, 'review_required'::text, 'sent_back'::text, 'declined'::text])))",
+      "CHECK ((kind = ANY (ARRAY['doc'::text, 'audit'::text, 'generic'::text])))",
+      "CHECK ((lane = ANY (ARRAY['business'::text, 'engineering'::text])))",
+      "CHECK ((origin = ANY (ARRAY['slack_request'::text, 'atlas_signal'::text, 'operator'::text])))",
+      "CHECK ((state = ANY (ARRAY['queued'::text, 'needs_approval'::text, 'approved'::text, 'in_build'::text, 'delivered'::text, 'declined'::text, 'sent_back'::text])))",
+      "CHECK (app_private.is_person_key(created_by))",
+      "CHECK (app_private.is_person_key(owner))",
+      "PRIMARY KEY (id)"
+    ]
+  },
+  {
+    "relation": "public.evidence_revisions",
+    "field": "constraints",
+    "local": [
+      "CHECK (((length(btrim(note)) >= 1) AND (length(btrim(note)) <= 500)))",
+      "CHECK (((length(btrim(ref)) >= 1) AND (length(btrim(ref)) <= 200) AND (ref !~ '[[:cntrl:]]'::text)))",
+      "CHECK ((revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((scope = ANY (ARRAY['call_source'::text, 'identity_ruling'::text])))",
+      "PRIMARY KEY (scope, ref)"
+    ],
+    "captured": [
+      "CHECK ((((length(btrim(ref)) >= 1) AND (length(btrim(ref)) <= 200)) AND (ref !~ '[[:cntrl:]]'::text)))",
+      "CHECK (((length(btrim(note)) >= 1) AND (length(btrim(note)) <= 500)))",
+      "CHECK ((revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((scope = ANY (ARRAY['call_source'::text, 'identity_ruling'::text])))",
+      "PRIMARY KEY (scope, ref)"
+    ]
+  },
+  {
+    "relation": "public.request_source_bindings",
+    "field": "constraints",
+    "local": [
+      "CHECK (((length(btrim(commitment_key)) >= 8) AND (length(btrim(commitment_key)) <= 200) AND (commitment_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+      "CHECK (((source_anchor IS NULL) OR (jsonb_typeof(source_anchor) = 'object'::text)))",
+      "CHECK ((binding_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((bound_input_hash ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((bound_input_version >= 1))",
+      "CHECK ((ruling_revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((source_revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK (app_private.is_person_key(bound_by))",
+      "FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE",
+      "PRIMARY KEY (request_id)"
+    ],
+    "captured": [
+      "CHECK ((((length(btrim(commitment_key)) >= 8) AND (length(btrim(commitment_key)) <= 200)) AND (commitment_key ~ '^[A-Za-z0-9_.:-]+$'::text)))",
+      "CHECK (((source_anchor IS NULL) OR (jsonb_typeof(source_anchor) = 'object'::text)))",
+      "CHECK ((binding_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((bound_input_hash ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((bound_input_version >= 1))",
+      "CHECK ((ruling_revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK ((source_revision ~ '^[0-9a-f]{64}$'::text))",
+      "CHECK (app_private.is_person_key(bound_by))",
+      "FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE",
+      "PRIMARY KEY (request_id)"
+    ]
+  }
+]

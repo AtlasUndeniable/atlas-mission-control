@@ -1,0 +1,10 @@
+{
+  "migrations/022_task_documents.sql": "ced17bbcab58270f4265155577361fe9aac154b66b900f27ca4673ff5235c7f2",
+  "src/components/MeetingQueue.tsx": "ff200d3f78a4f25f3ab32c003d7e794bcaf5931f7ae74577b4f05cf354a70702",
+  "src/components/TaskWorkingPanel.tsx": "f0bf5ba5a3e387b2cbcfdf2972dc857710fa26955b85b40a5bf444095ef8239e",
+  "src/components/TaskWorkingPanel.module.css": "c232e85c0d50b86491727c2848490cab9ea986247146af3689d8805f423c857e",
+  "src/app/api/board/meetings/document/route.ts": "1126b44e53e3695e837249dd6d2c3807ffe2d7b8fc1927afeb76f2cc9a3f4750",
+  "src/lib/meetings/document-runtime.ts": "994ab4fb71eecb0e00ef96f4b431b3b489fcc53d302137633acaf83a158e4d3f",
+  "src/lib/task-document-codec.ts": "c6615a692b6c08a87ce6927c7ce1fd771a142768f1902bfff475f1becd559a70",
+  "src/lib/task-document-transport.ts": "591613d53ad60a2a8f430fb8e8d57c8c66b58e4587f49003e7884e79c84f4d65"
+}

@@ -1,0 +1,33 @@
+PASS Accepted canonical task opens explicit working context
+Screenshot 01-ready { x: 379.5, y: 1960.46875, width: 327.5, height: 575.171875 }
+PASS Built app generates v1 with synthetic provider
+PASS Generation produces draft, not canonical completion
+PASS v1 exact bytes/hash verified
+Screenshot 02-v1 { x: 379.5, y: 1960.46875, width: 327.5, height: 2378.6875 }
+PASS Generated permitted content excludes private financial source
+PASS Duplicate build reuses publication without provider reinvocation
+PASS Generated draft leaves canonical task todo
+PASS Exact v1 handed to required reviewer
+PASS Canonical meeting task reflects reviewer handoff
+PASS Nat cannot accept her own handed-off work
+PASS Reviewer substantive correction recorded
+PASS v1 retained while correction opens generation revision2
+Screenshot 03-correction { x: 379.5, y: 1960.46875, width: 327.5, height: 2159.296875 }
+PASS Canonical correction returns task to executor
+PASS Corrected v2 generated
+PASS Substantive correction changes the procedure, not just a feedback appendix
+Screenshot 04-v2 { x: 379.5, y: 1960.46875, width: 327.5, height: 2562.25 }
+Screenshot 05-v2-mobile { x: 16, y: 2105.984375, width: 358, height: 2315.296875 }
+PASS v1 bytes remain intact after v2
+PASS Exactly two invocation reservations for v1/v2
+PASS Version mutation rejected by immutable trigger
+PASS Revocation blocks old-version output (transaction rolled back after test)
+PASS v2 exact reviewer handoff works
+Screenshot 06-reviewer-handoff { x: 727, y: 639.09375, width: 327.5, height: 2562.25 }
+PASS Lost handoff response can replay without a second canonical transition
+PASS Required reviewer accepts exact v2
+PASS Truthful internal completion follows reviewer decision only
+PASS Internal completion never fabricates external delivered state
+PASS Status, revision, handoff and acceptance never resend or reinvoke generation
+PASS Both immutable versions remain accessible to current permitted audience
+Screenshot 07-accepted { x: 1074.5, y: 953.6875, width: 327.5, height: 2285.859375 }

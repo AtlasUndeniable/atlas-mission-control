@@ -1,0 +1,7 @@
+PASS Recorded response survives database/PostgREST/app restart
+PASS Built route reconciles retained response after restart
+PASS Recovery makes no second provider call
+PASS Recovered result is a draft, not completion
+PASS Cancelled/unknown history survives restart
+PASS Revoke/restore increments retained authorization epochs
+PASS Regrant cannot revive output under old authority fingerprint
