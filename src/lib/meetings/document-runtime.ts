@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {WorkspaceRefusal} from '../workspace-authority.ts';
 import {documentTransport,documentPrompt,decodeDocumentResponse,renderDocument,type DocumentConfig,type DocumentEntry,type DocumentPacket} from '../task-document-codec.ts';
 import {atlasAssetRoots,searchTaskAssets,readReleasedAsset,assetTerms,ASSET_LIMITS,type AssetRoot,type AssetScope} from '../task-asset-search.ts';
+import {assertCanonicalBrain,assertPermittedBrandKit} from '../task-asset-boundary.ts';
 import {readBrandRules,brandSystemPrompt} from '../task-brand-rules.ts';
 import {anthropicDocumentTransport,anthropicDocumentKey,anthropicDocumentConfigurationHash,type AnthropicDocumentConfig,type DocumentCostBound,type DocumentUsage,type DocumentDiagnostic} from '../task-document-anthropic.ts';
 
@@ -24,7 +25,13 @@ async function rpc(url:string,key:string|undefined,token:string,name:string,body
  * and a root is never retrievable because it happens to exist on disk.
  */
 export type AssetRelease={decision:string;sharedRoots:string[];clientDirectories:string[]};
-/** Where this machine keeps the brain and the key file. Runtime placement, not authority. */
+/**
+ * Where this machine keeps the brain and the key file. Runtime placement, not authority —
+ * and `assetBrain`/`brandKit` are assertions rather than selectors: each must match the
+ * canonical value in task-asset-boundary.ts or the boundary refuses. The key file is the
+ * one path that is deliberately outside the brain, because a credential does not belong in
+ * retrievable content.
+ */
 export type DocumentRuntimePaths={assetBrain:string;brandKit:string;keyFile?:string};
 
 export function assetRelease(raw:unknown):AssetRelease{
@@ -103,6 +110,10 @@ export async function documentModel(config:DocumentConfig&Partial<DocumentRuntim
  if(config.mode!=='live')throw Error('anthropic_direct_requires_live_mode');
  if(process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION!=='reviewed')throw Error('live_staff_transport_disabled');
  if(!config.brandKit)throw Error('brand_kit_path_required');
+ // Both filesystem assertions happen here, before the key file is read and before any
+ // provider contact, so a misconfigured root fails the attempt rather than widening it.
+ assertCanonicalBrain(config.assetBrain);
+ assertPermittedBrandKit(config.brandKit);
  const binding:AnthropicDocumentConfig={
   provider:'anthropic-direct',model:config.model,
   disclosureDecision:String((config as {disclosureDecision?:unknown}).disclosureDecision||''),
@@ -155,8 +166,7 @@ export async function buildTaskDocument(principal:string,taskId:string,payload:{
  let packet:DocumentPacket=reserved.packet,digest='';
  try{
   const release=assetRelease(reserved.packet?.assetRelease);
-  if(!config.assetBrain)throw Error('asset_brain_path_required');
-  const assets=await taskAssetEntries(release,reserved.packet,atlasAssetRoots(config.assetBrain));
+  const assets=await taskAssetEntries(release,reserved.packet,atlasAssetRoots(assertCanonicalBrain(config.assetBrain)));
   packet={...reserved.packet,entries:[...reserved.packet.entries,...assets.entries],missingContext:[...reserved.packet.missingContext,...assets.notes]};
   digest=assetDigest(assets.entries);
  }catch{

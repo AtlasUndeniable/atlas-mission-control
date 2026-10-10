@@ -7,8 +7,7 @@
  * structured text document and are deliberately left out of the prompt budget.
  */
 import {createHash} from 'node:crypto';
-import {readFile,lstat} from 'node:fs/promises';
-import {isAbsolute} from 'node:path';
+import {assertPermittedBrandKit,readContainedFile} from './task-asset-boundary.ts';
 
 export const BRAND_KIT_SECTIONS=['1. BRAND IDENTITY','11. WRITING STYLE GUIDE','12. FORMATTING DO AND DO NOT'] as const;
 export const BRAND_RULES_LIMITS={maxFileBytes:200_000,maxCharacters:6000} as const;
@@ -35,13 +34,18 @@ export function brandRules(kit:string,sections:readonly string[]=BRAND_KIT_SECTI
  return {kitHash:createHash('sha256').update(kit).digest('hex'),sections:[...sections],text,hash:createHash('sha256').update(text).digest('hex')};
 }
 
-/** Read the brand kit from an explicit absolute path. No search, default or fallback copy. */
+/**
+ * Read the brand kit from the one permitted path beneath the brain root. No search,
+ * default or fallback copy, and no configured absolute path of its own: checking only the
+ * final component let the kit be any absolute regular file on the disk, so the reader now
+ * goes through the same containment and O_NOFOLLOW descriptor as every asset read.
+ */
 export async function readBrandRules(file:string,sections:readonly string[]=BRAND_KIT_SECTIONS){
- if(!isAbsolute(file))throw Error('brand_kit_path_required');
- const stat=await lstat(file).catch(()=>null);
- if(!stat||!stat.isFile()||stat.isSymbolicLink())throw Error('brand_kit_unavailable');
- if(stat.size>BRAND_RULES_LIMITS.maxFileBytes)throw Error('brand_kit_oversize');
- return brandRules(await readFile(file,'utf8'),sections);
+ const kit=assertPermittedBrandKit(file);
+ const read=await readContainedFile(kit,BRAND_RULES_LIMITS.maxFileBytes).catch((e:Error)=>{
+  throw Error(e.message==='asset_over_size_bound'?'brand_kit_oversize':'brand_kit_unavailable');
+ });
+ return brandRules(read.bytes.toString('utf8'),sections);
 }
 
 /**

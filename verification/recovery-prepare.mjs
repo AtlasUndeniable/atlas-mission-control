@@ -1,5 +1,8 @@
 import{createHash}from'node:crypto';
-import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{execFileSync}from'node:child_process';import{sql,rpc}from'./harness.mjs';import{documentTransport,documentPrompt,renderDocument}from'../src/lib/task-document-codec.ts';import{taskAssetEntries,assetDigest,assetRelease}from'../src/lib/meetings/document-runtime.ts';import{atlasAssetRoots}from'../src/lib/task-asset-search.ts';
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{execFileSync}from'node:child_process';import{sql,rpc}from'./harness.mjs';import{documentTransport,documentPrompt,renderDocument}from'../src/lib/task-document-codec.ts';import{taskAssetEntries,assetDigest,assetRelease}from'../src/lib/meetings/document-runtime.ts';import{atlasAssetRoots}from'../src/lib/task-asset-search.ts';import{__injectAssetBoundaryForTests}from'../src/lib/task-asset-boundary.ts';
+// The fixture brain is an explicit test injection; the saved config's assetBrain is now an
+// assertion that must match it, not a path the product follows.
+__injectAssetBoundaryForTests({brainRoot:new URL('fixture-brain',import.meta.url).pathname});
 const base='http://127.0.0.1:55827',checks=[];const check=(x,n)=>{assert.ok(x,n);checks.push(n);console.log('PASS',n)};
 const seed=name=>{execFileSync('node',['verification/seed.mjs'],{env:{...process.env,SYNTHETIC_CALL:name+(process.env.FIXTURE_SUFFIX||'')},stdio:'pipe'});return JSON.parse(readFileSync('verification/private/fixture.json'))};
 async function request(f,action,revision=1){const r=await fetch(base+'/api/board/meetings/document',{method:'POST',headers:{Authorization:'Basic '+Buffer.from('nat:synthetic-nat').toString('base64'),Origin:base,'Content-Type':'application/json'},body:JSON.stringify({taskId:f.task,action,revision,operationId:crypto.randomUUID()})});return{status:r.status,data:await r.json()}}

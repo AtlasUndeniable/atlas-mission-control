@@ -24,12 +24,19 @@ revoke all on function app_private.task_document_asset_roots()from public,anon,a
 -- and 027. Each tolerates a non-array or null input and returns true rather than raising,
 -- because the shape conjunct in the constraint is what rejects a wrong shape; a CHECK that
 -- raises instead of returning false would abort a restore with an opaque error.
+--
+-- Every predicate returns a non-null boolean and fails closed on a malformed element.
+-- A null array element makes `r <> all(...)` UNKNOWN rather than true, so the WHERE
+-- finds no offending row and the whole predicate would wrongly accept; each therefore
+-- carries an explicit null disjunct. The two JSON predicates iterate jsonb elements and
+-- require jsonb_typeof(elem)='string' rather than using jsonb_array_elements_text, which
+-- turns JSON null into SQL null and silently coerces a number or boolean to text.
 create function app_private.task_document_roots_valid(roots text[])returns boolean language sql immutable set search_path='' as
-$$select not exists(select 1 from unnest(coalesce(roots,array[]::text[]))r where r<>all(app_private.task_document_asset_roots()))$$;
+$$select not exists(select 1 from unnest(coalesce(roots,array[]::text[]))r where r is null or r<>all(app_private.task_document_asset_roots()))$$;
 create function app_private.task_document_shared_roots_valid(roots jsonb)returns boolean language sql immutable set search_path='' as
-$$select not exists(select 1 from jsonb_array_elements_text(case when jsonb_typeof(roots)='array'then roots else '[]'::jsonb end)r where r<>all(app_private.task_document_asset_roots()))$$;
+$$select not exists(select 1 from jsonb_array_elements(case when jsonb_typeof(roots)='array'then roots else '[]'::jsonb end)r where jsonb_typeof(r)<>'string' or coalesce(r#>>'{}','')<>all(app_private.task_document_asset_roots()))$$;
 create function app_private.task_document_client_dirs_valid(dirs jsonb)returns boolean language sql immutable set search_path='' as
-$$select not exists(select 1 from jsonb_array_elements_text(case when jsonb_typeof(dirs)='array'then dirs else '[]'::jsonb end)d where d!~'^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$')$$;
+$$select not exists(select 1 from jsonb_array_elements(case when jsonb_typeof(dirs)='array'then dirs else '[]'::jsonb end)d where jsonb_typeof(d)<>'string' or coalesce(d#>>'{}','')!~'^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$')$$;
 revoke all on function app_private.task_document_roots_valid(text[]),app_private.task_document_shared_roots_valid(jsonb),app_private.task_document_client_dirs_valid(jsonb)from public,anon,authenticated,service_role;
 
 alter table app_private.task_documents
@@ -45,12 +52,15 @@ alter table app_private.task_documents
  add column atlas_executor_decision text,
  -- Output ceiling for this document's generation, bounding both the request and the charge.
  add column max_output_tokens integer not null default 8000 check(max_output_tokens between 100 and 12000),
+ -- Every conjunct is coalesced to a non-null boolean. jsonb_typeof() of an absent key
+ -- returns SQL null, and a CHECK accepts UNKNOWN, so an uncoalesced comparison would let
+ -- an object with a long decision and no sharedRoots/clientDirectories through.
  add constraint task_documents_asset_release_shape check(
   asset_release is null or (
    jsonb_typeof(asset_release)='object'
    and length(coalesce(asset_release->>'decision',''))>=10
-   and jsonb_typeof(asset_release->'sharedRoots')='array'
-   and jsonb_typeof(asset_release->'clientDirectories')='array'
+   and coalesce(jsonb_typeof(asset_release->'sharedRoots'),'')='array'
+   and coalesce(jsonb_typeof(asset_release->'clientDirectories'),'')='array'
    and app_private.task_document_shared_roots_valid(asset_release->'sharedRoots')
    and app_private.task_document_client_dirs_valid(asset_release->'clientDirectories')
   )),
@@ -69,14 +79,32 @@ alter table app_private.task_document_attempts
  add column output_tokens integer check(output_tokens is null or output_tokens>=0),
  add column usage_at timestamptz,
  -- Digest of the exact released asset set supplied, beside the prompt hash.
- add column asset_digest text check(asset_digest is null or asset_digest~'^[0-9a-f]{64}$');
+ add column asset_digest text check(asset_digest is null or asset_digest~'^[0-9a-f]{64}$'),
+ -- The usage tuple is all-or-none. A partial tuple is what let a recorded charge stay
+ -- mutable: the write-once trigger keyed its usage freeze on input_tokens, so output_tokens
+ -- or usage_at written while input_tokens stayed null remained revisable. This is a CHECK
+ -- rather than only a trigger rule so it is enforced during a snapshot restore too, where
+ -- session_replication_role='replica' skips triggers.
+ add constraint task_document_attempts_usage_all_or_none check(
+  (input_tokens is null and output_tokens is null and usage_at is null)
+  or (input_tokens is not null and output_tokens is not null and usage_at is not null));
 
 create function app_private.task_document_usage_immutable()returns trigger language plpgsql set search_path='' as $$begin
  -- A recorded charge is a fact. It may be written once and never revised downward.
- if old.input_tokens is not null and (new.input_tokens is distinct from old.input_tokens or new.output_tokens is distinct from old.output_tokens or new.usage_at is distinct from old.usage_at)
-  then raise exception 'recorded_usage_immutable';end if;
+ -- Every recorded bound field is frozen, cost_bound_bytes included: it is half of the
+ -- worst-case charge the ledger reserved before the provider was contacted, so leaving it
+ -- mutable let an UPDATE-capable writer lower the recorded liability of a spent attempt.
  if old.cost_bound_micros is not null and new.cost_bound_micros is distinct from old.cost_bound_micros then raise exception 'recorded_cost_bound_immutable';end if;
+ if old.cost_bound_bytes is not null and new.cost_bound_bytes is distinct from old.cost_bound_bytes then raise exception 'recorded_cost_bound_immutable';end if;
  if old.asset_digest is not null and new.asset_digest is distinct from old.asset_digest then raise exception 'recorded_asset_digest_immutable';end if;
+ -- The usage tuple is written in one update or not at all, and is immutable from that
+ -- moment. The freeze keys on any of the three being present, not on input_tokens alone,
+ -- so no partial write can be left behind or used to reopen a recorded charge.
+ if (new.input_tokens is null)<>(new.output_tokens is null) or (new.input_tokens is null)<>(new.usage_at is null)
+  then raise exception 'recorded_usage_incomplete';end if;
+ if (old.input_tokens is not null or old.output_tokens is not null or old.usage_at is not null)
+  and (new.input_tokens is distinct from old.input_tokens or new.output_tokens is distinct from old.output_tokens or new.usage_at is distinct from old.usage_at)
+  then raise exception 'recorded_usage_immutable';end if;
  return new;
 end$$;
 create trigger task_document_usage_immutable before update on app_private.task_document_attempts for each row execute function app_private.task_document_usage_immutable();
@@ -135,8 +163,14 @@ begin
  end loop;
  -- A builder audience, Nat included, receives only shared roots separately marked safe for
  -- a builder. Her existing financial and full-source restrictions are unchanged below.
+ -- The membership test is positive and fails closed: a released root is safe only when it
+ -- is demonstrably a member of builder_safe_roots. `root <> all(...)` is UNKNOWN when
+ -- either side carries a null element, which would find no offending row and release every
+ -- shared root to a builder; `(root = any(...)) is not true` treats unknown as unsafe. A
+ -- release whose sharedRoots is not an array is likewise refused rather than skipped.
  if exists(select 1 from app_private.task_document_grants dg join app_private.workspace_actors wa on wa.actor=dg.actor where dg.document_id=did and dg.active and wa.role='builder')
-  and exists(select 1 from jsonb_array_elements_text(release->'sharedRoots')root where root<>all(d.builder_safe_roots))
+  and (coalesce(jsonb_typeof(release->'sharedRoots'),'')<>'array'
+   or exists(select 1 from jsonb_array_elements(release->'sharedRoots')root where jsonb_typeof(root)<>'string' or (root#>>'{}'=any(d.builder_safe_roots))is not true))
   then raise exception 'asset_release_builder_denied'using errcode='42501';end if;
  entries:=jsonb_build_array(jsonb_build_object('id','commitment','version',g.source_revision,'sourceHash',d.projection_hash,'kind','commitment','title',g.projection->>'title','text',g.projection->'evidence'->>'quote','display',true,'use',true,'sourceRef',jsonb_build_object('sourceId',i.source_id),'reviewReference',g.review_reference,'observedAt',clock_timestamp()));
  if jsonb_array_length(entries)>12 or (select count(*)from app_private.task_document_evidence where document_id=did)>11 then raise exception 'packet_limit';end if;

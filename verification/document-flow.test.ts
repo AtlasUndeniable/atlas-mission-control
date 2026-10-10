@@ -20,8 +20,12 @@ type Reserved={dispatch:boolean;replay?:boolean;attempt:string;token:string;stat
 type Read={available:boolean;status:string;currentVersion:number;revision:number;versions:{version:number;hash:string}[];rights:string[]};
 import {taskAssetEntries,assetDigest,assetRelease} from '../src/lib/meetings/document-runtime.ts';
 import {atlasAssetRoots} from '../src/lib/task-asset-search.ts';
+import {__injectAssetBoundaryForTests} from '../src/lib/task-asset-boundary.ts';
 
 const BRAIN=resolve(import.meta.dirname,'fixture-brain');
+// The fixture brain is an explicit test injection. atlasAssetRoots() refuses any root but
+// the one in force, so passing BRAIN below is now an assertion rather than a selection.
+__injectAssetBoundaryForTests({brainRoot:BRAIN});
 const CLIENT='Northwind Pilates';
 const DECISION='fixture-asset-release-2026-10-09';
 const sha256=(v:string)=>createHash('sha256').update(v).digest('hex');

@@ -12,9 +12,12 @@ import {resolve,join} from 'node:path';
 import {renderDocument} from '../src/lib/task-document-codec.ts';
 import {taskAssetEntries,assetRelease} from '../src/lib/meetings/document-runtime.ts';
 import {atlasAssetRoots} from '../src/lib/task-asset-search.ts';
+import {__injectAssetBoundaryForTests} from '../src/lib/task-asset-boundary.ts';
 
 const ROOT=resolve(import.meta.dirname,'..');
 const BRAIN=join(ROOT,'verification/fixture-brain');
+// Explicit test injection of the synthetic brain. No configuration can do this.
+__injectAssetBoundaryForTests({brainRoot:BRAIN});
 const RELEASE={decision:'laneC-fixture-release-2026-10-09-synthetic-only',sharedRoots:['playbooks','frameworks','operating-manual','lead-magnets'],clientDirectories:['northwind-pilates']};
 const sha256=v=>createHash('sha256').update(v).digest('hex');
 
