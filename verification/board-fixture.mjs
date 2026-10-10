@@ -30,10 +30,37 @@ const documents={
  // board must disable Start and say why in the customer's words.
  8:{available:false,reason:'credit_exhausted'},
 };
+/*
+ * The real captured hosted capability, not an invented one.
+ *
+ * Review finding R6: this fixture said Nat was `triage:false`, while Lane B1's read-only
+ * capture of the live service says `triage:true`
+ * (sprint-20261007/laneB1-compose/hosted-capabilities-20261009.json lines 4-16, actor
+ * nat, role builder, review false, triage true). The restriction on owner, executor and
+ * reviewer controls was therefore being proved against a capability no principal has, and
+ * the capture's zero valid task grants hid the consequence rather than ruling it out.
+ *
+ * Nat's row below is now the captured shape verbatim. Rhys's row matches his captured row
+ * (super_admin, triage true, review true). Pat is still synthetic and labelled as such:
+ * Pat has no provisioned account in the capture, so there is nothing real to copy, and
+ * `triage:false` is the conservative stand-in for an unprovisioned reviewer.
+ */
+/** Synthetic canonical history. SYNTHETIC_DOC_HASH is a test-only 64-hex string. */
+export const SYNTHETIC_DOC_HASH='4f'.repeat(32);
+const HISTORY=[
+ {actor:'rhys',operation:'accept',created_at:new Date(Date.now()-9e5).toISOString(),input:{note:'Agreed on the call. Nat to draft it.'}},
+ {actor:'rhys',operation:'review',created_at:new Date(Date.now()-6e5).toISOString(),
+  input:{note:'Atlas draft v1 submitted for required review; SHA256 '+SYNTHETIC_DOC_HASH+'; no external delivery.'}},
+ {actor:'rhys',operation:'complete',created_at:new Date(Date.now()-3e5).toISOString(),
+  input:{note:'Done. [Internal draft v1; SHA256 '+SYNTHETIC_DOC_HASH+'; no external delivery.]'}},
+];
+
 const CAPABILITY={
  rhys:{actor:'rhys',triage:true,review:true,rhysActor:'rhys'},
+ // Synthetic: Pat is unprovisioned hosted. See the note above.
  pat:{actor:'pat',triage:false,review:true,rhysActor:'rhys'},
- nat:{actor:'nat',triage:false,review:false,rhysActor:'rhys'},
+ // Captured: hosted-capabilities-20261009.json, actor nat.
+ nat:{actor:'nat',triage:true,review:false,rhysActor:'rhys'},
 };
 /** What each actor may see. Rhys has the full source; Pat and Nat are task-only. */
 function permitted(actor){
@@ -130,7 +157,16 @@ const server=http.createServer(async(req,res)=>{
  if(req.url!=='/rpc/meeting_queue'){res.statusCode=404;return res.end(JSON.stringify({message:'no route'}))}
  if(d.action==='list'){reads[actor]++;return res.end(JSON.stringify(queue(actor)))}
  if(d.action==='context')return res.end(JSON.stringify({label:actor==='rhys'?'Permitted source context':'Permitted task-only context',
-  item:{evidence:{speaker:'Synthetic speaker',start:0,end:1,passage:1,quote:'Task-safe context only',uncertainty:''}},history:[]}));
+  item:{evidence:{speaker:'Synthetic speaker',start:0,end:1,passage:1,quote:'Task-safe context only',uncertainty:''}},
+  /*
+   * Review finding R7: canonical review history is exactly where a document hash lands.
+   * Migration 028's review path writes 'Atlas draft v<n> submitted for required review;
+   * SHA256 <64 hex>; no external delivery.' into app_private.meeting_history via
+   * meeting_queue_v21, and full-source context returns that history verbatim. The note
+   * below is that shape, so the customer view can be proved to withhold it rather than
+   * asserted clean against a resting fixture that never contained one.
+   */
+  history:HISTORY}));
  const n=Number(String(d.payload?.id||'').replace('request-',''));
  const s=state[n];
  if(!s||!permitted(actor).ids.includes(n)){res.statusCode=403;return res.end(JSON.stringify({code:'42501',message:'Synthetic action refused'}))}

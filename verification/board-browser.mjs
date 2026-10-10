@@ -3,7 +3,11 @@
 // watermarked SYNTHETIC PREVIEW and are not evidence of customer acceptance.
 import {spawn} from 'node:child_process';import {mkdtempSync,writeFileSync,readFileSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';import {join} from 'node:path';import assert from 'node:assert/strict';
-import {identifierLeaks} from '../src/lib/board/presentation.ts';
+import {identifierLeaks,IDENTIFIER_PLACEHOLDER} from '../src/lib/board/presentation.ts';
+// Not imported from board-fixture.mjs: that module starts the fixture server on import,
+// and board-start.mjs already owns it. The literal is cross-checked against the fixture
+// source below instead, so the two cannot drift apart silently.
+const SYNTHETIC_DOC_HASH='4f'.repeat(32);
 const OUT='evidence/laneD';mkdirSync(OUT,{recursive:true});
 const checks=[],errors=[],profile=mkdtempSync(join(tmpdir(),'atlas-laneD-')),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const DRAFTING='http://127.0.0.1:55941',NO_DRAFTING='http://127.0.0.1:55942',FIXTURE='http://127.0.0.1:55940';
@@ -31,6 +35,9 @@ try{
   const button=text=>`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)})`;
   const click=async text=>{await wait(button(text));await evaluate(`${button(text)}.click()`)};
   const card=title=>`[...document.querySelectorAll('article')].find(a=>a.querySelector('h3')?.textContent===${JSON.stringify(title)})`;
+  // One real tap on the card's own More options control, where Set due, the
+  // date picker and the note now live. A no-op if it is already open.
+  const tapMore=title=>evaluate(`(()=>{const d=${card(title)}.querySelector('details[class*=cardDetails]');if(!d.open)d.querySelector('summary').click();return d.open})()`);
   const fill=async(label,value,scope='document')=>evaluate(`(()=>{const e=[...${scope}.querySelectorAll('label')].find(l=>l.textContent.startsWith(${JSON.stringify(label)})).querySelector('input,textarea');
    const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
    Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()`);
@@ -45,7 +52,7 @@ try{
    writeFileSync(OUT+'/'+name+'.png',Buffer.from(data,'base64'));
   };
   await send('Page.navigate',{url:origin+path});
-  return {send,evaluate,wait,button,click,card,fill,focus,text,shot};
+  return {send,evaluate,wait,button,click,card,tapMore,fill,focus,text,shot};
  }
  const control=async body=>(await(await fetch(FIXTURE+'/control',body?{method:'POST',body:JSON.stringify(body)}:undefined)).json());
  const titles={proposal:'Send the Collins Twins their onboarding pack',sop:'Write the new client intake SOP',brief:'Draft the Q4 coaching offer brief',
@@ -92,15 +99,16 @@ try{
 
  // ===== 4. Action state: saved versus unsaved, and who did it =============
  const sop=`${rhys.card(titles.sop)}`;
- await rhys.evaluate(`${sop}.querySelector('label[class*=setDue] input').focus()`);
- await rhys.fill('Set due','2026-10-31',sop);
+ await rhys.tapMore(titles.sop);
+ await rhys.fill('Due date','2026-10-31',sop);
  await rhys.wait(`${sop}.innerText.includes('Not saved yet')`);
  check(await rhys.evaluate(`${sop}.innerText.includes('Your changes are only on this screen until you save them')`),'An unsaved edit says plainly that it is not saved');
  const beforeUndo=(await control()).writes.length;
  await rhys.evaluate(`[...${sop}.querySelectorAll('button')].find(b=>b.textContent==='Undo my changes').click()`);
  await rhys.wait(`!${sop}.innerText.includes('Not saved yet')`);
  check((await control()).writes.length===beforeUndo,'Undoing an unsaved change writes nothing');
- await rhys.fill('Set due','2026-10-31',sop);
+ await rhys.tapMore(titles.sop);
+ await rhys.fill('Due date','2026-10-31',sop);
  await rhys.evaluate(`[...${sop}.querySelectorAll('button')].find(b=>b.textContent==='Save changes').click()`);
  await rhys.wait(`${rhys.card(titles.sop)}.innerText.includes('Saved · Changes saved by you')`);
  check(await rhys.evaluate(`${rhys.card(titles.sop)}.innerText.includes('Due 31 Oct')`),'A saved due date shows the new date and says who saved it');
@@ -143,13 +151,14 @@ try{
  const pills=p=>p.evaluate(`[...document.querySelector('nav[aria-label]').querySelectorAll('button')].map(b=>b.textContent)`);
  check((await pills(pat))[1]==='Pat','Pat has a filter of his own, listed first because he is signed in');
  check((await pills(rhys)).includes('Pat')&&(await pills(rhys)).includes('Nat'),'Rhys can filter to Pat and to Nat');
- await rhys.evaluate(`${rhys.card(titles.brief)}.querySelector('label[class*=cardNote] input').focus()`);
+ await rhys.tapMore(titles.brief);
  await rhys.fill('Private note for the record','Draft reads well; sending to Pat to review.',`${rhys.card(titles.brief)}`);
  await rhys.evaluate(`[...${rhys.card(titles.brief)}.querySelectorAll('button')].find(b=>b.textContent==='Send v1 to the reviewer').click()`);
  await rhys.wait(`${rhys.card(titles.brief)}?.closest('[data-stage]')?.dataset.stage==='in_review'`);
  check(true,'Handing a draft to the reviewer moves the card to In review');
  await pat.focus();await pat.wait(`${pat.card(titles.brief)}?.closest('[data-stage]')?.dataset.stage==='in_review'`);
  check(await pat.evaluate(`!!${pat.card(titles.brief)}.innerText.match(/Approve v1/)`),'The reviewer is offered Approve, naming the exact version being approved');
+ await pat.tapMore(titles.brief);
  await pat.fill('Private note for the record','Checked against the brief; approving version one.',`${pat.card(titles.brief)}`);
  await pat.evaluate(`[...${pat.card(titles.brief)}.querySelectorAll('button')].find(b=>b.textContent==='Approve v1').click()`);
  await pat.wait(`${pat.card(titles.brief)}?.closest('[data-stage]')?.dataset.stage==='complete'`);
@@ -180,11 +189,82 @@ try{
  check(!natText.includes('Open the recording')&&!natText.includes('Recent calls & coverage'),'Nat sees no recording link and no call-coverage panel');
  check(natText.includes('Signed in as Nat'),'Nat is told which identity she is signed in as');
  await nat.evaluate(`document.querySelectorAll('article details[class*=cardDetails]').forEach(d=>d.open=true)`);
- check(await nat.evaluate(`[...document.querySelectorAll('article select')].length>0&&[...document.querySelectorAll('article select')].every(s=>s.disabled)`),'Nat cannot change owner, executor or reviewer');
- check(await nat.evaluate(`[...document.querySelectorAll('article input[type=date]')].every(s=>s.disabled)`),'Nat cannot change a due date');
+ /*
+  * Review finding R6, against the captured capability. Nat is triage:true hosted, and
+  * every card below is a valid task of hers, so these are the conditions under which the
+  * old board exposed enabled owner and executor controls. The controls must be absent --
+  * not present and disabled -- and her own scheduling right must survive.
+  */
+ check(await nat.evaluate(`document.querySelectorAll('article').length===3`),'R6: Nat still sees her three valid tasks under the captured triage:true capability');
+ check(await nat.evaluate(`[...document.querySelectorAll('article select')].length===0`),'R6: Nat is shown no owner, executor or reviewer control at all, not a disabled one');
+ check(await nat.evaluate(`[...document.querySelectorAll('article label')].every(l=>!/^(Owner|Who is doing it|Who reviews it|Next step)/.test(l.textContent.trim()))`),'R6: no owner, executor, reviewer or next-step field is rendered for Nat');
+ check(await nat.evaluate(`[...document.querySelectorAll('article')].every(a=>/set by the person accountable for it/.test(a.textContent))`),'R6: each card says who does hold the withheld controls');
+ check(await nat.evaluate(`[...document.querySelectorAll('article')].every(a=>/You can change the timing of this and report your work/.test(a.textContent))`),'R6: and names the scheduling right she does hold');
+ // Retained deliberately and separately: the person doing the work may change its timing.
+ check(await nat.evaluate(`[...document.querySelectorAll('article input[type=date]')].length>0&&[...document.querySelectorAll('article input[type=date]')].every(s=>!s.disabled)`),'R6: Nat can still change the timing of work she is doing');
  check(await nat.evaluate(`[...document.querySelectorAll('button')].every(b=>!['Accept','Delegate to Nat'].includes(b.textContent.trim()))`),'Nat is offered neither Accept nor delegation');
+ /*
+  * The boundary, not only the presentation: a withheld field is refused by the route even
+  * when the request does not come from this board at all. The revision is read live,
+  * because earlier sections of this suite advance it, and a stale revision would fail with
+  * 409 and prove nothing either way.
+  */
+ const natAuth={Authorization:'Basic '+Buffer.from('nat:synthetic-nat').toString('base64'),Origin:DRAFTING,Host:'127.0.0.1:55941','Content-Type':'application/json'};
+ const natEdit=async payload=>{
+  const queue=await(await fetch(DRAFTING+'/api/board/meetings',{headers:natAuth})).json();
+  const item=queue.meetings.flatMap(m=>m.items).find(i=>i.task?.executor==='nat'&&i.task.work_status==='todo');
+  return fetch(DRAFTING+'/api/board/meetings',{method:'POST',headers:natAuth,
+   body:JSON.stringify({action:'edit',payload:{id:item.id,revision:item.revision,note:'synthetic',...payload}})});
+ };
+ check((await natEdit({owner:'nat'})).status===403,'R6: the route refuses an owner change from Nat even when the browser sends one');
+ check((await natEdit({executor:'rhys'})).status===403,'R6: the route refuses an executor change from Nat');
+ check((await natEdit({reviewer:'nat'})).status===403,'R6: the route refuses a reviewer change from Nat');
+ check((await natEdit({title:'Something else entirely'})).status===403,'R6: the route refuses a next-step change from Nat');
+ check((await natEdit({due:'2026-12-01'})).status===200,'R6: the route still permits Nat to reschedule her own work');
+ const patAuth={Authorization:'Basic '+Buffer.from('pat:synthetic-pat').toString('base64'),Origin:DRAFTING,Host:'127.0.0.1:55941','Content-Type':'application/json'};
+ const patQueue=await(await fetch(DRAFTING+'/api/board/meetings',{headers:patAuth})).json();
+ const patItem=patQueue.meetings.flatMap(m=>m.items).find(i=>i.task);
+ const patAttempt=await fetch(DRAFTING+'/api/board/meetings',{method:'POST',headers:patAuth,
+  body:JSON.stringify({action:'edit',payload:{id:patItem.id,revision:patItem.revision,owner:'pat',note:'synthetic'}})});
+ check(patAttempt.status===403,'R6: a reviewer with no triage right is refused an owner change as well');
  check(!/From your call/.test(natText),'Nat is not shown the call title her access does not cover');
  check(identifierLeaks(natText).length===0,'Nat sees no engineering identifiers either');
+ /*
+  * Review finding R7: the customer "Where this came from" history must not print a
+  * canonical note verbatim, because document completion and review write a SHA256 into
+  * exactly those notes. This expands the real history rather than checking the resting
+  * card, which never contained one.
+  */
+ check(readFileSync('verification/board-fixture.mjs','utf8').includes("export const SYNTHETIC_DOC_HASH='4f'.repeat(32)"),'R7: the fixture and this suite agree on the synthetic document hash');
+ await nat.evaluate(`document.querySelectorAll('article details[class*=history]').forEach(d=>d.open=true)`);
+ await nat.click('Show what I am allowed to see');
+ await nat.wait(`document.body.innerText.includes('Review history')`);
+ const natHistory=await nat.text();
+ check(!natHistory.includes(SYNTHETIC_DOC_HASH),'R7: the customer history does not render the document SHA256');
+ check(natHistory.includes(IDENTIFIER_PLACEHOLDER),'R7: the customer history says a technical detail was withheld rather than dropping the clause silently');
+ check(natHistory.includes('Agreed on the call'),'R7: an ordinary history note is still shown in full');
+ check(identifierLeaks(natHistory).length===0,'R7: the expanded customer history carries no engineering identifier at all');
+
+ const rhysCustomerHistory=await (async()=>{
+  const p=await page('rhys');await p.wait(`${p.card(titles.sop)}`);
+  await p.evaluate(`document.querySelectorAll('article details[class*=history]').forEach(d=>d.open=true)`);
+  await p.click('Show what I am allowed to see');
+  await p.wait(`document.body.innerText.includes('Review history')`);
+  return p.text();
+ })();
+ check(!rhysCustomerHistory.includes(SYNTHETIC_DOC_HASH),'R7: Rhys\'s own customer /board history withholds the hash too');
+ check(identifierLeaks(rhysCustomerHistory).length===0,'R7: no identifier leaks into the customer board for Rhys either');
+
+ const rhysEngineeringHistory=await (async()=>{
+  const p=await page('rhys',{path:'/board/engineering'});await p.wait(`${p.card(titles.sop)}`);
+  await p.evaluate(`document.querySelectorAll('article details[class*=history]').forEach(d=>d.open=true)`);
+  await p.click('Show what I am allowed to see');
+  await p.wait(`document.body.innerText.includes('Review history')`);
+  return p.text();
+ })();
+ check(rhysEngineeringHistory.includes(SYNTHETIC_DOC_HASH),'R7: the raw note is retained on /board/engineering');
+ check(!rhysEngineeringHistory.includes(IDENTIFIER_PLACEHOLDER),'R7: the engineering board withholds nothing');
+
  const natEng=await fetch(DRAFTING+'/board/engineering',{headers:{Authorization:'Basic '+Buffer.from('nat:synthetic-nat').toString('base64')}});
  check(natEng.status===403,'Nat cannot reach the engineering board at all');
  const patEng=await fetch(DRAFTING+'/board/engineering',{headers:{Authorization:'Basic '+Buffer.from('pat:synthetic-pat').toString('base64')}});
@@ -221,6 +301,64 @@ try{
  const mobiles={rhys:await page('rhys',{width:390}),pat:await page('pat',{width:390}),nat:await page('nat',{width:390})};
  for(const [who,p] of Object.entries(desktops)){await p.wait(`document.querySelector('article')`);await p.shot(`board-${who}-desktop`)}
  for(const [who,p] of Object.entries(mobiles)){await p.wait(`document.querySelector('article')`);await p.shot(`board-${who}-phone-390`)}
+
+ // ===== 11. Card height and what a card shows at rest ====================
+ // Measured on the reset board at 1440, before anything is expanded: the
+ // height a card actually presents to Rhys, and whether the long-form controls
+ // are folded away. Reported before and after in the Lane D2 receipt.
+ const restCard=t=>`[...document.querySelectorAll('article')].find(a=>a.querySelector('h3')?.textContent===${JSON.stringify(t)})`;
+ // Chrome renders closed <details> content with content-visibility:hidden
+ // rather than display:none, so offsetParent alone is not a visibility test —
+ // the laid-out box has to be checked as well.
+ const VISIBLE=`(e=>!!e&&e.checkVisibility()&&e.getBoundingClientRect().height>0)`;
+ const shown=(sel,title=titles.sop)=>desktops.rhys.evaluate(`(()=>{const a=${restCard(title)};if(!a)return null;return ${VISIBLE}(a.querySelector(${JSON.stringify(sel)}))})()`);
+ const heights=await desktops.rhys.evaluate(`(()=>{const o={};for(const a of document.querySelectorAll('article'))o[a.querySelector('h3').textContent]=Math.round(a.getBoundingClientRect().height);return o})()`);
+ const px=Object.values(heights).sort((a,b)=>a-b);
+ const atRest={setDue:await shown('label[class*=setDue]'),datePicker:await shown('input[type=date]'),note:await shown('label[class*=cardNote]')};
+ // Every action must stay reachable in at most one tap: whatever is folded has
+ // to be present after a single click on the card's own More options control.
+ const restControls=await desktops.rhys.evaluate(`(()=>{const a=${restCard(titles.sop)};return [...a.querySelectorAll('input,select,textarea')].filter(${VISIBLE}).length})()`);
+ console.log('at rest:',JSON.stringify(atRest),'visible form controls on a resting card:',restControls);
+ check(atRest.setDue===false&&atRest.datePicker===false&&atRest.note===false,`A card at rest shows no Set due shortcut, no date picker and no note field (${JSON.stringify(atRest)})`);
+ check(restControls===0,`A card at rest carries no visible form control at all — every one is folded under More options (${restControls} visible)`);
+ const oneTap={};
+ if(!atRest.datePicker||!atRest.note){
+  await desktops.rhys.evaluate(`${restCard(titles.sop)}.querySelector('details[class*=cardDetails]>summary').click()`);
+  oneTap.datePicker=await shown('input[type=date]');oneTap.note=await shown('label[class*=cardNote]');
+  check(oneTap.datePicker,'One tap on More options reveals the due-date control that is folded at rest');
+  check(oneTap.note,'One tap on More options reveals the note field that is folded at rest');
+  await desktops.rhys.evaluate(`${restCard(titles.sop)}.querySelector('details[class*=cardDetails]').open=false`);
+ }
+ writeFileSync(OUT+'/card-heights.json',JSON.stringify({view:'Rhys, 1440px, seven columns, board at rest',
+  atRest,oneTap,cards:heights,min:px[0],median:px[(px.length-1)>>1],max:px[px.length-1],count:px.length},null,2)+'\n');
+ console.log('card heights (Rhys 1440, at rest):',JSON.stringify({min:px[0],median:px[(px.length-1)>>1],max:px[px.length-1]}),'atRest',JSON.stringify(atRest));
+
+ // A desktop comparison shot of the alternative layout. The constant in
+ // MeetingQueue.tsx selects this attribute at build time; flipping it in the
+ // DOM renders exactly the same CSS, so the two images are comparable.
+ const boardEl=`document.querySelector('[class*=board]')`;
+ if(await desktops.rhys.evaluate(`!!${boardEl}&&'layout' in ${boardEl}.dataset`)){
+  const chosen=await desktops.rhys.evaluate(`${boardEl}.dataset.layout`);
+  // What each layout costs at 1440: how much of the board is off-screen
+  // sideways, how far down the page the last column heading sits, and how
+  // many of the seven columns a person can see without moving anything.
+  const measure=()=>desktops.rhys.evaluate(`(()=>{const b=${boardEl},h=[...b.querySelectorAll('[data-stage]')];
+   const seen=n=>{const r=n.getBoundingClientRect(),bb=b.getBoundingClientRect();
+    return r.left>=Math.max(0,bb.left)-1&&r.right<=Math.min(window.innerWidth,bb.right)+1&&r.top<window.innerHeight};
+   const last=h[h.length-1].querySelector('h2').getBoundingClientRect();
+   return {layout:b.dataset.layout,columns:h.length,columnsOnScreen:h.filter(seen).length,
+    offScreenPx:Math.max(0,b.scrollWidth-b.clientWidth),pageHeight:document.documentElement.scrollHeight,
+    lastHeadingFromTop:Math.round(last.top+window.scrollY),viewport:[window.innerWidth,window.innerHeight]}})()`);
+  const layouts={};layouts[chosen]=await measure();
+  const other=chosen==='track'?'wrap':'track';
+  await desktops.rhys.evaluate(`${boardEl}.dataset.layout=${JSON.stringify(other)}`);
+  await desktops.rhys.shot('board-rhys-desktop-'+other);
+  layouts[other]=await measure();
+  check(await desktops.rhys.evaluate(`document.documentElement.scrollWidth<=window.innerWidth`),'The alternative desktop layout does not make the page itself scroll sideways');
+  await desktops.rhys.evaluate(`${boardEl}.dataset.layout=${JSON.stringify(chosen)}`);
+  writeFileSync(OUT+'/desktop-width.json',JSON.stringify({chosen,note:'DESKTOP_COLUMNS in MeetingQueue.tsx selects data-layout at build time; the comparison flips the same attribute in the DOM, so both render the shipped CSS.',layouts},null,2)+'\n');
+  console.log('desktop width comparison:',JSON.stringify(layouts));
+ }
 
  check(errors.length===0,'No browser runtime exceptions'+(errors.length?': '+errors[0]:''));
  const final=await control();

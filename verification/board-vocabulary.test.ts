@@ -1,7 +1,7 @@
 // Pure vocabulary and presentation checks. No browser, network or database.
 import test from 'node:test';import assert from 'node:assert/strict';
 import {BOARD_STATUSES,BOARD_STATUS_LABEL,HELD_DRAFT_STATES,deriveBoardStatus,draftingBlock,nextAction,plainHeldReason} from '../src/lib/board/task-status.ts';
-import {freshness,relativeTime,dueLabel,identifierLeaks,actorName} from '../src/lib/board/presentation.ts';
+import {freshness,relativeTime,dueLabel,identifierLeaks,actorName,taskControls,refusedEditFields,customerSafeNote,IDENTIFIER_PLACEHOLDER} from '../src/lib/board/presentation.ts';
 import {summariseIntake,periodWords} from '../src/lib/board/intake-summary.ts';
 
 const NOW=Date.parse('2026-10-09T09:00:00Z');
@@ -209,4 +209,92 @@ test('an Atlas task is held only while drafting offers it nothing',()=>{
 test('a refusal from the drafting path reads as a reason, not a blank card',()=>{
  const block=draftingBlock({available:false,reason:'This task operation is not permitted.'});
  assert.equal(block,'This task operation is not permitted.');
+});
+
+/*
+ * Lane F / review findings R6 and R7, as pure unit cases over the same derivations the
+ * board and the route both use.
+ */
+test('R6: ownership controls come from the accountable principal, not from can_triage', () => {
+ // The captured hosted capability, verbatim: nat is a builder with triage true.
+ const nat={actor:'nat',triage:true,review:false,rhysActor:'rhys'};
+ const rhys={actor:'rhys',triage:true,review:true,rhysActor:'rhys'};
+ const pat={actor:'pat',triage:false,review:true,rhysActor:'rhys'};
+ const hers={executor:'nat',next_reviewer:'rhys'};
+ const his={executor:'rhys',next_reviewer:'pat'};
+
+ const natOnHers=taskControls(nat,hers);
+ assert.equal(natOnHers.manageOwnership,false,'triage alone is not an ownership right');
+ assert.equal(natOnHers.setReviewer,false);
+ assert.equal(natOnHers.schedule,true,'the person doing the work keeps its timing');
+ assert.match(natOnHers.withheldReason,/change the timing of this and report your work/);
+
+ const natOnHis=taskControls(nat,his);
+ assert.equal(natOnHis.manageOwnership,false);
+ assert.equal(natOnHis.schedule,false,'and only of work she is actually doing');
+
+ const rhysControls=taskControls(rhys,hers);
+ assert.deepEqual(
+  {o:rhysControls.manageOwnership,r:rhysControls.setReviewer,s:rhysControls.schedule,w:rhysControls.withheldReason},
+  {o:true,r:true,s:true,w:''});
+
+ // A reviewer with no triage right writes nothing, which is what the RPC also says.
+ const patControls=taskControls(pat,his);
+ assert.deepEqual([patControls.manageOwnership,patControls.setReviewer,patControls.schedule],[false,false,false]);
+
+ // An accountable principal who cannot review may still name a first reviewer, but not
+ // displace one — the same rule as required_reviewer_change_denied.
+ const anchorNoReview={actor:'rhys',triage:true,review:false,rhysActor:'rhys'};
+ assert.equal(taskControls(anchorNoReview,{executor:'nat',next_reviewer:null}).setReviewer,true);
+ assert.equal(taskControls(anchorNoReview,{executor:'nat',next_reviewer:'pat'}).setReviewer,false);
+
+ // A capability with no recorded accountable principal grants nothing.
+ assert.equal(taskControls({actor:'nat',triage:true,review:true,rhysActor:null},hers).manageOwnership,false);
+ assert.equal(taskControls(null,hers).manageOwnership,false);
+});
+
+test('R6: the mutation boundary refuses exactly the fields the board withholds', () => {
+ const nat={actor:'nat',triage:true,review:false,rhysActor:'rhys'};
+ const rhys={actor:'rhys',triage:true,review:true,rhysActor:'rhys'};
+ const hers={executor:'nat',next_reviewer:'rhys'};
+ assert.deepEqual(refusedEditFields(nat,{owner:'nat'},hers),['owner']);
+ assert.deepEqual(refusedEditFields(nat,{executor:'rhys'},hers),['executor']);
+ assert.deepEqual(refusedEditFields(nat,{title:'Something else'},hers),['title']);
+ assert.deepEqual(refusedEditFields(nat,{reviewer:'nat'},hers),['reviewer']);
+ // A null value is still a write of that field.
+ assert.deepEqual(refusedEditFields(nat,{owner:null},hers),['owner']);
+ assert.deepEqual(refusedEditFields(nat,{owner:'nat',executor:'nat',due:'2026-12-01'},hers),['owner','executor']);
+ // Her retained right, and a note, are permitted.
+ assert.deepEqual(refusedEditFields(nat,{due:'2026-12-01',note:'done'},hers),[]);
+ assert.deepEqual(refusedEditFields(nat,{due:'2026-12-01'},{executor:'rhys',next_reviewer:'pat'}),['due']);
+ // The accountable principal is refused nothing.
+ assert.deepEqual(refusedEditFields(rhys,{owner:'nat',executor:'nat',reviewer:'pat',title:'t',due:'2026-12-01'},hers),[]);
+});
+
+test('R7: a canonical note with a SHA256 is withheld from the customer view', () => {
+ const hash='4f'.repeat(32);
+ assert.equal(hash.length,64);
+ const note=`Atlas draft v1 submitted for required review; SHA256 ${hash}; no external delivery.`;
+ const safe=customerSafeNote(note);
+ assert.ok(!safe.includes(hash),safe);
+ assert.ok(safe.includes(IDENTIFIER_PLACEHOLDER),safe);
+ assert.ok(safe.startsWith('Atlas draft v1 submitted for required review;'),safe);
+ assert.ok(safe.endsWith('no external delivery.'),safe);
+ // The detector itself finds nothing left behind.
+ assert.deepEqual(identifierLeaks(safe),[]);
+ // The bracketed form migration 028's complete path writes.
+ const bracketed=customerSafeNote(`Done. [Internal draft v1; SHA256 ${hash}; no external delivery.]`);
+ assert.ok(!bracketed.includes(hash));
+ assert.deepEqual(identifierLeaks(bracketed),[]);
+ // Ordinary prose is untouched.
+ assert.equal(customerSafeNote('Agreed on the call. Nat to draft it.'),'Agreed on the call. Nat to draft it.');
+ assert.equal(customerSafeNote(''),'');
+ assert.equal(customerSafeNote(null),'');
+ // A uuid, a build identifier and a migration name are withheld too.
+ for(const value of ['11111111-2222-4333-8444-555555555555','0V3SfxrwOoyczRGh4wn0f','028_task_document_assets_and_usage'])
+  assert.deepEqual(identifierLeaks(customerSafeNote('Bound to '+value+' as recorded.')),[],value);
+ // Directly adjacent withholdings collapse into one marker rather than reading as a run.
+ assert.equal((customerSafeNote(`${hash}; ${hash}`).match(/\[engineering detail\]/g)||[]).length,1);
+ // Two withholdings with real prose between them stay two: the prose is not swallowed.
+ assert.equal(customerSafeNote(`SHA256 ${hash} and ${hash}`),'SHA256 [engineering detail] and [engineering detail]');
 });
