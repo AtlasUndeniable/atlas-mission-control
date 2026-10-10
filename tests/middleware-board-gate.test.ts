@@ -19,14 +19,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
+import { registerSrcModuleResolve } from "./helpers/src-module-resolve.ts";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "next/server") return nextResolve("next/server.js", context);
-    return nextResolve(specifier, context);
-  },
-});
+// src/ uses the bare "next/server" specifier and extensionless relative
+// imports; neither resolves under plain Node. One shared hook maps both.
+registerSrcModuleResolve();
 
 // Middleware reads auth config at module load — set env BEFORE importing.
 process.env.MISSION_CONTROL_AUTH_USER = "operator";
