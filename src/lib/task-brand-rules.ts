@@ -7,7 +7,8 @@
  * structured text document and are deliberately left out of the prompt budget.
  */
 import {createHash} from 'node:crypto';
-import {assertPermittedBrandKit,readContainedFile} from './task-asset-boundary.ts';
+import {join} from 'node:path';
+import {BRAND_KIT_RELATIVE_PATH,assertPermittedBrandKit,readContainedFile,trustedBrainRoot} from './task-asset-boundary.ts';
 
 export const BRAND_KIT_SECTIONS=['1. BRAND IDENTITY','11. WRITING STYLE GUIDE','12. FORMATTING DO AND DO NOT'] as const;
 export const BRAND_RULES_LIMITS={maxFileBytes:200_000,maxCharacters:6000} as const;
@@ -35,13 +36,22 @@ export function brandRules(kit:string,sections:readonly string[]=BRAND_KIT_SECTI
 }
 
 /**
- * Read the brand kit from the one permitted path beneath the brain root. No search,
+ * Read the brand kit from the one permitted path beneath the trusted brain root. No search,
  * default or fallback copy, and no configured absolute path of its own: checking only the
- * final component let the kit be any absolute regular file on the disk, so the reader now
- * goes through the same containment and O_NOFOLLOW descriptor as every asset read.
+ * final component let the kit be any absolute regular file on the disk.
+ *
+ * The kit gets the *same* two guarantees as every asset read, stated here rather than left
+ * to be inferred, because the kit has no released-asset digest standing behind it — nothing
+ * downstream would notice if this read went somewhere else. First the trusted canonical root
+ * is established from `/` down, then the kit path must be exactly that root plus the one
+ * permitted relative path, and only then are the bytes taken from the descriptor the
+ * containment-preserving walk opened and proved.
  */
 export async function readBrandRules(file:string,sections:readonly string[]=BRAND_KIT_SECTIONS){
  const kit=assertPermittedBrandKit(file);
+ const trusted=await trustedBrainRoot().catch((e:Error)=>e);
+ if(trusted instanceof Error)throw Error('brand_kit_brain_untrusted');
+ if(kit!==join(trusted.root,BRAND_KIT_RELATIVE_PATH))throw Error('brand_kit_outside_brain');
  const read=await readContainedFile(kit,BRAND_RULES_LIMITS.maxFileBytes).catch((e:Error)=>{
   throw Error(e.message==='asset_over_size_bound'?'brand_kit_oversize':'brand_kit_unavailable');
  });
