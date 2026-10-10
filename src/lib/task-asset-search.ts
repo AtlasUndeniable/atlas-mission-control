@@ -7,8 +7,11 @@
  * No network, no write, no symlink traversal, no shell, no client inference.
  */
 import {createHash} from 'node:crypto';
-import {readdir,readFile,lstat,realpath} from 'node:fs/promises';
+import {readdir,lstat} from 'node:fs/promises';
 import {join,resolve,relative,extname,basename,sep} from 'node:path';
+import {assertCanonicalBrain,containedPath,readContainedFile} from './task-asset-boundary.ts';
+
+export {PRODUCTION_BRAIN_ROOT,BRAND_KIT_RELATIVE_PATH,__injectAssetBoundaryForTests,brainRoot,brandKitPath,containedPath,readContainedFile} from './task-asset-boundary.ts';
 
 export const ASSET_SCHEME='asset';
 /** Hard ceilings. Retrieval is a bounded scan, never an open crawl of the brain. */
@@ -61,7 +64,9 @@ const hash=(value:Buffer|string)=>createHash('sha256').update(value).digest('hex
  * an explicit edit here rather than an accidental widening somewhere else.
  */
 export function atlasAssetRoots(brain:string):AssetRoot[]{
- const r=(p:string)=>resolve(brain,p);
+ // The configured brain must be the canonical root. Roots are then built from the root in
+ // force rather than from the caller's string, so no configuration can relocate them.
+ const r=(p:string)=>resolve(assertCanonicalBrain(brain),p);
  return [
   {key:'playbooks',path:r('content/playbooks'),kind:'shared',label:'Delivery playbooks'},
   {key:'frameworks',path:r('brain/frameworks.md'),kind:'shared',label:'Undeniable frameworks'},
@@ -131,11 +136,17 @@ export function assetScore(terms:string[],relativePath:string,title:string,text:
 
 async function listFiles(root:AssetRoot,budget:{scanned:number},skipped:{path:string;reason:string}[]){
  const files:{absolute:string;relative:string}[]=[];
+ // Containment first, and for every root shape. A single-file root used to return before
+ // any containment check ran, and a directory root was only compared against its own
+ // realpath, so a symlinked ancestor inside the brain legitimised a path outside it.
+ let contained;
+ try{contained=await containedPath(root.path);}
+ catch(e){skipped.push({path:root.path,reason:(e as Error).message});return files}
  const base=await lstat(root.path).catch(()=>null);
  if(!base){skipped.push({path:root.path,reason:'root_absent'});return files}
  if(base.isSymbolicLink()){skipped.push({path:root.path,reason:'root_symlink_refused'});return files}
  if(base.isFile()){files.push({absolute:root.path,relative:basename(root.path)});budget.scanned++;return files}
- const realRoot=await realpath(root.path);
+ const realRoot=contained.real;
  const walk=async(directory:string,depth:number):Promise<void>=>{
   if(depth>ASSET_LIMITS.maxDepth||budget.scanned>=ASSET_LIMITS.maxScanFiles)return;
   const entries=await readdir(directory,{withFileTypes:true}).catch(()=>null);
@@ -150,7 +161,7 @@ async function listFiles(root:AssetRoot,budget:{scanned:number},skipped:{path:st
    if(!entry.isFile())continue;
    budget.scanned++;
    if(!TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase()))continue;
-   const real=await realpath(absolute).catch(()=>null);
+   const real=await containedPath(absolute).then(c=>c.real).catch(()=>null);
    if(!real||(real!==realRoot&&!real.startsWith(realRoot+sep))){skipped.push({path:absolute,reason:'outside_root'});continue}
    files.push({absolute,relative:relative(root.path,absolute)});
   }
@@ -178,17 +189,16 @@ export async function searchTaskAssets(roots:AssetRoot[],scope:AssetScope,terms:
     if(!first||!scope.directories.includes(first)){skipped.push({path:file.absolute,reason:'foreign_or_unreleased_client'});continue}
     clientDirectory=first;
    }
-   const stat=await lstat(file.absolute).catch(()=>null);
-   if(!stat||!stat.isFile()){skipped.push({path:file.absolute,reason:'unreadable'});continue}
-   if(stat.size>ASSET_LIMITS.maxFileBytes){skipped.push({path:file.absolute,reason:'over_size_bound'});continue}
-   const bytes=await readFile(file.absolute).catch(()=>null);
-   if(!bytes){skipped.push({path:file.absolute,reason:'unreadable'});continue}
-   const text=assetPlainText(bytes.toString('utf8'),extname(file.absolute).toLowerCase());
+   // Size and bytes both come from the validated descriptor, so the candidate's recorded
+   // hash is a hash of what was actually opened.
+   const read=await readContainedFile(file.absolute,ASSET_LIMITS.maxFileBytes).catch((e:Error)=>e);
+   if(read instanceof Error){skipped.push({path:file.absolute,reason:read.message==='asset_over_size_bound'?'over_size_bound':'unreadable'});continue}
+   const text=assetPlainText(read.bytes.toString('utf8'),extname(file.absolute).toLowerCase());
    if(text.length<40){skipped.push({path:file.absolute,reason:'no_usable_text'});continue}
    const title=assetTitle(text,file.relative);
    const {score,matchedTerms}=assetScore(terms,file.relative,title,text);
    if(score<=0)continue;
-   scored.push({id:assetIdentifier(root.key,file.relative),rootKey:root.key,relativePath:file.relative,clientDirectory,title,contentHash:hash(bytes),bytes:stat.size,score,matchedTerms});
+   scored.push({id:assetIdentifier(root.key,file.relative),rootKey:root.key,relativePath:file.relative,clientDirectory,title,contentHash:hash(read.bytes),bytes:read.size,score,matchedTerms});
   }
  }
  // Deterministic: score first, then identifier, so an equal-scoring pair never reorders
@@ -226,15 +236,16 @@ export async function readReleasedAsset(roots:AssetRoot[],release:{id:string;con
   const [first]=relativePath.split('/');
   if(!first||!scope.directories.includes(first)||release.clientDirectory!==first)throw Error('asset_client_boundary_refused');
  }else if(release.clientDirectory!==null)throw Error('asset_client_boundary_refused');
+ // The root is re-validated on the read path too, single-file roots included, and the
+ // bytes come from an O_NOFOLLOW descriptor rather than from a third resolution of the
+ // name: the hash compared against the release is a hash of what was opened.
+ const realRoot=(await containedPath(root.path)).real;
  const base=await lstat(root.path).catch(()=>null);
  if(!base)throw Error('asset_root_absent');
  const absolute=base.isFile()?root.path:resolve(root.path,relativePath.split('/').join(sep));
- const realRoot=await realpath(root.path);
- const real=await realpath(absolute).catch(()=>null);
- if(!real||(real!==realRoot&&!real.startsWith(realRoot+sep)))throw Error('asset_outside_root');
- const stat=await lstat(absolute);
- if(!stat.isFile()||stat.size>ASSET_LIMITS.maxFileBytes)throw Error('asset_unreadable_or_oversize');
- const bytes=await readFile(absolute);
+ const read=await readContainedFile(absolute,ASSET_LIMITS.maxFileBytes);
+ if(read.real!==realRoot&&!read.real.startsWith(realRoot+sep))throw Error('asset_outside_root');
+ const bytes=read.bytes;
  if(hash(bytes)!==release.contentHash)throw Error('asset_source_changed');
  const text=assetPlainText(bytes.toString('utf8'),extname(absolute).toLowerCase());
  return {id:release.id,rootKey,relativePath,clientDirectory:release.clientDirectory,title:assetTitle(text,relativePath),contentHash:release.contentHash,text:text.slice(0,ASSET_LIMITS.maxExcerptCharacters),truncated:text.length>ASSET_LIMITS.maxExcerptCharacters};

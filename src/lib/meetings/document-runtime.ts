@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {WorkspaceRefusal} from '../workspace-authority.ts';
 import {documentTransport,documentPrompt,decodeDocumentResponse,renderDocument,type DocumentConfig,type DocumentEntry,type DocumentPacket} from '../task-document-codec.ts';
 import {atlasAssetRoots,searchTaskAssets,readReleasedAsset,assetTerms,ASSET_LIMITS,type AssetRoot,type AssetScope} from '../task-asset-search.ts';
+import {assertCanonicalBrain,assertPermittedBrandKit} from '../task-asset-boundary.ts';
 import {readBrandRules,brandSystemPrompt} from '../task-brand-rules.ts';
 import {anthropicDocumentTransport,anthropicDocumentKey,anthropicDocumentConfigurationHash,type AnthropicDocumentConfig,type DocumentCostBound,type DocumentUsage,type DocumentDiagnostic} from '../task-document-anthropic.ts';
 import {appendProviderDiagnostic,checkProviderDiagnosticPath} from './provider-diagnostics.ts';
@@ -25,7 +26,13 @@ async function rpc(url:string,key:string|undefined,token:string,name:string,body
  * and a root is never retrievable because it happens to exist on disk.
  */
 export type AssetRelease={decision:string;sharedRoots:string[];clientDirectories:string[]};
-/** Where this machine keeps the brain and the key file. Runtime placement, not authority. */
+/**
+ * Where this machine keeps the brain and the key file. Runtime placement, not authority —
+ * and `assetBrain`/`brandKit` are assertions rather than selectors: each must match the
+ * canonical value in task-asset-boundary.ts or the boundary refuses. The key file is the
+ * one path that is deliberately outside the brain, because a credential does not belong in
+ * retrievable content.
+ */
 export type DocumentRuntimePaths={assetBrain:string;brandKit:string;keyFile?:string;
  /**
   * Absolute owner-only 0600 journal, in a 0700 directory outside the repository, for the
@@ -99,13 +106,24 @@ export type DocumentModel={configurationHash:string;system:string|null;costBound
 export async function documentModel(config:DocumentConfig&Partial<DocumentRuntimePaths>,transport:typeof fetch=fetch,hooks:DocumentModelHooks={}):Promise<DocumentModel>{
  if(config.provider!=='anthropic-direct'){
   const model=documentTransport(config,transport,process.env);
-  return {configurationHash:model.configurationHash,system:null,costBound:null,invoke:(prompt,attempt)=>model.invoke(prompt,attempt)};
+  // Every adapter accounts for its worst-case charge before dispatch, so migration 028's
+  // rule -- no dispatch outside a reservation that already accounts for its cost -- holds
+  // for all of them rather than exempting whichever adapter happens to be selected. A local
+  // fixture provider has no price, so its truthful worst-case charge is zero micros: that is
+  // a recorded accounting, not a missing one, and the byte floor and output ceiling are real.
+  return {configurationHash:model.configurationHash,system:null,
+   costBound:(prompt:string)=>({requestBytes:Buffer.byteLength(prompt,'utf8'),maxOutputTokens:config.maxOutputTokens,micros:0}),
+   invoke:(prompt,attempt)=>model.invoke(prompt,attempt)};
  }
  if(config.mode!=='live')throw Error('anthropic_direct_requires_live_mode');
  if(process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION!=='reviewed')throw Error('live_staff_transport_disabled');
  if(!config.brandKit)throw Error('brand_kit_path_required');
- // The diagnostic journal is validated before the key is read and before any dispatch, so
- // a live binding cannot exist without somewhere to record a refusal or a 429.
+ // Both filesystem assertions happen here, before the key file is read and before any
+ // provider contact, so a misconfigured root fails the attempt rather than widening it.
+ assertCanonicalBrain(config.assetBrain);
+ assertPermittedBrandKit(config.brandKit);
+ // The diagnostic journal is validated in the same place and for the same reason: a live
+ // binding cannot exist without somewhere to record a refusal or a 429.
  if(!config.providerDiagnosticsFile)throw Error('provider_diagnostics_path_required');
  await checkProviderDiagnosticPath(config.providerDiagnosticsFile);
  const binding:AnthropicDocumentConfig={
@@ -182,8 +200,7 @@ export async function buildTaskDocument(principal:string,taskId:string,payload:{
  let packet:DocumentPacket=reserved.packet,digest='';
  try{
   const release=assetRelease(reserved.packet?.assetRelease);
-  if(!config.assetBrain)throw Error('asset_brain_path_required');
-  const assets=await taskAssetEntries(release,reserved.packet,atlasAssetRoots(config.assetBrain));
+  const assets=await taskAssetEntries(release,reserved.packet,atlasAssetRoots(assertCanonicalBrain(config.assetBrain)));
   packet={...reserved.packet,entries:[...reserved.packet.entries,...assets.entries],missingContext:[...reserved.packet.missingContext,...assets.notes]};
   digest=assetDigest(assets.entries);
  }catch{

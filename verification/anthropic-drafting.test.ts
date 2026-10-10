@@ -18,6 +18,9 @@ import {
  type AnthropicDocumentConfig,type DocumentDiagnostic,type DocumentUsage,
 } from '../src/lib/task-document-anthropic.ts';
 import {readBrandRules,brandRules,brandSystemPrompt,brandSection,BRAND_KIT_SECTIONS} from '../src/lib/task-brand-rules.ts';
+import {__injectAssetBoundaryForTests,BRAND_KIT_RELATIVE_PATH} from '../src/lib/task-asset-boundary.ts';
+
+const FIXTURE_BRAIN=resolve(import.meta.dirname,'fixture-brain');
 
 const SYNTHETIC_KEY='sk-ant-'+'synthetic0test0only0value0000000000';
 
@@ -257,7 +260,11 @@ test('a bounded diagnostic keeps identifiers and drops everything else', async (
 });
 
 test('the brand kit sections drive the system prompt and are hashed into the binding', async () => {
- const rules=await readBrandRules(resolve(import.meta.dirname,'fixture-brand-kit.md'));
+ // The kit is read at its pinned path beneath the injected fixture brain; the identical
+ // copy at verification/fixture-brand-kit.md is no longer a readable location, because an
+ // arbitrary absolute path is exactly what review finding R5 refuses.
+ __injectAssetBoundaryForTests({brainRoot:FIXTURE_BRAIN});
+ const rules=await readBrandRules(join(FIXTURE_BRAIN,BRAND_KIT_RELATIVE_PATH));
  assert.deepEqual(rules.sections,[...BRAND_KIT_SECTIONS]);
  assert.ok(rules.text.includes('Direct, specific'));
  assert.ok(/^[0-9a-f]{64}$/.test(rules.kitHash));
@@ -269,12 +276,17 @@ test('the brand kit sections drive the system prompt and are hashed into the bin
  const changed=brandRules(await (await import('node:fs/promises')).readFile(resolve(import.meta.dirname,'fixture-brand-kit.md'),'utf8')+'\n');
  assert.notEqual(changed.kitHash,rules.kitHash);
  assert.throws(()=>brandSection('# Nothing here','11. WRITING STYLE GUIDE'),/brand_section_absent/);
- await assert.rejects(readBrandRules('/does/not/exist.md'),/brand_kit_unavailable/);
+ await assert.rejects(readBrandRules('/does/not/exist.md'),/brand_kit_outside_brain/);
  await assert.rejects(readBrandRules('relative.md'),/brand_kit_path_required/);
+ __injectAssetBoundaryForTests(null);
+ // With no injection the pinned production path is the only readable one.
+ await assert.rejects(readBrandRules(join(FIXTURE_BRAIN,BRAND_KIT_RELATIVE_PATH)),/brand_kit_outside_brain/);
 });
 
 test('the real brand kit still exposes the sections this lane extracts', async () => {
  // Guards against a kit edit silently removing the voice rules the drafting prompt needs.
+ // No injection: this is the pinned production path under the canonical brain root.
+ __injectAssetBoundaryForTests(null);
  const rules=await readBrandRules('/Users/atlasai/atlas-brain/brain/UNDENIABLE_BRAND_KIT.md');
  assert.deepEqual(rules.sections,[...BRAND_KIT_SECTIONS]);
  assert.ok(rules.text.includes('Direct, data-driven, specific'));

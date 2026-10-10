@@ -17,6 +17,7 @@ import {resolve,join} from 'node:path';
 import {documentPrompt,renderDocument} from '../src/lib/task-document-codec.ts';
 import {taskAssetEntries,assetDigest,assetRelease} from '../src/lib/meetings/document-runtime.ts';
 import {atlasAssetRoots} from '../src/lib/task-asset-search.ts';
+import {__injectAssetBoundaryForTests} from '../src/lib/task-asset-boundary.ts';
 import {readBrandRules,brandSystemPrompt} from '../src/lib/task-brand-rules.ts';
 import {anthropicDocumentTransport,anthropicDocumentKey} from '../src/lib/task-document-anthropic.ts';
 
@@ -29,6 +30,10 @@ const ROOT=resolve(import.meta.dirname,'..');
 const BRAIN=join(ROOT,'verification/fixture-brain');
 const BRAND_KIT='/Users/atlasai/atlas-brain/brain/UNDENIABLE_BRAND_KIT.md';
 const KEY_FILE='/Users/atlasai/.config/atlas/credentials/anthropic-intake.key';
+// This fixture deliberately pairs the synthetic brain with Rhys's real brand kit, because
+// applying his own voice is the point of the lane. Both are named here through the explicit
+// test injection; neither is reachable from ATLAS_TASK_DOCUMENT_CONFIG.
+__injectAssetBoundaryForTests({brainRoot:BRAIN,brandKit:BRAND_KIT});
 const JOURNAL_DIR=join(ROOT,'verification/private-live');
 const sha256=v=>createHash('sha256').update(v).digest('hex');
 

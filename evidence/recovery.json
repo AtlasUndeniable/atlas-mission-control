@@ -21,6 +21,6 @@
     "Revoke/restore increments retained authorization epochs",
     "Regrant cannot revive output under old authority fingerprint"
   ],
-  "providerCallsBeforeRestart": 16,
-  "providerCallsAfterRecovery": 16
+  "providerCallsBeforeRestart": 12,
+  "providerCallsAfterRecovery": 12
 }

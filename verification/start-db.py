@@ -14,7 +14,17 @@ if '--resume'not in sys.argv:
  run('docker','network','create',net)
  run('docker','run','--pull=never','-d','--name',name,'--network',net,'--network-alias','pg','-p','127.0.0.1:'+PG+':5432','-e','POSTGRES_PASSWORD=synthetic-docs-only','-e','POSTGRES_DB=docs','public.ecr.aws/supabase/postgres:17.6.1.132')
  (S/'processes.json').write_text(json.dumps({'pg':name,'rest':rest,'network':net}))
- for _ in range(60):
+ # The image's entrypoint runs an initialisation server and then restarts PostgreSQL.
+ # Waiting only for pg_isready connects to that initialisation server, and the restart then
+ # drops the session mid-script -- which surfaces as a spurious "could not open relation with
+ # OID" from the graphql event trigger. Wait for the restart to be announced first.
+ for _ in range(240):
+  log=subprocess.run(['docker','logs',name],capture_output=True,text=True)
+  out=log.stdout+log.stderr
+  if 'PostgreSQL init process complete' in out and out.rindex('database system is ready to accept connections')>out.index('PostgreSQL init process complete'):break
+  time.sleep(.5)
+ else:raise RuntimeError('Disposable database initialisation timeout')
+ for _ in range(120):
   if subprocess.run(['docker','exec',name,'pg_isready','-U','postgres','-d','docs'],capture_output=True).returncode==0:break
   time.sleep(.5)
 for _ in range(60):
@@ -46,6 +56,11 @@ for t in current['tables']:
 sql((R/'migrations/022_task_documents.sql').read_text())
 if '--clean-check' in sys.argv:
  print('Final migration applied cleanly; no seed or runtime grants.');sys.exit(0)
+# The drafting product needs the 028 columns -- asset release scope, the Atlas execution
+# binding and the usage ledger -- so the fixture database carries 022 and then 028. The
+# --clean-check container above deliberately stops at 022, because catalog-check.py compares
+# it against the captured 022-era hosted catalog and asserts 022's own repeat refusal.
+sql((R/'migrations/028_task_document_assets_and_usage.sql').read_text())
 run('docker','exec',name,'psql','-U','supabase_admin','-d','docs','-c',"alter role authenticator with login password 'synthetic-docs-only';")
 run('docker','run','--pull=never','-d','--name',rest,'--network',net,'-p','127.0.0.1:'+RESTPORT+':3000','-e','PGRST_DB_URI=postgres://authenticator:synthetic-docs-only@pg:5432/docs','-e','PGRST_DB_SCHEMAS=public','-e','PGRST_DB_ANON_ROLE=anon','-e','PGRST_JWT_SECRET=task-document-synthetic-only-2026-0000000001','public.ecr.aws/supabase/postgrest:v14.12')
 print('Isolated matching schema and migration ready on55824/55825. No hosted writes.')

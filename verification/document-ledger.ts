@@ -45,6 +45,17 @@ export type RuntimePayload={
 };
 export class LedgerRefusal extends Error{code:string;constructor(code:string){super(code);this.code=code}}
 
+/**
+ * Mirrors migration 028: an absent release decision means this task may draft from the
+ * shared Atlas method roots only, with no client material. The root list must stay
+ * identical to app_private.task_document_asset_roots() and atlasAssetRoots().
+ */
+export const DEFAULT_ASSET_RELEASE={
+ decision:'default release: shared Atlas method roots only, no client source material',
+ sharedRoots:['playbooks','frameworks','operating-manual','lead-magnets'],clientDirectories:[] as string[],
+};
+export const DEFAULT_RELEASE_NOTE='No asset release decision is recorded for this task, so the draft uses shared Atlas method material only and no client source material.';
+
 export function createLedger(document:LedgerDocument,actors:LedgerActor[],packetEntries:DocumentPacket['entries'],client:string){
  const versions=new Map<number,Readonly<LedgerVersion>>();
  const attempts:LedgerAttempt[]=[];
@@ -53,9 +64,12 @@ export function createLedger(document:LedgerDocument,actors:LedgerActor[],packet
  const doc={...document};
  const find=(actor:string)=>actors.find(a=>a.actor===actor&&a.active);
 
+ // The effective release, defaulted exactly as task_document_packet does, so the builder
+ // fence and the binding fingerprint both see a real release instead of skipping a null.
+ const release=()=>doc.assetRelease??DEFAULT_ASSET_RELEASE;
  const fingerprint=()=>sha256(JSON.stringify({
   task:doc.taskId,authorityEpoch:doc.authorizationEpoch,configuration:doc.configurationHash,
-  decision:doc.decisionReference,assetRelease:doc.assetRelease,builderSafeRoots:doc.builderSafeRoots,
+  decision:doc.decisionReference,assetRelease:release(),builderSafeRoots:doc.builderSafeRoots,
   atlasExecutor:doc.atlasExecutor,evidence:packetEntries.map(e=>[e.id,e.sourceHash]),
  }));
 
@@ -68,14 +82,16 @@ export function createLedger(document:LedgerDocument,actors:LedgerActor[],packet
   if(!reviewer||!reviewer.canReview||!['context','output','review'].every(r=>reviewer.rights.includes(r)))throw new LedgerRefusal('reviewer_unavailable');
   if(doc.atlasExecutor!==(doc.executor==='atlas'))throw new LedgerRefusal('document_context_changed');
   if(doc.atlasExecutor&&(!doc.atlasExecutorDecision||doc.atlasExecutorDecision.length<10))throw new LedgerRefusal('document_context_changed');
-  // A builder audience receives only shared roots separately marked builder-safe.
-  if(doc.assetRelease&&actors.some(x=>x.active&&x.role==='builder')
-   &&doc.assetRelease.sharedRoots.some(r=>!doc.builderSafeRoots.includes(r)))throw new LedgerRefusal('asset_release_builder_denied');
+  // A builder audience receives only shared roots separately marked builder-safe. This is
+  // evaluated against the effective release, so a defaulted release is fenced too.
+  if(actors.some(x=>x.active&&x.role==='builder')
+   &&release().sharedRoots.some(r=>!doc.builderSafeRoots.includes(r)))throw new LedgerRefusal('asset_release_builder_denied');
   return {
    fingerprint:fingerprint(),workspaceId:'fixture-workspace',taskId:doc.taskId,requestId:'fixture-request',
    client,owner:doc.owner,title:doc.title,workflow:doc.workflow,audience:'internal_review',
-   entries:packetEntries,missingContext:[...doc.missingContext],
-   ...(doc.assetRelease?{assetRelease:doc.assetRelease}:{}),
+   entries:packetEntries,
+   missingContext:[...doc.missingContext,...(doc.assetRelease?[]:[DEFAULT_RELEASE_NOTE])],
+   assetRelease:release(),
   };
  };
 
@@ -166,7 +182,7 @@ export function createLedger(document:LedgerDocument,actors:LedgerActor[],packet
   if(action==='check'){
    if(x.state!=='reserved'||x.dispatchAt||Date.now()>x.deadline)throw new LedgerRefusal('dispatch_held');
    if(!/^[0-9a-f]{64}$/.test(String(payload.promptHash||'')))throw new LedgerRefusal('prompt_binding_required');
-   if(doc.assetRelease&&!/^[0-9a-f]{64}$/.test(String(payload.assetDigest||'')))throw new LedgerRefusal('asset_binding_required');
+   if(!/^[0-9a-f]{64}$/.test(String(payload.assetDigest||'')))throw new LedgerRefusal('asset_binding_required');
    if(!Number.isInteger(payload.costBound?.requestBytes)||!Number.isInteger(payload.costBound?.micros)
     ||payload.costBound?.maxOutputTokens!==doc.maxOutputTokens)throw new LedgerRefusal('cost_bound_required');
    x.promptHash=String(payload.promptHash);x.assetDigest=payload.assetDigest??null;

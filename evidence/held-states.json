@@ -1,8 +1,8 @@
 {
   "synthetic": true,
   "fixtures": {
-    "held": "16682789-4f9e-486d-9798-ab74b2f2c21c",
-    "uncertain": "ba837a63-97b1-4d74-bdbe-8a05ccb45c6e"
+    "held": "6f69f78c-bc4b-452c-8f78-a67a4b1cec58",
+    "uncertain": "8afe73c0-8922-45b5-a4b9-264a9eded0e6"
   },
   "checks": [
     "Disabled task refuses context",
