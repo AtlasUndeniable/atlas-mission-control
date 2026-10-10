@@ -4,6 +4,7 @@ import {documentTransport,documentPrompt,decodeDocumentResponse,renderDocument,t
 import {atlasAssetRoots,searchTaskAssets,readReleasedAsset,assetTerms,ASSET_LIMITS,type AssetRoot,type AssetScope} from '../task-asset-search.ts';
 import {readBrandRules,brandSystemPrompt} from '../task-brand-rules.ts';
 import {anthropicDocumentTransport,anthropicDocumentKey,anthropicDocumentConfigurationHash,type AnthropicDocumentConfig,type DocumentCostBound,type DocumentUsage,type DocumentDiagnostic} from '../task-document-anthropic.ts';
+import {appendProviderDiagnostic,checkProviderDiagnosticPath} from './provider-diagnostics.ts';
 
 export async function documentRpc(principal:string,action:string,taskId:string,payload:object={}){
  if(process.env.ATLAS_TASK_DOCUMENTS!=='1')throw new WorkspaceRefusal(503,'Task drafting is held. Required task, context, output and operating decisions are not enabled.');
@@ -25,7 +26,14 @@ async function rpc(url:string,key:string|undefined,token:string,name:string,body
  */
 export type AssetRelease={decision:string;sharedRoots:string[];clientDirectories:string[]};
 /** Where this machine keeps the brain and the key file. Runtime placement, not authority. */
-export type DocumentRuntimePaths={assetBrain:string;brandKit:string;keyFile?:string};
+export type DocumentRuntimePaths={assetBrain:string;brandKit:string;keyFile?:string;
+ /**
+  * Absolute owner-only 0600 journal, in a 0700 directory outside the repository, for the
+  * bounded sanitized provider diagnostic. Required in live mode: without it a production
+  * 401, 429, 529 or refusal is observed by nobody. It is a runtime path, so it is not part
+  * of the provider binding hash, exactly like keyFile's own directory placement.
+  */
+ providerDiagnosticsFile?:string};
 
 export function assetRelease(raw:unknown):AssetRelease{
  const p=raw as Partial<AssetRelease>|null;
@@ -96,6 +104,10 @@ export async function documentModel(config:DocumentConfig&Partial<DocumentRuntim
  if(config.mode!=='live')throw Error('anthropic_direct_requires_live_mode');
  if(process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION!=='reviewed')throw Error('live_staff_transport_disabled');
  if(!config.brandKit)throw Error('brand_kit_path_required');
+ // The diagnostic journal is validated before the key is read and before any dispatch, so
+ // a live binding cannot exist without somewhere to record a refusal or a 429.
+ if(!config.providerDiagnosticsFile)throw Error('provider_diagnostics_path_required');
+ await checkProviderDiagnosticPath(config.providerDiagnosticsFile);
  const binding:AnthropicDocumentConfig={
   provider:'anthropic-direct',model:config.model,
   disclosureDecision:String((config as {disclosureDecision?:unknown}).disclosureDecision||''),
@@ -124,6 +136,30 @@ export async function documentModel(config:DocumentConfig&Partial<DocumentRuntim
  * failure after the binding step leaves a spent invocation to be reconciled by a human —
  * never re-dispatched — because a billed generation is a fact whether or not it is usable.
  */
+/**
+ * The production ledger hooks, built once and exported so the wiring itself is testable.
+ *
+ * It was the absence of `recordDiagnostic` here -- not in the adapter, which has always
+ * called the hook -- that dropped every real 401, 429, 529 and refusal while injected
+ * transport tests recorded them (review finding R1). Keeping the construction in one named
+ * place means a reviewer can see what the live path is connected to.
+ */
+export function documentRuntimeHooks(
+ config:Partial<DocumentRuntimePaths>,
+ runtimeRpc:(action:string,attempt:string,body?:object)=>Promise<unknown>,
+ ledger:{token:string|null},
+):DocumentModelHooks{
+ return {
+  recordUsage:async(attempt,usage)=>{if(ledger.token)await runtimeRpc('usage',attempt,{token:ledger.token,usage});},
+  recordDiagnostic:async(attempt,diagnostic)=>{
+   // The same bounded owner-only journal the intake collector writes: documented
+   // identifiers and a capped body sample only, never the provider message, the prompt,
+   // the key or any transcript text.
+   if(config.providerDiagnosticsFile)await appendProviderDiagnostic(config.providerDiagnosticsFile,attempt,diagnostic);
+  },
+ };
+}
+
 export async function buildTaskDocument(principal:string,taskId:string,payload:{operationId:string;revision:number}){
  let config:DocumentConfig&Partial<DocumentRuntimePaths>;const runtime=JSON.parse(process.env.ATLAS_TASK_DOCUMENT_RUNTIME||'{}');
  const runtimeRpc=(action:string,attempt:string,body:object={})=>rpc(runtime.url,runtime.apiKey,runtime.token,'meeting_document_runtime',{action,attempt_id:attempt,payload:body});
@@ -134,9 +170,7 @@ export async function buildTaskDocument(principal:string,taskId:string,payload:{
  try{
   config=JSON.parse(process.env.ATLAS_TASK_DOCUMENT_CONFIG||'{}');
   if(!runtime.url||!runtime.token)throw Error('runtime_binding_required');
-  model=await documentModel(config,fetch,{
-   recordUsage:async(attempt,usage)=>{if(ledger.token)await runtimeRpc('usage',attempt,{token:ledger.token,usage});},
-  });
+  model=await documentModel(config,fetch,documentRuntimeHooks(config,runtimeRpc,ledger));
  }catch{throw new WorkspaceRefusal(503,'Generation is disabled until its task-specific provider, budget and runtime decisions are recorded.');}
  const reserved=await documentRpc(principal,'begin',taskId,{...payload,configurationHash:model.configurationHash});
  if(!reserved.available&&reserved.reason)throw new WorkspaceRefusal(409,reserved.reason);

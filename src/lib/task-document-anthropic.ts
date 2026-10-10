@@ -18,11 +18,14 @@ import {
  ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,anthropicKey,anthropicDispatch,anthropicResponseText,
 } from './meetings/anthropic-extractor.ts';
 import {providerDiagnostic,refusalCategory,type ProviderDiagnostic} from './meetings/provider-diagnostics.ts';
+import {intakeJSON} from './meetings/intake-http.ts';
 
 export {ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,refusalCategory};
 export const DOCUMENT_REQUEST_PROFILE='sonnet-5-5-drafting-v1';
 /** Published Claude Sonnet 5.5 rates, in micro-dollars per token, for the cost bound only. */
 export const SONNET55_MICROS={input:2,output:10} as const;
+/** Ceiling on the bytes read back from one generation. Enforced while streaming. */
+export const DOCUMENT_RESPONSE_MAX_BYTES=1_000_000;
 
 export type AnthropicDocumentConfig={
  provider:'anthropic-direct';
@@ -159,9 +162,11 @@ export function anthropicDocumentTransport(
    }
    let raw:{usage?:unknown;stop_reason?:string;stop_details?:unknown;content?:unknown};
    try{
-    const text=await response.text();
-    if(text.length>1_000_000)throw Error('oversize');
-    raw=JSON.parse(text);
+    // Bounded before allocation, not after: response.text() materialised the whole body
+    // and only then compared its length, so an oversize response was already in memory by
+    // the time it was refused. intakeJSON stops reading at the cap, which is the same
+    // reader the extraction path already uses.
+    raw=await intakeJSON(response,DOCUMENT_RESPONSE_MAX_BYTES) as typeof raw;
    }catch{
     if(hooks.recordDiagnostic)await hooks.recordDiagnostic(attempt,{category:signal.aborted?'cancelled':'response_unreadable',httpStatus:response.status});
     throw Error('provider_outcome_unresolved');

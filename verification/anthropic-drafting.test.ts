@@ -14,7 +14,7 @@ import {join,resolve} from 'node:path';
 import {
  anthropicDocumentEndpoint,anthropicDocumentConfigurationHash,anthropicDocumentKey,anthropicDocumentBody,
  anthropicDocumentText,anthropicDocumentTransport,documentCostBound,validDocumentUsage,documentDiagnostic,
- ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,SONNET55_MICROS,DOCUMENT_REQUEST_PROFILE,
+ ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,SONNET55_MICROS,DOCUMENT_REQUEST_PROFILE,DOCUMENT_RESPONSE_MAX_BYTES,
  type AnthropicDocumentConfig,type DocumentDiagnostic,type DocumentUsage,
 } from '../src/lib/task-document-anthropic.ts';
 import {readBrandRules,brandRules,brandSystemPrompt,brandSection,BRAND_KIT_SECTIONS} from '../src/lib/task-brand-rules.ts';
@@ -279,4 +279,127 @@ test('the real brand kit still exposes the sections this lane extracts', async (
  assert.deepEqual(rules.sections,[...BRAND_KIT_SECTIONS]);
  assert.ok(rules.text.includes('Direct, data-driven, specific'));
  assert.ok(rules.text.length>500&&rules.text.length<=6000);
+});
+
+/*
+ * Lane F / review finding R1: finish the bounded drafting transport in its production
+ * wiring. Two separate defects: the successful-response read was not actually bounded, and
+ * recordDiagnostic was not connected outside injected tests.
+ */
+test('R1: a successful response is bounded while streaming, not after allocation', async () => {
+ const file=await keyFile();
+ let pulled=0;
+ // A body that never ends. response.text() would read it until memory ran out and only
+ // then compare its length; the capped reader must stop at the ceiling.
+ const endless=new ReadableStream<Uint8Array>({pull(c){pulled++;c.enqueue(new TextEncoder().encode('x'.repeat(64*1024)))}});
+ const diagnostics:DocumentDiagnostic[]=[];
+ const model=anthropicDocumentTransport(config({keyFile:file}),anthropicDocumentKey(file),
+  async()=>new Response(endless,{status:200,headers:{'content-type':'application/json'}}),
+  {recordDiagnostic:async(_a,d)=>{diagnostics.push(d)}});
+ await assert.rejects(model.invoke('system','prompt','11111111-1111-1111-1111-111111111111'),/provider_outcome_unresolved/);
+ // Bounded: the reader stopped within a couple of 64 KiB chunks of the ceiling instead of
+ // consuming an endless body. The slack is the stream's own read-ahead, not slack in the
+ // cap -- the point is that this terminates at all, which response.text() would not.
+ assert.ok(pulled*65536<=DOCUMENT_RESPONSE_MAX_BYTES+3*65536,`read ${pulled*65536} bytes against the ${DOCUMENT_RESPONSE_MAX_BYTES} cap`);
+ assert.ok(pulled>0);
+ assert.equal(DOCUMENT_RESPONSE_MAX_BYTES,1_000_000);
+ // An unreadable body is still a recorded diagnostic with no retry and no raw content.
+ assert.deepEqual(diagnostics.map(d=>d.category),['response_unreadable']);
+ assert.ok(!JSON.stringify(diagnostics).includes('xxxx'));
+});
+
+test('R1: an oversize but finite response is refused without being parsed', async () => {
+ const file=await keyFile();
+ const big=JSON.stringify({usage:{input_tokens:1,output_tokens:1},stop_reason:'end_turn',content:[{type:'text',text:'y'.repeat(DOCUMENT_RESPONSE_MAX_BYTES+10)}]});
+ const model=anthropicDocumentTransport(config({keyFile:file}),anthropicDocumentKey(file),
+  async()=>new Response(big,{status:200,headers:{'content-type':'application/json'}}));
+ await assert.rejects(model.invoke('system','prompt','11111111-1111-1111-1111-111111111111'),/provider_outcome_unresolved/);
+ // A body inside the cap still parses, so the cap is a ceiling and not a regression.
+ const fine=anthropicDocumentTransport(config({keyFile:file}),anthropicDocumentKey(file),async()=>ok(reply()));
+ assert.ok(await fine.invoke('system','prompt','11111111-1111-1111-1111-111111111111'));
+});
+
+test('R1: the production wrapper persists 401, 429, 529 and refusal diagnostics', async () => {
+ const {documentModel,documentRuntimeHooks}=await import('../src/lib/meetings/document-runtime.ts');
+ const file=await keyFile();
+ const journalDir=await mkdtemp(join(tmpdir(),'atlas-diag-'));
+ await chmod(journalDir,0o700);
+ const journal=join(journalDir,'drafting-diagnostics.jsonl');
+ const live={
+  enabled:true,mode:'live' as const,provider:'anthropic-direct',model:'claude-sonnet-5-5',
+  codec:'atlas-document-json-v1',endpoint:ANTHROPIC_MESSAGES_ENDPOINT,timeoutMs:60000,
+  maxOutputTokens:8000,maxPromptCharacters:60000,headerEnvironment:{},
+  disclosureDecision:'sprint-20261007-disclosure',budgetDecision:'sprint-20261007-budget',
+  keyFile:file,assetBrain:'/Users/atlasai/atlas-brain',
+  brandKit:'/Users/atlasai/atlas-brain/brain/UNDENIABLE_BRAND_KIT.md',
+  providerDiagnosticsFile:journal,
+ };
+ const previous=process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION;
+ process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION='reviewed';
+ try{
+  // The hooks the real buildTaskDocument builds, not hooks invented by this test.
+  const rpcCalls:string[]=[];
+  const ledger={token:'synthetic-token'};
+  const hooks=documentRuntimeHooks(live,async(action)=>{rpcCalls.push(action);return {}},ledger);
+  const cases:[string,Response][]=[
+   ['authentication_error',ok({error:{type:'authentication_error',message:'invalid x-api-key'}},401)],
+   ['rate_limit_error',ok({error:{type:'rate_limit_error',message:'slow down, secret prompt text'}},429,{'retry-after':'30'})],
+   ['overloaded_error',ok({error:{type:'overloaded_error',message:'overloaded'}},529)],
+   ['refusal',ok({usage:{input_tokens:10,output_tokens:20},stop_reason:'refusal',stop_details:{category:'policy_refusal',explanation:'free-form text that must not be retained'}},200)],
+  ];
+  for(const [,response] of cases){
+   // documentModel() binds the brand system prompt itself, so invoke takes (prompt,attempt).
+   const model=await documentModel(live,async()=>response,hooks);
+   assert.ok(model.system&&model.system.includes('Undeniable brand rules'));
+   await assert.rejects(model.invoke('secret prompt text','11111111-1111-1111-1111-111111111111'));
+  }
+  const lines=(await (await import('node:fs/promises')).readFile(journal,'utf8')).trim().split('\n').map(l=>JSON.parse(l));
+  assert.equal(lines.length,4,'one persisted diagnostic per case');
+  assert.deepEqual(lines.map(l=>l.diagnostic.httpStatus),[401,429,529,200]);
+  assert.deepEqual(lines.map(l=>l.diagnostic.providerErrorType??l.diagnostic.category),
+   ['authentication_error','rate_limit_error','overloaded_error','provider_refusal']);
+  assert.equal(lines[3].diagnostic.refusalCategory,'policy_refusal');
+  assert.ok(lines.every(l=>l.attempt==='11111111-1111-1111-1111-111111111111'));
+  // Nothing raw reaches the journal: not the key, the prompt, the system prompt, the
+  // provider message or the refusal explanation.
+  const text=JSON.stringify(lines);
+  for(const forbidden of [SYNTHETIC_KEY,'secret prompt text','invalid x-api-key','free-form text that must not be retained','slow down','Undeniable brand rules'])
+   assert.ok(!text.includes(forbidden),`journal leaked: ${forbidden}`);
+  // Usage still precedes the refusal, and it is the ledger RPC that records it.
+  assert.ok(rpcCalls.includes('usage'),JSON.stringify(rpcCalls));
+  // The journal is owner-only 0600.
+  const stat=await (await import('node:fs/promises')).lstat(journal);
+  assert.equal(stat.mode&0o777,0o600);
+ }finally{
+  if(previous===undefined)delete process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION;
+  else process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION=previous;
+ }
+});
+
+test('R1: a live binding with no diagnostics journal is refused before any dispatch', async () => {
+ const {documentModel}=await import('../src/lib/meetings/document-runtime.ts');
+ const file=await keyFile();
+ const base={
+  enabled:true,mode:'live' as const,provider:'anthropic-direct',model:'claude-sonnet-5-5',
+  codec:'atlas-document-json-v1',endpoint:ANTHROPIC_MESSAGES_ENDPOINT,timeoutMs:60000,
+  maxOutputTokens:8000,maxPromptCharacters:60000,headerEnvironment:{},
+  disclosureDecision:'d',budgetDecision:'b',keyFile:file,
+  assetBrain:'/Users/atlasai/atlas-brain',
+  brandKit:'/Users/atlasai/atlas-brain/brain/UNDENIABLE_BRAND_KIT.md',
+ };
+ const previous=process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION;
+ process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION='reviewed';
+ let dispatches=0;
+ try{
+  await assert.rejects(documentModel(base as never,async()=>{dispatches++;return ok(reply())},{}),/provider_diagnostics_path_required/);
+  await assert.rejects(documentModel({...base,providerDiagnosticsFile:'relative.jsonl'},async()=>{dispatches++;return ok(reply())},{}),/private_diagnostic_binding_required/);
+  // A world-readable directory is refused too, so a diagnostic cannot land somewhere shared.
+  const open=await mkdtemp(join(tmpdir(),'atlas-diag-open-'));
+  await chmod(open,0o755);
+  await assert.rejects(documentModel({...base,providerDiagnosticsFile:join(open,'d.jsonl')},async()=>{dispatches++;return ok(reply())},{}),/owner_only_diagnostics_required/);
+  assert.equal(dispatches,0);
+ }finally{
+  if(previous===undefined)delete process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION;
+  else process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION=previous;
+ }
 });
