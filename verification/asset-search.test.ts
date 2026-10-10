@@ -8,7 +8,7 @@
  */
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,mkdir,symlink} from 'node:fs/promises';
+import {mkdtemp,writeFile,mkdir,symlink,realpath,rename,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -17,7 +17,8 @@ import {
  assetPlainText,assetScore,ASSET_LIMITS,
 } from '../src/lib/task-asset-search.ts';
 import {
- __injectAssetBoundaryForTests,PRODUCTION_BRAIN_ROOT,BRAND_KIT_RELATIVE_PATH,brainRoot,
+ __injectAssetBoundaryForTests,__setBoundaryTraversalHookForTests,PRODUCTION_BRAIN_ROOT,
+ BRAND_KIT_RELATIVE_PATH,brainRoot,containedPath,readContainedFile,
 } from '../src/lib/task-asset-boundary.ts';
 import {readBrandRules} from '../src/lib/task-brand-rules.ts';
 
@@ -30,6 +31,13 @@ async function withBrain<T>(root:string,fn:()=>Promise<T>){
  __injectAssetBoundaryForTests({brainRoot:root});
  try{return await fn()}finally{__injectAssetBoundaryForTests({brainRoot:BRAIN})}
 }
+/**
+ * A scratch brain must be a *resolved* path. An injected root is now held to the same trust
+ * rules as the production constant — it has to resolve to itself — and on macOS
+ * `os.tmpdir()` is reached through the `/var` → `/private/var` link, so an unresolved
+ * mkdtemp path would be refused as a linked ancestor before any case got to its own point.
+ */
+const scratch=async(prefix:string)=>realpath(await mkdtemp(join(tmpdir(),prefix)));
 const ROOTS=atlasAssetRoots(BRAIN);
 const SHARED=ROOTS.filter(r=>r.kind==='shared');
 const OWN={client:'Northwind Pilates',directories:['northwind-pilates']};
@@ -117,7 +125,7 @@ test('a source edited after release fails the read instead of substituting new c
 });
 
 test('the candidate set is capped at eight and reports truncation', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-asset-cap-'));
+ const directory=await scratch('atlas-asset-cap-');
  await mkdir(join(directory,'many'),{recursive:true});
  for(let i=0;i<14;i++)await writeFile(join(directory,'many',`escalation-${i}.md`),`# Escalation note ${i}\n\nEscalation ladder detail for the coach role, item ${i}, with enough text to pass the usable-text floor.`);
  const roots=[{key:'playbooks',path:join(directory,'many'),kind:'shared' as const,label:'fixture'}];
@@ -131,7 +139,7 @@ test('the candidate set is capped at eight and reports truncation', async () => 
 });
 
 test('a symlink out of the root is refused rather than followed', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-asset-link-'));
+ const directory=await scratch('atlas-asset-link-');
  const outside=join(directory,'outside');await mkdir(outside,{recursive:true});
  await writeFile(join(outside,'secret.md'),'# Secret\n\nEscalation ladder content that must never be reachable through a symlink.');
  const inside=join(directory,'inside');await mkdir(inside,{recursive:true});
@@ -144,7 +152,7 @@ test('a symlink out of the root is refused rather than followed', async () => {
 });
 
 test('binary and oversize files are skipped, not partially read', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-asset-size-'));
+ const directory=await scratch('atlas-asset-size-');
  await writeFile(join(directory,'huge.md'),'# Escalation\n\n'+'escalation '.repeat(ASSET_LIMITS.maxFileBytes));
  await writeFile(join(directory,'image.png'),Buffer.from([0x89,0x50,0x4e,0x47]));
  await writeFile(join(directory,'fine.md'),'# Escalation ladder\n\nEscalation ladder content within the size bound for the coach role.');
@@ -202,7 +210,7 @@ test('R5: a configured brain root that is not the canonical one is refused', () 
 });
 
 test('R5: a symlinked ancestor under content/ is refused, not resolved into scope', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-asset-ancestor-'));
+ const directory=await scratch('atlas-asset-ancestor-');
  // The escape: content/ itself is a link out of the brain. lstat of the final directory
  // content/playbooks sees an ordinary directory, and realpath of it then reports the
  // outside location as the root's own real path.
@@ -221,7 +229,7 @@ test('R5: a symlinked ancestor under content/ is refused, not resolved into scop
 });
 
 test('R5: a symlinked single-file root is refused instead of taking the early branch', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-asset-filelink-'));
+ const directory=await scratch('atlas-asset-filelink-');
  const outside=join(directory,'outside');await mkdir(outside,{recursive:true});
  await writeFile(join(outside,'frameworks.md'),'# Frameworks\n\nEscalation ladder content outside the brain reached through a single-file root link.');
  const brain=join(directory,'brain-root');await mkdir(join(brain,'brain'),{recursive:true});
@@ -241,7 +249,7 @@ test('R5: a symlinked single-file root is refused instead of taking the early br
 });
 
 test('R5: a brandKit path outside the brain is refused', async () => {
- const directory=await mkdtemp(join(tmpdir(),'atlas-brand-outside-'));
+ const directory=await scratch('atlas-brand-outside-');
  await writeFile(join(directory,'UNDENIABLE_BRAND_KIT.md'),'## 1. BRAND IDENTITY\n\nSubstituted voice.\n');
  // Any absolute regular file used to be accepted; only the pinned path beneath the brain
  // in force is now permitted, and the production constant is unreachable from config.
@@ -257,4 +265,103 @@ test('R5: a brandKit path outside the brain is refused', async () => {
  await withBrain(brain,async()=>{
   await assert.rejects(readBrandRules(join(brain,BRAND_KIT_RELATIVE_PATH)),/brand_kit_unavailable/);
  });
+});
+
+/*
+ * Lane F2 / review finding R5, the two counterexamples Lane R2 left open. The cases above
+ * cover static configurations and static links; these two cover the root itself and the
+ * replacement race, which are the ones that still permitted a read outside the brain.
+ */
+test('R5 regression: a linked brain root, a linked ancestor of it, and an untrusted owner are all refused', async () => {
+ const directory=await scratch('atlas-asset-rootlink-');
+ // Counterexample 1: the brain root itself is a link out. The previous implementation
+ // resolved the root and then started its component walk from the resolved location, so
+ // every child of the outside directory passed the checks against that location.
+ const outside=join(directory,'outside');
+ await mkdir(join(outside,'content','playbooks'),{recursive:true});
+ await writeFile(join(outside,'content','playbooks','escalation.md'),'# Escalation ladder\n\nContent outside the brain that must never be reachable through a linked brain root.');
+ const linkedRoot=join(directory,'linked-brain');
+ await symlink(outside,linkedRoot);
+ const roots=[{key:'playbooks',path:join(linkedRoot,'content','playbooks'),kind:'shared' as const,label:'fixture'}];
+ const found=await withBrain(linkedRoot,()=>searchTaskAssets(roots,OWN,terms('escalation ladder')));
+ assert.deepEqual(found.candidates,[]);
+ assert.ok(found.skipped.some(s=>s.reason==='asset_brain_root_symlink_refused'),JSON.stringify(found.skipped));
+ await withBrain(linkedRoot,async()=>{
+  await assert.rejects(readReleasedAsset(roots,{id:'asset:playbooks:escalation.md',contentHash:'0'.repeat(64),clientDirectory:null},OWN),/asset_brain_root_symlink_refused/);
+  // The brand kit takes the same trusted root, and it is the one read with no released
+  // digest behind it, so its own refusal is asserted rather than assumed.
+  await assert.rejects(readBrandRules(join(linkedRoot,BRAND_KIT_RELATIVE_PATH)),/brand_kit_brain_untrusted/);
+ });
+ // The root is an ordinary directory but an ancestor of it is the link. lstat of the root
+ // sees a directory, so only requiring the resolved root to equal the canonical one catches
+ // this; using the resolved value as the base does not.
+ const realParent=join(directory,'real-parent');
+ await mkdir(join(realParent,'brain-root','content'),{recursive:true});
+ const linkedParent=join(directory,'linked-parent');
+ await symlink(realParent,linkedParent);
+ await withBrain(join(linkedParent,'brain-root'),async()=>{
+  await assert.rejects(containedPath(join(linkedParent,'brain-root','content')),/asset_brain_not_canonical/);
+ });
+ // Ownership is part of the trust decision, not only link type: a component another account
+ // can rename can redirect everything beneath it. /private/tmp resolves to itself and is a
+ // directory, and is still refused because it is not this user's.
+ await withBrain('/private/tmp',async()=>{
+  await assert.rejects(containedPath(join('/private/tmp','anything.md')),/asset_brain_owner_unexpected/);
+ });
+ // A brain root reached through a relative or unresolved path is refused outright.
+ await withBrain(join(directory,'absent-brain'),async()=>{
+  await assert.rejects(containedPath(join(directory,'absent-brain','x.md')),/asset_brain_absent/);
+ });
+});
+
+test('R5 regression: an ancestor swapped for a symlink after validation and before open refuses the read', async () => {
+ const directory=await scratch('atlas-asset-race-');
+ const brain=join(directory,'brain-root');
+ await mkdir(join(brain,'content','playbooks'),{recursive:true});
+ const target=join(brain,'content','playbooks','escalation.md');
+ await writeFile(target,'# Escalation ladder\n\nThe genuine in-brain escalation ladder for the coach role.');
+ const outside=join(directory,'outside');
+ await mkdir(join(outside,'playbooks'),{recursive:true});
+ await writeFile(join(outside,'playbooks','escalation.md'),'# Escalation ladder\n\nOUTSIDE-THE-BRAIN content that must never be returned by a redirected read.');
+ const content=join(brain,'content'),stashed=join(directory,'content-stashed');
+ const swap=async()=>{await rename(content,stashed);await symlink(outside,content)};
+ const restore=async()=>{await rm(content,{force:true});await rename(stashed,content)};
+
+ // First prove the fixture is a real escape rather than a theoretical one: with content/
+ // swapped, an ordinary read of the same in-brain pathname returns the outside bytes. That
+ // is what the leaf open did once an ancestor had been replaced after validation.
+ await swap();
+ assert.match(await readFile(target,'utf8'),/OUTSIDE-THE-BRAIN/);
+ await restore();
+
+ // Now the same swap, performed deterministically at the worst instant: immediately after
+ // content/ has been validated and opened, and before the components below it are opened.
+ // No sleeps and no racing — the traversal hook yields at exactly that point.
+ for(const putBack of [false,true]){
+  let swapped=false;
+  __setBoundaryTraversalHookForTests(async ({path,index,segments})=>{
+   if(path===content&&!swapped){swapped=true;await swap();return}
+   // The harder variant: the ancestor is put back after the redirected leaf is open, so
+   // the post-open revalidation sees a clean, link-free path. The pinned descriptors are
+   // what give it away — the inode it handed us is not the one the clean path yields.
+   if(putBack&&swapped&&index===segments.length-1)await restore();
+  });
+  try{
+   const outcome=await withBrain(brain,()=>readContainedFile(target,ASSET_LIMITS.maxFileBytes)).then(r=>r,(e:Error)=>e);
+   assert.ok(swapped,'the hook never fired, so the swap was not exercised');
+   assert.ok(outcome instanceof Error,'the redirected read returned bytes instead of refusing');
+   assert.match(outcome.message,putBack?/asset_ancestor_replaced_refused/:/asset_symlink_ancestor_refused/,`putBack=${putBack}: ${outcome.message}`);
+  }finally{
+   __setBoundaryTraversalHookForTests(null);
+   if(!putBack)await restore();
+  }
+ }
+
+ // Undisturbed, the same read succeeds and returns the in-brain bytes, so the two refusals
+ // above are caused by the swap and not by the fixture being unreadable.
+ const ok=await withBrain(brain,()=>readContainedFile(target,ASSET_LIMITS.maxFileBytes));
+ assert.match(ok.bytes.toString('utf8'),/genuine in-brain/);
+ assert.doesNotMatch(ok.bytes.toString('utf8'),/OUTSIDE-THE-BRAIN/);
+ assert.equal(ok.real,target);
+ assert.equal(ok.realRoot,brain);
 });
