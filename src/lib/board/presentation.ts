@@ -94,3 +94,103 @@ export function actorName(key:string|null|undefined):string{
  if(bare==='atlas')return 'Atlas';
  return bare.charAt(0).toUpperCase()+bare.slice(1);
 }
+
+/**
+ * Who may change what on a task, derived from the server's own capability payload.
+ *
+ * Review finding R6: the board read `capability.triage` — which is `can_triage` returned
+ * verbatim by `public.meeting_capability()` — as permission to change owner, executor,
+ * reviewer, next step and due date. `can_triage` is the triage right: whether this actor
+ * may turn a call commitment into a task at all. It is not an ownership right, and the
+ * captured hosted capability has Nat, a builder, at `triage:true`, so a visible valid task
+ * of hers would have exposed enabled owner and executor controls.
+ *
+ * The permission source used instead is already in the same payload and is equally
+ * server-derived: `rhysActor` is `app_private.meeting_reviewers.rhys_actor`, the recorded
+ * accountable principal. The delegation RPC uses exactly that value as its own authority
+ * anchor — on any request with an active task grant it refuses a reviewer that is not
+ * `r.rhys_actor` (`required_reviewer_change_denied`) — so deriving ownership management
+ * from it matches the mutation boundary rather than guessing alongside it.
+ *
+ * Executor scheduling is retained deliberately and separately: the person doing the work
+ * may move its due date and report on it. That is a scheduling right, not an ownership
+ * right, so it is named here rather than folded into triage.
+ */
+export type BoardCapability={actor:string;triage:boolean;review:boolean;rhysActor:string|null};
+export type TaskControlSubject={executor?:string|null;next_reviewer?:string|null}|null|undefined;
+export type TaskControls={
+ /** Owner, next step and who is doing it. The accountable principal only. */
+ manageOwnership:boolean;
+ /** Who reviews it. Needs ownership, and `can_review` to displace an existing reviewer. */
+ setReviewer:boolean;
+ /** Due date. The accountable principal, or the person actually doing this task. */
+ schedule:boolean;
+ /** Why a control is absent, for the card's own wording. '' when nothing is withheld. */
+ withheldReason:string;
+};
+export function taskControls(capability:BoardCapability|null|undefined,task:TaskControlSubject):TaskControls{
+ const accountable=!!capability?.actor&&!!capability.rhysActor&&capability.actor===capability.rhysActor;
+ const doingIt=!!capability?.actor&&!!task?.executor&&task.executor===capability.actor;
+ // `can_triage` is still a precondition for writing anything, because the RPC refuses the
+ // edit action outright without it (`triage_denied`). It is no longer sufficient for any
+ // control, which is the correction: triage gates whether this actor may change a card at
+ // all; the rights below decide which fields.
+ const mayWrite=!!capability?.triage;
+ // An existing required reviewer may only be displaced by someone who can review.
+ const setReviewer=mayWrite&&accountable&&(!!capability?.review||!task?.next_reviewer);
+ return {
+  manageOwnership:mayWrite&&accountable,
+  setReviewer,
+  schedule:mayWrite&&(accountable||doingIt),
+  withheldReason:!mayWrite?'':accountable?'':doingIt
+   ? 'You can change the timing of this and report your work. Who owns it, who does it and who reviews it are set by the person accountable for it.'
+   : 'Who owns this, who does it and who reviews it are set by the person accountable for it.',
+ };
+}
+
+/**
+ * The payload fields each control writes. The route refuses any of these from an actor
+ * without the matching right, so the UI and the mutation boundary cannot drift apart.
+ */
+export const OWNERSHIP_FIELDS=['owner','executor','title'] as const;
+export const REVIEWER_FIELDS=['reviewer'] as const;
+export const SCHEDULE_FIELDS=['due'] as const;
+
+/** Fields in `payload` this capability may not write. Empty means the edit is permitted. */
+export function refusedEditFields(capability:BoardCapability|null|undefined,payload:Record<string,unknown>,task:TaskControlSubject){
+ const controls=taskControls(capability,task);
+ const refused:string[]=[];
+ for(const field of OWNERSHIP_FIELDS)if(field in payload&&!controls.manageOwnership)refused.push(field);
+ for(const field of REVIEWER_FIELDS)if(field in payload&&!controls.setReviewer)refused.push(field);
+ for(const field of SCHEDULE_FIELDS)if(field in payload&&!controls.schedule)refused.push(field);
+ return refused;
+}
+
+/**
+ * Customer-safe rendering of a canonical review-history note.
+ *
+ * Review finding R7: the customer "Where this came from" history printed
+ * `history[].input.note` verbatim, and canonical document completion and review write a
+ * SHA256 into exactly those notes (migration 028). The notes themselves are immutable and
+ * stay that way; this is a presentation layer over them.
+ *
+ * Every fragment the identifier detector above recognises is replaced by a visible marker
+ * rather than deleted, so a reader can tell that something technical was withheld instead
+ * of silently losing a clause. The raw note is kept on /board/engineering only.
+ */
+export const IDENTIFIER_PLACEHOLDER='[engineering detail]';
+export function customerSafeNote(note:string|null|undefined):string{
+ if(!note)return '';
+ let text=String(note);
+ for(const {pattern} of IDENTIFIER_PATTERNS){
+  const global=new RegExp(pattern.source,pattern.flags.includes('g')?pattern.flags:pattern.flags+'g');
+  text=text.replace(global,IDENTIFIER_PLACEHOLDER);
+ }
+ const marker=IDENTIFIER_PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ // Collapse runs of adjacent markers and the punctuation stranded between them, so a
+ // "SHA256 <hash>" pair does not read as two separate withholdings.
+ return text
+  .replace(new RegExp(`${marker}(?:[\\s;,·—-]*${marker})+`,'g'),IDENTIFIER_PLACEHOLDER)
+  .replace(/[ \t]{2,}/g,' ')
+  .trim();
+}
