@@ -8,7 +8,9 @@
  */
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,mkdir,symlink,realpath,rename,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,writeFile,mkdir,symlink,realpath,rename,rm,readFile,chmod} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -339,7 +341,10 @@ test('R5 regression: an ancestor swapped for a symlink after validation and befo
  // No sleeps and no racing — the traversal hook yields at exactly that point.
  for(const putBack of [false,true]){
   let swapped=false;
-  __setBoundaryTraversalHookForTests(async ({path,index,segments})=>{
+  __setBoundaryTraversalHookForTests(async ({phase,path,index,segments})=>{
+   // Lane F3: the hook also fires during revalidation now. This regression's schedule is
+   // the open walk only; the revalidation schedules are the Lane F3 cases below.
+   if(phase!=='open')return;
    if(path===content&&!swapped){swapped=true;await swap();return}
    // The harder variant: the ancestor is put back after the redirected leaf is open, so
    // the post-open revalidation sees a clean, link-free path. The pinned descriptors are
@@ -364,4 +369,163 @@ test('R5 regression: an ancestor swapped for a symlink after validation and befo
  assert.doesNotMatch(ok.bytes.toString('utf8'),/OUTSIDE-THE-BRAIN/);
  assert.equal(ok.real,target);
  assert.equal(ok.realRoot,brain);
+});
+
+/*
+ * Lane F3 / review finding R5, third pass. Lane R3's remaining defect: the revalidation walk
+ * was itself a sequence of pathname observations, so an ancestor swapped for a symlink DURING
+ * that second walk, after its own level had passed, made the later lstats follow the link and
+ * agree with the outside objects the first walk had pinned. The cases below perform exactly
+ * that schedule, for an asset read and for the brand kit, and then verify the exclusive-
+ * mutation property the new implementation checks rather than assumes.
+ */
+const sh=promisify(execFile);
+const acl=(flag:'+a'|'-a',entry:string,path:string)=>sh('/bin/chmod',[flag,entry,path]);
+
+test('R5 regression (R3 schedule): an ancestor swapped during the revalidation walk, after its level passed, refuses the read', async () => {
+ const directory=await scratch('atlas-asset-reval-');
+ const brain=join(directory,'brain-root');
+ await mkdir(join(brain,'content','playbooks'),{recursive:true});
+ const target=join(brain,'content','playbooks','escalation.md');
+ await writeFile(target,'# Escalation ladder\n\nThe genuine in-brain escalation ladder for the coach role.');
+ const outside=join(directory,'outside');
+ await mkdir(join(outside,'playbooks'),{recursive:true});
+ await writeFile(join(outside,'playbooks','escalation.md'),'# Escalation ladder\n\nOUTSIDE-THE-BRAIN content that must never be returned by a redirected read.');
+ const content=join(brain,'content'),stashed=join(directory,'content-stashed');
+ const swap=async()=>{await rename(content,stashed);await symlink(outside,content)};
+ const restore=async()=>{await rm(content,{force:true});await rename(stashed,content)};
+
+ // R3's five steps, driven deterministically by the hook:
+ //  1. the first walk opens genuine content/ and pins it            (phase open, content)
+ //  2. content/ is replaced by a link out; playbooks/ and the file
+ //     are opened through it, so OUTSIDE descriptors are pinned     (swap at 1)
+ //  3. genuine content/ is restored before the second walk checks it (phase open, last)
+ //  4. AFTER content/ has passed its second check, it is replaced
+ //     by the link again, so the later lstats follow it and agree    (phase revalidate, content)
+ //  5. the previous implementation returned the outside descriptor.
+ // Two endings: the link left in place, and content/ put back once more after the last level
+ // has revalidated, so that even a third pathname pass would see a clean chain.
+ const schedule=(putBackAgain:boolean)=>{
+  const s={open:false,revalidate:false,escape:false,linked:false};
+  __setBoundaryTraversalHookForTests(async ({phase,path,index,segments})=>{
+   const last=index===segments.length-1;
+   if(phase==='open'&&path===content&&!s.open){s.open=true;await swap();s.linked=true;return}
+   if(phase==='open'&&last&&s.linked){await restore();s.linked=false;return}
+   if(phase==='revalidate'&&path===content&&s.open&&!s.revalidate){
+    s.revalidate=true;await swap();s.linked=true;
+    // The schedule is a real escape at this instant: the in-brain pathname now reads outside.
+    s.escape=/OUTSIDE-THE-BRAIN/.test(await readFile(target,'utf8'));
+    return;
+   }
+   if(phase==='revalidate'&&last&&putBackAgain&&s.linked){await restore();s.linked=false}
+  });
+  return s;
+ };
+ const settle=async(s:{linked:boolean})=>{__setBoundaryTraversalHookForTests(null);if(s.linked){await restore();s.linked=false}};
+ for(const putBackAgain of [false,true]){
+  const s=schedule(putBackAgain);
+  try{
+   const outcome=await withBrain(brain,()=>readContainedFile(target,ASSET_LIMITS.maxFileBytes)).then(r=>r,(e:Error)=>e);
+   assert.ok(s.open&&s.revalidate,'the hook did not drive the full schedule');
+   assert.ok(s.escape,'the fixture did not reproduce the escape at the revalidation instant');
+   assert.ok(outcome instanceof Error,'the redirected read returned bytes instead of refusing');
+   assert.equal(outcome.message,'asset_chain_mutated_during_walk',`putBackAgain=${putBackAgain}: ${outcome.message}`);
+  }finally{await settle(s)}
+ }
+ // The search path, driven through the same schedule on its first containment walk, reports
+ // the refusal as a skip rather than a candidate.
+ {
+  const s=schedule(false);
+  try{
+   const roots=[{key:'playbooks',path:join(brain,'content','playbooks'),kind:'shared' as const,label:'fixture'}];
+   const found=await withBrain(brain,()=>searchTaskAssets(roots,OWN,terms('escalation ladder')));
+   assert.ok(s.open&&s.revalidate&&s.escape,'the search walk did not drive the full schedule');
+   assert.deepEqual(found.candidates,[]);
+   assert.ok(found.skipped.some(r=>r.reason==='asset_chain_mutated_during_walk'),JSON.stringify(found.skipped));
+  }finally{await settle(s)}
+ }
+ // Undisturbed, the same read returns the in-brain bytes.
+ const ok=await withBrain(brain,()=>readContainedFile(target,ASSET_LIMITS.maxFileBytes));
+ assert.match(ok.bytes.toString('utf8'),/genuine in-brain/);
+ assert.equal(ok.real,target);
+});
+
+test('R5 regression (R3 schedule, brand kit): brain/ swapped during the revalidation walk refuses the kit read', async () => {
+ const directory=await scratch('atlas-brand-reval-');
+ const brain=join(directory,'brain-root');
+ await mkdir(join(brain,'brain'),{recursive:true});
+ const genuine='## 1. BRAND IDENTITY\n\nGENUINE voice.\n\n## 11. WRITING STYLE GUIDE\n\nDirect, specific.\n\n## 12. FORMATTING DO AND DO NOT\n\nDo: short.\n';
+ await writeFile(join(brain,BRAND_KIT_RELATIVE_PATH),genuine);
+ const outside=join(directory,'outside');
+ await mkdir(outside,{recursive:true});
+ await writeFile(join(outside,'UNDENIABLE_BRAND_KIT.md'),genuine.replace('GENUINE','SUBSTITUTED-OUTSIDE'));
+ const kitDirectory=join(brain,'brain'),stashed=join(directory,'brain-stashed');
+ const swap=async()=>{await rename(kitDirectory,stashed);await symlink(outside,kitDirectory)};
+ const restore=async()=>{await rm(kitDirectory,{force:true});await rename(stashed,kitDirectory)};
+ let swappedDuringOpen=false,swappedDuringRevalidation=false,escapeConfirmed=false,linked=false;
+ __setBoundaryTraversalHookForTests(async ({phase,path,index,segments})=>{
+  const last=index===segments.length-1;
+  if(phase==='open'&&path===kitDirectory&&!swappedDuringOpen){swappedDuringOpen=true;await swap();linked=true;return}
+  if(phase==='open'&&last&&linked){await restore();linked=false;return}
+  if(phase==='revalidate'&&path===kitDirectory&&swappedDuringOpen&&!swappedDuringRevalidation){
+   swappedDuringRevalidation=true;await swap();linked=true;
+   escapeConfirmed=/SUBSTITUTED-OUTSIDE/.test(await readFile(join(brain,BRAND_KIT_RELATIVE_PATH),'utf8'));
+  }
+ });
+ try{
+  await withBrain(brain,async()=>{
+   await assert.rejects(readBrandRules(join(brain,BRAND_KIT_RELATIVE_PATH)),/brand_kit_unavailable/);
+  });
+  assert.ok(swappedDuringOpen&&swappedDuringRevalidation&&escapeConfirmed,'the brand-kit schedule was not fully driven');
+  // The precise refusal underneath the brand-rules wrapper.
+  swappedDuringOpen=swappedDuringRevalidation=false;
+  if(linked){await restore();linked=false}
+  await withBrain(brain,async()=>{
+   await assert.rejects(readContainedFile(join(brain,BRAND_KIT_RELATIVE_PATH),200_000),/asset_chain_mutated_during_walk/);
+  });
+ }finally{
+  __setBoundaryTraversalHookForTests(null);
+  if(linked)await restore();
+ }
+ const rules=await withBrain(brain,()=>readBrandRules(join(brain,BRAND_KIT_RELATIVE_PATH)));
+ assert.match(rules.text,/GENUINE voice/);
+ assert.doesNotMatch(rules.text,/SUBSTITUTED/);
+});
+
+test('R5: exclusive mutation of the chain is verified — group/other write bits and mutating ACL entries are refused', async () => {
+ const directory=await scratch('atlas-asset-exclusive-');
+ const brain=join(directory,'brain-root');
+ await mkdir(join(brain,'content','playbooks'),{recursive:true});
+ const target=join(brain,'content','playbooks','escalation.md');
+ await writeFile(target,'# Escalation ladder\n\nGenuine escalation ladder content for the exclusive-mutation case.');
+ const content=join(brain,'content');
+ const read=()=>withBrain(brain,()=>readContainedFile(target,ASSET_LIMITS.maxFileBytes)).then(()=>'ok',(e:Error)=>e.message);
+ assert.equal(await read(),'ok');
+ // Mode bits: a component another account can write is a component it can rename.
+ await chmod(content,0o775);assert.equal(await read(),'asset_chain_writable_by_others');await chmod(content,0o755);
+ await chmod(target,0o646);assert.equal(await read(),'asset_chain_writable_by_others');await chmod(target,0o644);
+ await chmod(brain,0o775);assert.equal(await read(),'asset_brain_writable_by_others');await chmod(brain,0o755);
+ await chmod(directory,0o707);assert.equal(await read(),'asset_brain_ancestor_writable_by_others');await chmod(directory,0o700);
+ assert.equal(await read(),'ok');
+ // ACL entries, read from the macOS listing. A mutating allow for any principal is refused;
+ // deny entries and read-only allows are not, because they grant nobody the power to rename.
+ await acl('+a','group:everyone allow add_file',content);
+ try{assert.equal(await read(),'asset_chain_acl_grants_mutation')}finally{await acl('-a','group:everyone allow add_file',content)}
+ await acl('+a','group:everyone allow write',target);
+ try{assert.equal(await read(),'asset_chain_acl_grants_mutation')}finally{await acl('-a','group:everyone allow write',target)}
+ await acl('+a','group:everyone allow delete',brain);
+ try{assert.equal(await read(),'asset_chain_acl_grants_mutation')}finally{await acl('-a','group:everyone allow delete',brain)}
+ await acl('+a','group:everyone deny delete',content);
+ try{assert.equal(await read(),'ok')}finally{await acl('-a','group:everyone deny delete',content)}
+ await acl('+a','group:everyone allow read,list,search,readattr',content);
+ try{assert.equal(await read(),'ok')}finally{await acl('-a','group:everyone allow read,list,search,readattr',content)}
+ assert.equal(await read(),'ok');
+ // The search path surfaces the same refusal as a skip reason.
+ await acl('+a','group:everyone allow add_subdirectory',join(content,'playbooks'));
+ try{
+  const roots=[{key:'playbooks',path:join(content,'playbooks'),kind:'shared' as const,label:'fixture'}];
+  const found=await withBrain(brain,()=>searchTaskAssets(roots,OWN,terms('escalation ladder')));
+  assert.deepEqual(found.candidates,[]);
+  assert.ok(found.skipped.some(s=>s.reason==='asset_chain_acl_grants_mutation'),JSON.stringify(found.skipped));
+ }finally{await acl('-a','group:everyone allow add_subdirectory',join(content,'playbooks'))}
 });
