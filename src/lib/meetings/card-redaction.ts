@@ -35,18 +35,30 @@ const WINDOW_TURNS=10;
 
 const digitsOf=(s:string)=>s.replace(/\D/g,'');
 export function luhn(d:string){let sum=0,alt=false;for(let i=d.length-1;i>=0;i--){let n=d.charCodeAt(i)-48;if(alt){n*=2;if(n>9)n-=9}sum+=n;alt=!alt}return d.length>0&&sum%10===0}
-/** A price, clock time, percentage, ordinal-ish count with units: never masked. */
+/**
+ * A clearly formatted price, clock time, percentage or unit count: not masked. R11b-1: every
+ * exemption is bounded. A run with card-length digits (12+) is never exempt, whatever its
+ * formatting (comma thousands, a currency sign, a following unit); unit and time words must be
+ * whole tokens ("am" never matches the start of "amount"); times must have a time's shape; unit
+ * counts have at most seven digits.
+ */
 function protectedRun(text:string,start:number,end:number){
- const before=text.slice(Math.max(0,start-2),start),after=text.slice(end,end+12).toLowerCase(),run=text.slice(start,end);
+ const before=text.slice(Math.max(0,start-2),start),after=text.slice(end,end+14).toLowerCase(),run=text.slice(start,end),d=digitsOf(run);
+ if(d.length>=12)return false;
  if(/[$€£]\s?$/.test(before))return true;
- if(/^\s?(?:%|percent|dollars?|bucks|k\b|grand|aud|usd|per (?:month|week|year)|a (?:month|week|year)|views|followers|clients|people|minutes|mins|hours|hrs|days|weeks|months|years old)/.test(after))return true;
- if(/^\d{1,2}:\d{2}$/.test(run)||/^\s?(?:am|pm|a\.m\.|p\.m\.)/.test(after))return true;
+ if(d.length<=7&&/^\s?(?:%|(?:percent|dollars?|bucks|k|grand|aud|usd|views|followers|clients|people|minutes|mins|hours|hrs|days|weeks|months)(?![a-z])|per (?:month|week|year)(?![a-z])|a (?:month|week|year)(?![a-z])|years old(?![a-z]))/.test(after))return true;
+ if(/^\d{1,2}:\d{2}$/.test(run))return true;
+ if(/^\d{1,2}(?::\d{2})?$/.test(run)&&/^\s?(?:am|pm|a\.m\.|p\.m\.)(?![a-z])/.test(after))return true;
  if(/^\d{1,3}(?:,\d{3})+(?:\.\d{2})?$/.test(run))return true;
  return false;
 }
 type Span={start:number;end:number;digits:number};
+// R11b-1: inside a payment window a turn that is nothing but number words ("one", "two", "seven
+// thirty") is a value, even a single word.
+const ONLY_NUMWORDS=new RegExp(`^[\\s,.!?-]*(${NUMWORD}(?:[\\s,.-]+(?:and\\s+)?${NUMWORD})*)[\\s,.!?-]*$`,'i');
 function runs(text:string,inWindow=false):Span[]{
  const out:Span[]=[];
+ if(inWindow){const m=ONLY_NUMWORDS.exec(text);if(m){const s=text.indexOf(m[1]);out.push({start:s,end:s+m[1].length,digits:m[1].split(/[\s,.-]+/).filter(w=>w&&w.toLowerCase()!=='and').length})}}
  for(const m of text.matchAll(DIGIT_RUN)){const s=m.index!,e=s+m[0].length;out.push({start:s,end:e,digits:digitsOf(m[0]).length})}
  for(const m of text.matchAll(inWindow?NUMWORD_RUN:SPOKEN_RUN)){const s=m.index!,e=s+m[0].length;out.push({start:s,end:e,digits:m[0].split(/[\s,-]+/).filter(w=>w.toLowerCase()!=='and').length})}
  // Overlapping matches keep the earliest, longest span.
@@ -133,12 +145,23 @@ export function redactCardData<P extends RedactablePassage>(passages:P[],summary
   },counts,windowKind[i]!==null);
   return text===p.text?p:{...p,text};
  });
- // The provider summary is one text: same rules, the whole text is its own window if it has a cue.
- const sk=cueKind(summary);
- const maskedSummary=maskText(summary,(s,cueBefore)=>{
-  if(protectedRun(summary,s.start,s.end))return null;
-  if(sk)return cueBefore??byShape(summary.slice(s.start,s.end),sk);
-  const d=digitsOf(summary.slice(s.start,s.end));return d.length>=13&&d.length<=19&&luhn(d)?'card':null;
+ // The provider summary is one text: the whole text is its own window if it has a cue.
+ return {passages:masked,summary:redactSingle(summary,counts),counts};
+}
+/** One free-standing text (summary, title, speaker name): its own window when it carries a cue. */
+function redactSingle(text:string,counts:RedactionCounts){
+ const sk=cueKind(text);
+ return maskText(text,(s,cueBefore)=>{
+  if(protectedRun(text,s.start,s.end))return null;
+  if(sk)return cueBefore??byShape(text.slice(s.start,s.end),sk);
+  const d=digitsOf(text.slice(s.start,s.end));return d.length>=13&&d.length<=19&&luhn(d)?'card':null;
  },counts,sk!==null);
- return {passages:masked,summary:maskedSummary,counts};
+}
+/**
+ * The contract (R11b-1): transcript turns, the provider summary, the meeting title (in the catalog
+ * row and in the captured source) and speaker names are masked. Participant emails, the
+ * organizer, ids and timestamps are identifiers, not free text, and are not altered.
+ */
+export function redactText(text:string):{text:string;counts:RedactionCounts}{
+ const counts:RedactionCounts={card:0,expiry:0,cvc:0};return {text:redactSingle(text,counts),counts};
 }

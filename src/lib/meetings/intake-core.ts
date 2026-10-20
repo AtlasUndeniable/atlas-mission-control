@@ -1,7 +1,7 @@
 /** Ingestion only. No client-homework processor, sends, automatic task acceptance or model default. */
 import {createHash} from 'node:crypto';
 import {passageCommitmentKey} from '../commitments/key.ts';
-import {redactCardData,type RedactionCounts} from './card-redaction.ts';
+import {redactCardData,redactText,type RedactionCounts} from './card-redaction.ts';
 export const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 export type Passage={speaker:string;text:string;start:number|null;end:number|null};
 export type MeetingSource={id:string;title:string;instant:string;live:boolean;passages:Passage[];summary:string;revision:string};
@@ -21,7 +21,15 @@ export function normalizeWithRedaction(raw:Record<string,unknown>):{source:Meeti
   return {speaker:u.speaker_name,text:u.text,start,end};
  });
  const red=redactCardData(passages,String((raw.summary as Record<string,unknown>|null)?.action_items||''));
- const content={id:raw.id,title:raw.title,instant,live:raw.is_live,passages:red.passages,summary:red.summary};
+ // Title and speaker names are free text too: masked by the same single-text rule, and counted.
+ const title=redactText(raw.title);
+ const speakers=new Map<string,string>();
+ const passagesOut=red.passages.map(p=>{
+  if(!speakers.has(p.speaker)){const r=redactText(p.speaker);speakers.set(p.speaker,r.text);for(const k of ['card','expiry','cvc'] as const)red.counts[k]+=r.counts[k]}
+  const sp=speakers.get(p.speaker)!;return sp===p.speaker?p:{...p,speaker:sp};
+ });
+ for(const k of ['card','expiry','cvc'] as const)red.counts[k]+=title.counts[k];
+ const content={id:raw.id,title:title.text,instant,live:raw.is_live,passages:passagesOut,summary:red.summary};
  return {source:{...content,revision:hash(content)} as MeetingSource,redaction:red.counts};
 }
 /** Strict output boundary for a separately authorized extractor. No model-selected person keys. */

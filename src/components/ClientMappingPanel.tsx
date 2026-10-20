@@ -1,6 +1,6 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
-import {BADGE_LABEL,clientChoices,mappingHeadline,newClientDefaults,parseMappingList,rememberFor,singleSuggestion,type MappingAction,type MappingItem,type MappingList,type RereviewItem} from '@/lib/board/client-mapping';
+import {BADGE_LABEL,PAGE_SIZE,clientChoices,listQuery,mappingHeadline,newClientDefaults,parseMappingList,rememberFor,singleSuggestion,type MappingAction,type MappingItem,type MappingList,type RereviewItem} from '@/lib/board/client-mapping';
 import styles from './ClientMappingPanel.module.css';
 /**
  * Calls Atlas assigned to a client (with a change-client button), calls it held for a person
@@ -11,9 +11,10 @@ import styles from './ClientMappingPanel.module.css';
 export default function ClientMappingPanel(){
  const [list,setList]=useState<MappingList|null>(null);
  const [busy,setBusy]=useState(false);const [message,setMessage]=useState('');
+ const [offset,setOffset]=useState(0);const [search,setSearch]=useState('');const [query,setQuery]=useState('');
  const read=useCallback(async()=>{
-  try{const r=await fetch('/api/board/meetings/clients',{cache:'no-store'});if(!r.ok)throw Error();setList(parseMappingList(await r.json()))}catch{setList(null)}
- },[]);
+  try{const r=await fetch('/api/board/meetings/clients?'+listQuery(offset,query),{cache:'no-store'});if(!r.ok)throw Error();setList(parseMappingList(await r.json()))}catch{setList(null)}
+ },[offset,query]);
  useEffect(()=>{void read();const t=setInterval(read,60000);return()=>clearInterval(t)},[read]);
  const act=async(action:MappingAction,payload:Record<string,unknown>,done:string)=>{
   setBusy(true);setMessage('');
@@ -21,13 +22,15 @@ export default function ClientMappingPanel(){
   catch(e){setMessage(e instanceof Error&&e.message?e.message:'That choice was not saved.')}
   finally{setBusy(false);void read()}
  };
- if(!list||(list.items.length===0&&list.rereview.length===0))return null;
+ if(!list||(list.items.length===0&&list.rereview.length===0&&!query&&offset===0))return null;
  return <section className={styles.panel} aria-label="Calls and clients">
   <div className={styles.heading}><strong>{mappingHeadline(list)}</strong><button type="button" disabled={busy} onClick={()=>void read()}>Check again</button></div>
   <p className={styles.caveat}>Calls wait here until someone confirms the client. Atlas suggests one when it has evidence; one click confirms it, or choose another, add a new client, or mark someone as our team. A new client gets shared method material only until it is confirmed.</p>
+  <form className={styles.actions} onSubmit={e=>{e.preventDefault();setOffset(0);setQuery(search)}}><label>Find a call or client<input value={search} maxLength={100} onChange={e=>setSearch(e.target.value)}/></label><button type="submit" disabled={busy}>Search</button></form>
   {message&&<p role="status" className={styles.message}>{message}</p>}
   {list.rereview.length>0&&<ul className={styles.items}>{list.rereview.map(r=><RereviewRow key={r.request} item={r} busy={busy} act={act}/>)}</ul>}
   <ul className={styles.items}>{list.items.map(i=><MappingRow key={i.mapping} item={i} list={list} busy={busy} act={act}/>)}</ul>
+  {list.total>PAGE_SIZE&&<div className={styles.actions}><button type="button" disabled={busy||offset===0} onClick={()=>setOffset(o=>Math.max(0,o-PAGE_SIZE))}>Previous</button><span>{offset+1}–{Math.min(offset+PAGE_SIZE,list.total)} of {list.total}</span><button type="button" disabled={busy||offset+PAGE_SIZE>=list.total} onClick={()=>setOffset(o=>o+PAGE_SIZE)}>Next</button></div>}
  </section>;
 }
 type Act=(a:MappingAction,p:Record<string,unknown>,done:string)=>Promise<void>;
@@ -52,7 +55,7 @@ function MappingRow({item,list,busy,act}:{item:MappingItem;list:MappingList;busy
  const nameOf=(k:string)=>list.clients.find(c=>c.client===k)?.name??k;
  return <li className={styles.item} data-badge={item.badge}>
   <div className={styles.itemHead}><span className={styles.badge} data-badge={item.badge}>{BADGE_LABEL[item.badge]}</span><b>{item.title}</b>{item.instant&&<span className={styles.when}>{new Date(item.instant).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'})}</span>}</div>
-  {item.badge==='assigned'?<p>Assigned to <b>{item.clientName??nameOf(item.client??'')}</b> because a participant is already on that client&apos;s record.</p>
+  {item.badge==='assigned'?<p>Assigned to <b>{item.clientName??nameOf(item.client??'')}</b>{item.decidedBy.startsWith('human:')?` (confirmed by ${item.decidedBy.slice(6)})`:' automatically under the reviewed rule'}. Change it here if it is wrong.</p>
    :item.badge==='new_client'?<p><b>{item.clientName??item.client}</b>{item.company?` (${item.company})`:''} was added as a new client. Drafting uses shared method material only until it is confirmed.</p>
    :<p>{item.reason}.</p>}
   <ul className={styles.people}>{item.participants.map(p=><li key={p.email}>
