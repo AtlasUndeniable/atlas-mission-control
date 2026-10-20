@@ -1,6 +1,6 @@
 /** No production provider default, scheduling side effects or downstream integrations. */
 import {sourceMetadata}from './fireflies.ts';
-import {enumerate,normalize,validateExtraction,hash,SourceReadError,GlobalIntakeError,type Catalog,type MeetingSource,type Rpc} from './intake-core.ts';
+import {enumerate,normalizeWithRedaction,validateExtraction,hash,SourceReadError,GlobalIntakeError,type Catalog,type MeetingSource,type Rpc} from './intake-core.ts';
 export type Extractor={configurationHash:string;preflight?:(source:MeetingSource)=>void;requestBytes?:(source:MeetingSource)=>number;invoke:(source:MeetingSource,attempt:string,signal:AbortSignal)=>Promise<unknown>};
 export type Sweep={enabled:boolean;start:string;end:string;maxSources:number;maxPages:number;timeoutMs:number;run?:string;signal?:AbortSignal;discoveryOnly?:boolean};
 export function validatedExtraction(source:MeetingSource,raw:unknown){
@@ -40,10 +40,11 @@ export async function processMeeting(catalog:Catalog,rpc:Rpc,extractor:Extractor
       const {participants,...legacy}=metadata;
       if(hash(row.participants===undefined?legacy:metadata)!==hash({accountId:row.accountId,organizer:row.organizer,...(row.participants===undefined?{}:{participants:row.participants}),domains:row.domains}))throw new SourceReadError('metadata_changed');
      }
-     let source;try{source=normalize(rawSource)}catch{throw new SourceReadError('transcript_incomplete')}
+     // Card read-outs are masked here, before capture, quotes or any model call; only counts leave.
+     let source,redaction;try{({source,redaction}=normalizeWithRedaction(rawSource))}catch{throw new SourceReadError('transcript_incomplete')}
      if(options.signal?.aborted)throw Error('cancelled_before_capture');
      if(source.id!==row.id||source.live||Date.parse(source.instant)!==Date.parse(row.instant))throw new SourceReadError('metadata_changed');
-     const captured=await rpc('capture',{id:row.id,source,expected:eligible.revision??null,authority:eligible.authority});
+     const captured=await rpc('capture',{id:row.id,source,expected:eligible.revision??null,authority:eligible.authority,redaction});
      if(!source.passages.length)throw new SourceReadError('transcript_incomplete');
      if(captured.held!==true&&source.passages.length){
       // Deterministic complete-source envelope checks and the byte-floor cost bound before any allowance or dispatch.

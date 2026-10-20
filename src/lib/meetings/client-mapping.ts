@@ -1,23 +1,26 @@
 /**
- * Automatic client mapping for meeting intake (Lane N, migration 029).
+ * Client mapping for meeting intake (Lane N2, migration 029, after independent review R11).
  *
- * The collector gathers exact-email FACTS from three local sources and attaches them to catalog
- * rows; the hosted resolver (app_private.intake_client_decide) is authoritative and decides
- * against its own client list, which the collector never sees. decideMapping() below mirrors that
- * SQL so the rules are unit-testable here and parity-checked against the native rehearsal with the
- * shared case table verification/client-mapping-cases.json.
+ * The collector gathers exact-email FACTS from three local sources plus a coverage report and
+ * attaches them to catalog rows; the hosted resolver (app_private.intake_client_decide) is
+ * authoritative and decides against its own client list, which the collector never sees.
+ * decideMapping() mirrors that SQL so the rules are unit-testable here and parity-checked in the
+ * native rehearsal with the shared case table verification/client-mapping-cases.json.
  *
- * Rules (PRD R1.2): a participant email alone never grants client affiliation; personal
- * providers map on the exact address only, never on domain; a company domain maps only when
- * exactly one client uses it; anything ambiguous stays explicit; internal people are never clients.
+ * Rules: by default nothing outside the static crosswalk maps automatically (Dante, 2026-10-20);
+ * an exact approved identity (a person-recorded identity or the reviewed crosswalk) is the one-click
+ * pre-suggested client, and binds automatically only under the reviewed auto_bind_exact rule flag. CRM tags/names, prior-call titles, folder records and company
+ * domains are suggestions that keep the call Held for one click. Personal providers never
+ * suggest by domain; a shared/agency domain holds first. Incomplete coverage is a named Held
+ * state; a new client is only ever created by a person. Internal people are never clients.
  * No transcript content is read or sent by anything in this file.
  */
 import {readdir,readFile,stat}from'node:fs/promises';
 import {join}from'node:path';
 import type {Rpc}from'./intake-core.ts';
 
-/** Must equal app_private.intake_personal_domains() in migrations/029_client_mapping.sql. */
-export const PERSONAL_DOMAINS=['aol.com','bigpond.com','bigpond.net.au','fastmail.com','gmail.com','gmx.com','googlemail.com','hey.com','hotmail.co.uk','hotmail.com','hotmail.com.au','icloud.com','iinet.net.au','live.com','live.com.au','mac.com','mail.com','me.com','msn.com','optusnet.com.au','outlook.com','outlook.com.au','proton.me','protonmail.com','tpg.com.au','yahoo.co.uk','yahoo.com','yahoo.com.au','ymail.com','zoho.com'] as const;
+/** Must equal app_private.intake_personal_domains() in migrations/029_client_mapping.sql (parity-tested). Never treated as proof that an unlisted domain is a company's. */
+export const PERSONAL_DOMAINS=['123mail.org','150mail.com','150ml.com','16mail.com','2-mail.com','4email.net','50mail.com','aapt.net.au','adam.com.au','aim.com','airpost.net','allmail.net','aol.com','bigpond.com','bigpond.com.au','bigpond.net.au','btinternet.com','chariot.net.au','cluemail.com','comcast.net','dodo.com.au','duck.com','elitemail.org','emailcorner.net','emailengine.net','emailengine.org','emailgroups.net','emailplus.org','emailuser.net','eml.cc','exetel.com.au','f-m.fm','fast-email.com','fast-mail.org','fastem.com','fastemailer.com','fastest.cc','fastimap.com','fastmail.cn','fastmail.co.uk','fastmail.com','fastmail.com.au','fastmail.de','fastmail.es','fastmail.fm','fastmail.fr','fastmail.im','fastmail.in','fastmail.jp','fastmail.mx','fastmail.net','fastmail.nl','fastmail.org','fastmail.se','fastmail.to','fastmail.tw','fastmail.uk','fastmail.us','fastmailbox.net','fastmessaging.com','fea.st','fmail.co.uk','fmailbox.com','fmgirl.com','fmguy.com','ftml.net','gmail.com','gmx.com','gmx.de','gmx.net','googlemail.com','h-mail.us','hailmail.net','hey.com','hotmail.co.nz','hotmail.co.uk','hotmail.com','hotmail.com.au','hushmail.com','icloud.com','iinet.net.au','imap-mail.com','imap.cc','imapmail.org','inbox.com','inoutbox.com','internet-e-mail.com','internet-mail.org','internetemails.net','internetmailing.net','internode.on.net','iprimus.com.au','jetemail.net','justemail.net','letterboxes.org','live.co.uk','live.com','live.com.au','mac.com','mail-central.com','mail-page.com','mail.com','mailandftp.com','mailas.com','mailbolt.com','mailbox.org','mailc.net','mailcan.com','mailforce.net','mailftp.com','mailhaven.com','mailingaddress.org','mailite.com','mailmight.com','mailnew.com','mailsent.net','mailservice.ms','mailup.net','mailworks.org','me.com','ml1.net','mm.st','msn.com','myfastmail.com','mymacmail.com','netspace.net.au','nospammail.net','optusnet.com.au','outlook.co.nz','outlook.com','outlook.com.au','ownmail.net','ozemail.com.au','people.net.au','petml.com','pm.me','posteo.de','postinbox.com','postpro.net','primus.com.au','proinbox.com','promessage.com','proton.me','protonmail.ch','protonmail.com','qq.com','realemail.net','reallyfast.biz','reallyfast.info','rocketmail.com','rushpost.com','sent.as','sent.at','sent.com','sky.com','speedpost.net','speedymail.org','ssl-mail.com','swift-mail.com','the-fastest.net','the-quickest.com','theinternetemail.com','tpg.com.au','tuta.io','tutanota.com','veryfast.biz','veryspeedy.net','virginmedia.com','warpmail.net','web.de','westnet.com.au','xsmail.com','xtra.co.nz','yahoo.ca','yahoo.co.nz','yahoo.co.uk','yahoo.com','yahoo.com.au','yepmail.net','ymail.com','your-mail.com','zoho.com','zohomail.com'] as const;
 const PERSONAL=new Set<string>(PERSONAL_DOMAINS);
 export const RESOLVER='atlas-resolver:client-mapping-v1';
 const EMAIL=/^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -45,80 +48,114 @@ export type Identity={client:string;email:string;status:'provisional'|'confirmed
 export type CrosswalkRule={ruleId:string;client:string;matchKind:'domain'|'participant';clientEmails:string[];allowedEmails:string[];clientDomains:string[]};
 export type DecideInput={
  organizer:string;participants:string[];evidence:EvidenceItem[];
+ /** The collector's coverage report. A gap is a Held reason, never evidence of a new client. */
+ coverage:Record<string,string>|null;
  /** Active client grants of the auto-mapping rule's reviewer, minus merged provisional clients. */
  knownClients:string[];
  clientStatus?:Record<string,'provisional'|'confirmed'|'merged'>;
+ /** Current identity rows. Every one is recorded by a person (choose, confirm, confirm new). */
  identities:Identity[];crosswalk:CrosswalkRule[];
  internal:{emails:string[];domains:string[]};
  sharedDomains:string[];
+ /** The resolved rule's reviewed auto_bind_exact flag. Off by default: exact identities are suggestions. */
+ autoExact?:boolean;
 };
 export type Candidate={client:string;source:string;ref:string};
-export type ParticipantDecision={email:string;internal:boolean;candidates?:Candidate[];resolved?:string|null;via?:'email'|'domain'|null;note?:string|null};
-export type Decision={outcome:'known'|'new'|'ambiguous'|'internal_only';state:'mapped'|'held';client:string|null;confidence:'high'|'medium'|'provisional'|'none';reason:string;participants:ParticipantDecision[];newClient?:{client:string;name:string;company:string|null;emails:string[]}};
-const md5=async(s:string)=>(await import('node:crypto')).createHash('md5').update(s).digest('hex');
+export type ParticipantDecision={email:string;internal:boolean;approved?:Candidate[];suggestions?:Candidate[];resolved?:string|null;suggestion?:string|null;note?:string|null};
+export type Outcome='known'|'new'|'suggested'|'ambiguous'|'unrecognised'|'evidence_incomplete'|'internal_only';
+export type Decision={outcome:Outcome;state:'mapped'|'held';client:string|null;confidence:'exact'|'none';reason:string;participants:ParticipantDecision[];suggestion:{clients?:string[];approvedIdentity?:boolean;newClient?:{name:string;company:string|null;emails:string[]}}};
 const sorted=(a:Iterable<string>)=>[...new Set(a)].sort();
 
-export async function decideMapping(input:DecideInput):Promise<Decision>{
- const known=new Set(input.knownClients);const status=(c:string)=>input.clientStatus?.[c]??'confirmed';
+/** Same as app_private.intake_client_coverage_gap(): null only for complete coverage. */
+export function coverageGap(cov:Record<string,string>|null|undefined):string|null{
+ if(!cov||typeof cov!=='object'||Array.isArray(cov)||!Object.keys(cov).length)return 'no evidence report from the collector';
+ if('collector' in cov)return 'collector evidence '+(cov.collector??'missing');
+ const gaps=[
+  cov.truncated==='true'?'evidence list truncated':null,
+  (cov.ghl??'')!=='complete'?'GoHighLevel '+(cov.ghl||'not reported'):null,
+  !/^[0-9]+-notes$/.test(cov.callNotes??'')?'call notes '+(cov.callNotes||'not reported'):null,
+  !/^[0-9]+-records$/.test(cov.clientFolders??'')?'client folders '+(cov.clientFolders||'not reported'):null].filter(Boolean);
+ return gaps.length?gaps.join('; '):null;
+}
+
+/**
+ * R11-1: only an exact approved identity (a person-recorded identity row or the reviewed
+ * crosswalk) maps a call. CRM tag/name, prior-call titles, folder records and company domains
+ * are suggestions that keep the call Held for one-click confirmation; agreement between weak
+ * sources is never an upgrade. R11-2: a shared domain holds before any suggestion; personal
+ * providers never suggest by domain. R11-3: incomplete coverage is a named Held state and a new
+ * client is never inferred; only a person confirms one.
+ */
+export function decideMapping(input:DecideInput):Decision{
+ const known=new Set(input.knownClients);const status=(c:string)=>input.clientStatus?.[c]??'confirmed';const gap=coverageGap(input.coverage);
  const internalE=new Set([normalEmail(input.organizer),...input.internal.emails.map(normalEmail),
   ...input.crosswalk.filter(r=>r.matchKind==='participant').flatMap(r=>r.allowedEmails.filter(e=>!r.clientEmails.includes(e)))]);
  const internalD=new Set(input.internal.domains);const shared=new Set(input.sharedDomains);
- const items:ParticipantDecision[]=[];const resolved:string[]=[];const unres:string[]=[];let ambReason:string|null=null;let allStrong=true;let nonInternal=0;
+ const items:ParticipantDecision[]=[];const sSet:string[]=[],wSet:string[]=[],unres:string[]=[];let amb:string|null=null;let nonInternal=0;
  for(const p of sorted(input.participants.map(normalEmail))){
   const dom=domainOf(p);
   if(internalE.has(p)||internalD.has(dom)){items.push({email:p,internal:true});continue}
   nonInternal++;
-  let cands:Candidate[]=[];let via:'email'|'domain'|null=null;let note:string|null=null;let strong=false;
-  cands.push(...input.identities.filter(i=>i.email===p&&known.has(i.client)).sort((a,b)=>a.client.localeCompare(b.client)).map(i=>({client:i.client,source:'identity',ref:i.status})));
-  cands.push(...input.crosswalk.filter(r=>r.matchKind==='participant'&&r.clientEmails.includes(p)).sort((a,b)=>a.client.localeCompare(b.client)||a.ruleId.localeCompare(b.ruleId)).map(r=>({client:r.client,source:'crosswalk',ref:r.ruleId})));
-  for(const e of input.evidence.filter(x=>x&&x.email===p)){
-   if(e.source==='ghl'){
-    let hit=Array.isArray(e.tags)?[...known].filter(k=>e.tags!.map(t=>String(t).toLowerCase()).includes('atlas-client:'+k)).sort():[];
-    if(!hit.length&&slug(e.name)&&known.has(slug(e.name)))hit=[slug(e.name)];
-    cands.push(...hit.map(k=>({client:k,source:'ghl',ref:(e.ref??'').slice(0,80)})));
-   }else if(e.source==='call_notes'&&Array.isArray(e.titleTokens)){
-    // A title names a client only through a key of two or more words (first and last name), all present.
-    const toks=new Set(e.titleTokens.map(t=>String(t).toLowerCase()));
-    cands.push(...[...known].sort().filter(k=>status(k)!=='provisional'&&k.split('-').length>=2&&k.split('-').every(t=>toks.has(t))).map(k=>({client:k,source:'call_notes',ref:(e.ref??'').slice(0,80)})));
-   }else if(e.source==='client_folder'&&(e.matchedOn??'email')==='email'&&e.client&&known.has(e.client)){
-    cands.push({client:e.client,source:'client_folder',ref:(e.ref??'').slice(0,80)});
-   }
-  }
-  let exact=sorted(cands.map(c=>c.client));
-  if(exact.length===1){via='email';strong=cands.some(c=>c.source==='identity'||c.source==='crosswalk')||new Set(cands.map(c=>c.source)).size>=2}
-  else if(exact.length>1)note='conflicting evidence: '+exact.join(', ');
-  else if(isPersonalDomain(dom))note='personal email provider: matched on exact address only';
+  let res:string|null=null,sug:string|null=null,note:string|null=null;const weak:Candidate[]=[];
+  const strong:Candidate[]=[
+   ...input.identities.filter(i=>i.email===p&&known.has(i.client)).sort((a,b)=>a.client.localeCompare(b.client)).map(i=>({client:i.client,source:'identity',ref:i.status})),
+   ...input.crosswalk.filter(r=>r.matchKind==='participant'&&r.clientEmails.includes(p)).sort((a,b)=>a.client.localeCompare(b.client)||a.ruleId.localeCompare(b.ruleId)).map(r=>({client:r.client,source:'crosswalk',ref:r.ruleId}))];
+  const sx=sorted(strong.map(c=>c.client));
+  if(sx.length===1)res=sx[0];
+  else if(sx.length>1)note='conflicting approved identities: '+sx.join(', ');
   else if(shared.has(dom))note='shared or agency domain '+dom;
   else{
-   const ds=sorted([
-    ...input.identities.filter(i=>domainOf(i.email)===dom&&known.has(i.client)).map(i=>i.client),
-    ...input.crosswalk.filter(r=>r.clientDomains.includes(dom)||r.clientEmails.some(ce=>domainOf(ce)===dom)).map(r=>r.client),
-    ...input.evidence.filter(x=>x&&x.source==='client_folder'&&x.matchedOn==='domain'&&x.domain===dom&&x.client&&known.has(x.client)).map(x=>x.client!)]);
-   if(ds.length===1){exact=ds;via='domain';cands=[{client:ds[0],source:'domain',ref:dom}]}
-   else if(ds.length>1)note=`domain ${dom} is used by several clients: ${ds.join(', ')}`;
+   for(const e of input.evidence.filter(x=>x&&x.email===p)){
+    if(e.source==='ghl'){
+     let hit=Array.isArray(e.tags)?[...known].filter(k=>e.tags!.map(t=>String(t).toLowerCase()).includes('atlas-client:'+k)).sort():[];
+     if(!hit.length&&slug(e.name)&&known.has(slug(e.name)))hit=[slug(e.name)];
+     weak.push(...hit.map(k=>({client:k,source:'ghl',ref:(e.ref??'').slice(0,80)})));
+    }else if(e.source==='call_notes'&&Array.isArray(e.titleTokens)){
+     // A title names a client only through a key of two or more words, all present.
+     const toks=new Set(e.titleTokens.map(t=>String(t).toLowerCase()));
+     weak.push(...[...known].sort().filter(k=>status(k)!=='provisional'&&k.split('-').length>=2&&k.split('-').every(t=>toks.has(t))).map(k=>({client:k,source:'call_notes',ref:(e.ref??'').slice(0,80)})));
+    }else if(e.source==='client_folder'&&(e.matchedOn??'email')==='email'&&e.client&&known.has(e.client)){
+     weak.push({client:e.client,source:'client_folder',ref:(e.ref??'').slice(0,80)});
+    }
+   }
+   if(!isPersonalDomain(dom)){
+    const ds=sorted([
+     ...input.identities.filter(i=>domainOf(i.email)===dom&&known.has(i.client)).map(i=>i.client),
+     ...input.crosswalk.filter(r=>r.clientDomains.includes(dom)||r.clientEmails.some(ce=>domainOf(ce)===dom)).map(r=>r.client),
+     ...input.evidence.filter(x=>x&&x.source==='client_folder'&&x.matchedOn==='domain'&&x.domain===dom&&x.client&&known.has(x.client)).map(x=>x.client!)]);
+    if(ds.length===1)weak.push({client:ds[0],source:'domain',ref:dom});
+    else if(ds.length>1)note=`domain ${dom} is used by several clients: ${ds.join(', ')}`;
+   }
+   const wx=sorted(weak.map(c=>c.client));
+   if(note===null){if(wx.length===1)sug=wx[0];else if(wx.length>1)note='conflicting suggestions: '+wx.join(', ')}
   }
-  if(via){resolved.push(exact[0]);allStrong=allStrong&&strong}
-  else if(note&&!note.startsWith('personal email provider'))ambReason??=`${p}: ${note}`;
-  else unres.push(p);
-  items.push({email:p,internal:false,candidates:cands,resolved:via?exact[0]:null,via,note});
+  if(res)sSet.push(res);else if(sug)wSet.push(sug);else if(note)amb??=`${p}: ${note}`;else unres.push(p);
+  items.push({email:p,internal:false,approved:strong,suggestions:weak,resolved:res,suggestion:sug,note});
  }
- const rc=sorted(resolved);
- if(nonInternal===0)return {outcome:'internal_only',state:'held',client:null,confidence:'none',reason:'Only internal team members attended',participants:items};
- if(ambReason)return {outcome:'ambiguous',state:'held',client:null,confidence:'none',reason:'Needs a person: '+ambReason,participants:items};
- if(rc.length>1)return {outcome:'ambiguous',state:'held',client:null,confidence:'none',reason:'Participants match different clients: '+rc.join(', '),participants:items};
- if(rc.length===1){
-  const client=rc[0];
-  return {outcome:'known',state:'mapped',client,confidence:status(client)==='provisional'?'provisional':allStrong?'high':'medium',reason:`Matched ${client}${unres.length?`; ${unres.length} other participant(s) not affiliated`:''}`,participants:items};
+ const sugg=sorted([...sSet,...wSet]);
+ const held=(outcome:Outcome,reason:string,suggestion:Decision['suggestion']={}):Decision=>({outcome,state:'held',client:null,confidence:'none',reason,participants:items,suggestion});
+ if(nonInternal===0)return held('internal_only','Team call: only internal team members attended');
+ if(amb)return held('ambiguous','Needs a person: '+amb,{clients:sugg});
+ if(sugg.length>1)return held('ambiguous','Participants point to different clients: '+sugg.join(', '),{clients:sugg});
+ if(sSet.length){
+  if(input.autoExact){
+   if(!unres.length||gap===null)return {outcome:'known',state:'mapped',client:sugg[0],confidence:'exact',reason:`Matched ${sugg[0]} by approved identity${unres.length?`; ${unres.length} other participant(s) not affiliated`:''}`,participants:items,suggestion:{}};
+   return held('evidence_incomplete',`Matched ${sugg[0]} by approved identity, but ${unres.length} other participant(s) could not be checked: ${gap}`,{clients:sugg});
+  }
+  // Automatic assignment off (the default): the approved identity is the pre-suggested client.
+  const tail=unres.length&&gap!==null?`; ${unres.length} other participant(s) could not be checked: ${gap}`:unres.length?`; ${unres.length} other participant(s) not affiliated`:'';
+  return held('suggested',`Matched ${sugg[0]} by approved identity; confirm to assign${tail}`,{clients:sugg,approvedIdentity:true});
  }
- const sameDomain=new Set(unres.map(domainOf)).size===1&&!isPersonalDomain(domainOf(unres[0]));
- if(unres.length!==1&&!sameDomain)return {outcome:'ambiguous',state:'held',client:null,confidence:'none',reason:'Several people with no client record; cannot tell which one is the client',participants:items};
+ if(wSet.length){
+  const sources=sorted(items.flatMap(i=>(i.suggestions??[]).map(c=>c.source))).join(', ');
+  return held('suggested',`Suggested ${sugg[0]} from ${sources}; a person must confirm${gap?'; evidence incomplete: '+gap:''}`,{clients:sugg});
+ }
+ if(gap)return held('evidence_incomplete',`Evidence incomplete (${gap}); no client can be suggested and no new client is inferred`);
  const primary=unres[0];
  const ghl=input.evidence.filter(x=>x&&x.source==='ghl'&&x.email===primary&&(x.name??'').trim()).sort((a,b)=>(a.ref??'').localeCompare(b.ref??''))[0];
- let name=ghl?.name?.trim()||initcap(primary.split('@')[0].split('+')[0].replace(/[._-]+/g,' ').trim());
- if(!name)name='New client';
+ const name=ghl?.name?.trim()||initcap(primary.split('@')[0].split('+')[0].replace(/[._-]+/g,' ').trim())||'New client';
  const company=ghl?.company?.trim()||(isPersonalDomain(domainOf(primary))?null:domainOf(primary));
- const client='new-'+(slug(name)||'client')+'-'+(await md5(primary)).slice(0,6);
- return {outcome:'new',state:'mapped',client,confidence:'provisional',reason:`No record of ${unres.join(', ')} anywhere; provisional new client`,participants:items,newClient:{client,name:name.slice(0,200),company,emails:unres}};
+ return held('unrecognised',`No record of ${unres.join(', ')} in complete evidence; a person may confirm a new client`,{newClient:{name:name.slice(0,200),company,emails:unres}});
 }
 
 // ---------------------------------------------------------------- evidence sources (collector)
@@ -206,6 +243,7 @@ export function evidenceFor(row:{id?:string;organizer?:string|null;participants?
   items.push(...(sources.clientFolders?.byEmail.get(p)??[]));
   items.push(...(sources.clientFolders?.byDomain.get(domainOf(p))??[]).map(e=>({...e,email:p})));
  }
+ if(items.length>maxItems)coverage.truncated='true';
  return {coverage,items:items.slice(0,maxItems)};
 }
 
@@ -216,12 +254,13 @@ export function evidenceFor(row:{id?:string;organizer?:string|null;participants?
  */
 export function withClientEvidence(rpc:Rpc,load:()=>Promise<EvidenceSources>):Rpc{
  let cached:Promise<EvidenceSources>|undefined;
- const sources=()=>cached??=load().catch(()=>({} as EvidenceSources));
+ let failed=false;
+ const sources=()=>cached??=load().catch(()=>{failed=true;return {} as EvidenceSources});
  const attach=async(row:unknown)=>{
   if(!row||typeof row!=='object'||Array.isArray(row))return row;
   const r=row as {id?:string;live?:boolean;organizer?:string|null;participants?:string[]};
   if(r.live===true||!Array.isArray(r.participants)||!r.participants.length)return row;
-  try{return {...r,clientEvidence:evidenceFor(r,await sources())}}catch{return {...r,clientEvidence:{coverage:{collector:'error'},items:[]}}}
+  try{const src=await sources();if(failed)return {...r,clientEvidence:{coverage:{collector:'failed to load evidence sources'},items:[]}};return {...r,clientEvidence:evidenceFor(r,src)}}catch{return {...r,clientEvidence:{coverage:{collector:'error'},items:[]}}}
  };
  return async(action,payload)=>{
   if(action==='catalog'&&Array.isArray(payload.meetings))return rpc(action,{...payload,meetings:await Promise.all(payload.meetings.map(attach))});
