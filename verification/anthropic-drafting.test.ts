@@ -17,6 +17,10 @@ import {
  ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,SONNET55_MICROS,DOCUMENT_REQUEST_PROFILE,DOCUMENT_RESPONSE_MAX_BYTES,
  type AnthropicDocumentConfig,type DocumentDiagnostic,type DocumentUsage,
 } from '../src/lib/task-document-anthropic.ts';
+import {
+ DOCUMENT_JSON_SCHEMA,DOCUMENT_WIRE_SCHEMA,DOCUMENT_CONTRACT_KEYS,DOCUMENT_FACT_KEYS,DOCUMENT_STEP_KEYS,DOCUMENT_LIMITS,
+ documentPrompt,renderDocument,type DocumentPacket,
+} from '../src/lib/task-document-codec.ts';
 import {readBrandRules,brandRules,brandSystemPrompt,brandSection,BRAND_KIT_SECTIONS} from '../src/lib/task-brand-rules.ts';
 import {__injectAssetBoundaryForTests,BRAND_KIT_RELATIVE_PATH} from '../src/lib/task-asset-boundary.ts';
 
@@ -88,7 +92,8 @@ test('the request body uses adaptive thinking at effort medium with max_tokens 8
  assert.equal(body.model,'claude-sonnet-5-5');
  assert.equal(body.max_tokens,8000);
  assert.deepEqual(body.thinking,{type:'adaptive'});
- assert.deepEqual(body.output_config,{effort:'medium'});
+ assert.deepEqual(Object.keys(body.output_config).sort(),['effort','format']);
+ assert.equal(body.output_config.effort,'medium');
  assert.equal(body.stream,false);
  assert.equal(body.system,'system rules');
  assert.deepEqual(body.messages,[{role:'user',content:'user prompt'}]);
@@ -414,4 +419,115 @@ test('R1: a live binding with no diagnostics journal is refused before any dispa
   if(previous===undefined)delete process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION;
   else process.env.ATLAS_TASK_DOCUMENT_ALLOW_LIVE_GENERATION=previous;
  }
+});
+
+// ---- Lane D3: schema-enforced drafting output -------------------------------------------
+
+const ENTRY_TEXT='Northwind asked that the check-in day move to Thursday. Coaches confirm each change in writing. Escalate pricing questions to the owner.';
+const d3Packet=():DocumentPacket=>({
+ fingerprint:'synthetic',workspaceId:'w',taskId:'t',requestId:'r',client:'Synthetic Client',owner:'rhys',title:'Synthetic',
+ workflow:'role_sop',audience:'internal_review',missingContext:[],
+ entries:[{id:'commitment',version:'1',sourceHash:'a'.repeat(64),kind:'commitment',title:'Commitment',text:ENTRY_TEXT,display:true,use:true,sourceRef:{},reviewReference:'review',observedAt:'2026-10-20T00:00:00Z'}],
+});
+const fact={reference:'commitment',quote:'Coaches confirm each change in writing.'};
+const step={action:'Confirm the change with the client in writing.',responsibleRole:'Coach',completion:'Written confirmation is on file.',exception:'Escalate to the owner.'};
+const d3Response=(over:Record<string,unknown>={})=>({
+ title:'Coach role SOP',purpose:'Define the coach check-in procedure.',facts:[fact],steps:[step,step,step],
+ decisions:['Approve the Thursday check-in day.'],missingFacts:[],openQuestions:['Which coach owns Northwind?'],
+ sourcesUsed:['commitment'],revisionChanges:[],...over,
+});
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Node=Record<string,any>;
+const node=(path:string[]):Node=>path.reduce((n:Node,k)=>k==='[]'?n.items:n.properties[k],DOCUMENT_JSON_SCHEMA as Node);
+
+test('D3: the JSON schema matches the codec contract, every field and bound', () => {
+ const root=DOCUMENT_JSON_SCHEMA as Node;
+ // Keys: exact, all required, nothing else allowed, at every object level.
+ assert.equal(root.type,'object');assert.equal(root.additionalProperties,false);
+ assert.deepEqual(Object.keys(root.properties).sort(),[...DOCUMENT_CONTRACT_KEYS].sort());
+ assert.deepEqual([...root.required].sort(),[...DOCUMENT_CONTRACT_KEYS].sort());
+ for(const [path,keys] of [[['facts','[]'],DOCUMENT_FACT_KEYS],[['steps','[]'],DOCUMENT_STEP_KEYS]] as const){
+  const n=node([...path]);
+  assert.equal(n.type,'object');assert.equal(n.additionalProperties,false);
+  assert.deepEqual(Object.keys(n.properties).sort(),[...keys].sort());
+  assert.deepEqual([...n.required].sort(),[...keys].sort());
+ }
+ // Array bounds equal the codec's.
+ const L=DOCUMENT_LIMITS;
+ const arrays:[string,{min:number;max?:number}][]=[['facts',L.facts],['steps',L.steps],['decisions',L.decisions],['missingFacts',L.missingFacts],['openQuestions',L.openQuestions],['sourcesUsed',L.sourcesUsed],['revisionChanges',L.revisionChanges]];
+ assert.deepEqual(arrays.map(([k])=>k).sort(),DOCUMENT_CONTRACT_KEYS.filter(k=>root.properties[k].type==='array').sort(),'every array in the contract is bounded here');
+ for(const [k,b] of arrays){assert.equal(root.properties[k].minItems,b.min,k);assert.equal(root.properties[k].maxItems,b.max,k);}
+ assert.equal(root.properties.facts.maxItems,12);
+ // String bounds equal the codec's.
+ assert.equal(node(['title']).maxLength,L.title.max);
+ assert.equal(node(['facts','[]','quote']).maxLength,L.quote.max);
+ assert.equal(node(['steps','[]','responsibleRole']).anyOf[0].maxLength,L.role.max);
+ assert.deepEqual(node(['steps','[]','responsibleRole']).anyOf[1],{type:'null'});
+ for(const p of [['purpose'],['steps','[]','action'],['steps','[]','completion'],['steps','[]','exception'],['decisions','[]'],['missingFacts','[]'],['openQuestions','[]'],['revisionChanges','[]']])assert.equal(node(p).maxLength,L.text.max,p.join('.'));
+ // And the codec agrees at each array boundary: max accepted, max+1 refused, min-1 refused.
+ const packet=d3Packet();
+ const fill=(k:string,n:number)=>({facts:Array(n).fill(fact),steps:Array(n).fill(step),sourcesUsed:Array(n).fill('commitment')} as Record<string,unknown[]>)[k]??Array(n).fill('A complete proposed item.');
+ for(const [k,b] of arrays){
+  if(k==='sourcesUsed'||k==='revisionChanges')continue;
+  assert.doesNotThrow(()=>renderDocument(d3Response({[k]:fill(k,b.max!)}),packet,null,false),k+' at max');
+  assert.throws(()=>renderDocument(d3Response({[k]:fill(k,b.max!+1)}),packet,null,false),/document_contract_invalid/,k+' over max');
+  if(b.min>0)assert.throws(()=>renderDocument(d3Response({[k]:fill(k,b.min-1)}),packet,null,false),/document_contract_invalid/,k+' under min');
+ }
+ assert.throws(()=>renderDocument(d3Response({revisionChanges:fill('revisionChanges',L.revisionChanges.max+1)}),packet,null,false),/document_contract_invalid/);
+ // sourcesUsed is bounded by the packet, not statically: one more than the packet holds is refused.
+ assert.throws(()=>renderDocument(d3Response({sourcesUsed:['commitment','commitment']}),packet,null,false),/document_contract_invalid/);
+});
+
+test('D3: the wire schema keeps keys and required fields but moves unsupported bounds into descriptions', () => {
+ const wire=JSON.stringify(DOCUMENT_WIRE_SCHEMA);
+ for(const k of ['maxItems','minLength','maxLength'])assert.ok(!wire.includes(`"${k}"`),k+' is rejected by the API and is not sent');
+ for(const m of wire.matchAll(/"minItems":(\d+)/g))assert.ok(Number(m[1])<=1,'only minItems 0 or 1 is sent');
+ const w=DOCUMENT_WIRE_SCHEMA as Node;
+ assert.equal(w.additionalProperties,false);
+ assert.deepEqual([...w.required].sort(),[...DOCUMENT_CONTRACT_KEYS].sort());
+ assert.equal(w.properties.facts.items.additionalProperties,false);
+ assert.equal(w.properties.steps.items.additionalProperties,false);
+ assert.match(w.properties.facts.description,/at most 12 items/);
+ assert.match(w.properties.steps.description,/at least 3 items/);
+ assert.match(w.properties.steps.description,/at most 20 items/);
+ // Every object in the wire schema forbids additional properties (required by the API).
+ const walk=(n:unknown):void=>{if(Array.isArray(n)){n.forEach(walk);return;}if(!n||typeof n!=='object')return;const o=n as Node;if(o.type==='object')assert.equal(o.additionalProperties,false);Object.values(o).forEach(walk);};
+ walk(DOCUMENT_WIRE_SCHEMA);
+});
+
+test('D3: an over-limit response is rejected by the codec after the schema', async () => {
+ const packet=d3Packet();
+ assert.ok(renderDocument(d3Response(),packet,null,false).includes('# Coach role SOP'),'a conforming response renders');
+ // The Lane S run 2 failure: 13 facts, and an extra key on a step.
+ assert.throws(()=>renderDocument(d3Response({facts:Array(13).fill(fact)}),packet,null,false),/document_contract_invalid/);
+ assert.throws(()=>renderDocument(d3Response({steps:[step,{...step,reference:''},step]}),packet,null,false),/document_contract_invalid/);
+ // And through the transport: a schema-shaped but over-limit reply parses, then fails the contract.
+ const file=await keyFile();
+ const over=d3Response({facts:Array(13).fill(fact)});
+ const transport=(async()=>ok({usage:{input_tokens:10,output_tokens:20},stop_reason:'end_turn',content:[{type:'thinking',thinking:'',signature:'s'},{type:'text',text:JSON.stringify(over)}]})) as unknown as typeof fetch;
+ const parsed=await anthropicDocumentTransport(config({keyFile:file}),anthropicDocumentKey(file),transport).invoke('system','prompt','attempt-d3');
+ assert.throws(()=>renderDocument(parsed,packet,null,false),/document_contract_invalid/);
+});
+
+test('D3: the request body carries output_config.format with the contract schema', async () => {
+ const file=await keyFile();
+ let sent:Node={};
+ const transport=(async(_u:string,init:RequestInit)=>{sent=JSON.parse(String(init.body));return ok(reply())}) as unknown as typeof fetch;
+ await anthropicDocumentTransport(config({keyFile:file}),anthropicDocumentKey(file),transport).invoke('system','prompt','attempt-d3b');
+ assert.deepEqual(sent.output_config.format,{type:'json_schema',schema:DOCUMENT_WIRE_SCHEMA});
+ assert.equal(sent.output_config.effort,'medium');
+ assert.deepEqual(sent.thinking,{type:'adaptive'});
+ for(const x of ['tools','fallbacks','output_format','citations'])assert.equal(sent[x],undefined,x);
+});
+
+test('D3: the prompt states the keys, the limits, complete-sentence quotes and complete citations', () => {
+ const prompt=JSON.parse(documentPrompt(d3Packet(),null,null));
+ const text=prompt.instruction.join('\n');
+ assert.ok(text.includes(DOCUMENT_CONTRACT_KEYS.join(', ')));
+ assert.ok(text.includes(DOCUMENT_STEP_KEYS.join(', ')));
+ assert.match(text,/facts 1 to 12/);
+ assert.match(text,/steps 3 to 20/);
+ assert.match(text,/complete sentence/);
+ assert.match(text,/never add another key/i);
+ assert.match(text,/open questions/);
 });

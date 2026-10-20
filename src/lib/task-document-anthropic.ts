@@ -8,9 +8,11 @@
  * its own adapter hash, the adaptive-thinking / effort-medium / 8000-token request body,
  * the byte-floor cost bound, and the invocation orchestration that settles an attempt.
  *
- * Drafting differs from extraction in exactly three reviewed ways: adaptive thinking at
- * effort medium instead of between_tools at effort low, an 8000-token output bound, and a
- * usage record carrying the pre-dispatch byte-floor cost bound.
+ * Drafting differs from extraction in exactly four reviewed ways: adaptive thinking at
+ * effort medium instead of between_tools at effort low, an 8000-token output bound, a
+ * usage record carrying the pre-dispatch byte-floor cost bound, and schema-enforced output
+ * (`output_config.format`, the document contract as JSON Schema). The codec still validates
+ * every response after it returns; the schema is a first line, not the only one.
  */
 import {createHash} from 'node:crypto';
 import {isAbsolute} from 'node:path';
@@ -19,6 +21,7 @@ import {
 } from './meetings/anthropic-extractor.ts';
 import {providerDiagnostic,refusalCategory,type ProviderDiagnostic} from './meetings/provider-diagnostics.ts';
 import {intakeJSON} from './meetings/intake-http.ts';
+import {DOCUMENT_WIRE_SCHEMA} from './task-document-codec.ts';
 
 export {ANTHROPIC_MESSAGES_ENDPOINT,ANTHROPIC_VERSION,refusalCategory};
 export const DOCUMENT_REQUEST_PROFILE='sonnet-5-5-drafting-v1';
@@ -58,7 +61,7 @@ export function anthropicDocumentEndpoint(c:AnthropicDocumentConfig){
 }
 
 export const anthropicDocumentConfigurationHash=(c:AnthropicDocumentConfig)=>
- sha256(JSON.stringify({adapter:'atlas-anthropic-drafting-v1-sonnet55',config:Object.keys(c).sort().map(k=>[k,c[k as keyof AnthropicDocumentConfig]]),endpoint:anthropicDocumentEndpoint(c)}));
+ sha256(JSON.stringify({adapter:'atlas-anthropic-drafting-v2-sonnet55-structured',schema:sha256(JSON.stringify(DOCUMENT_WIRE_SCHEMA)),config:Object.keys(c).sort().map(k=>[k,c[k as keyof AnthropicDocumentConfig]]),endpoint:anthropicDocumentEndpoint(c)}));
 
 /**
  * The shared owner-only key reader: absolute path, 0600 regular file owned by the caller,
@@ -83,14 +86,19 @@ export function documentCostBound(body:string,config:AnthropicDocumentConfig):Do
  return {requestBytes,maxOutputTokens:config.maxOutputTokens,micros:requestBytes*SONNET55_MICROS.input+config.maxOutputTokens*SONNET55_MICROS.output};
 }
 
-/** Adaptive thinking at effort medium. `budget_tokens` is rejected by this model family. */
+/**
+ * Adaptive thinking at effort medium, with the document contract enforced by structured
+ * outputs. `budget_tokens` is rejected by this model family. Structured outputs are
+ * incompatible with citations and prefill; neither is used here.
+ */
+export const documentOutputFormat=()=>({type:'json_schema' as const,schema:DOCUMENT_WIRE_SCHEMA});
 export function anthropicDocumentBody(config:AnthropicDocumentConfig,system:string,prompt:string){
  anthropicDocumentEndpoint(config);
  if(typeof system!=='string'||!system.trim()||typeof prompt!=='string'||!prompt.trim())throw Error('document_prompt_required');
  if(prompt.length>config.maxPromptCharacters)throw Error('document_prompt_over_budget');
  return JSON.stringify({
   model:config.model,max_tokens:config.maxOutputTokens,stream:false,
-  ...(config.requestProfile?{thinking:{type:'adaptive'},output_config:{effort:'medium'}}:{}),
+  ...(config.requestProfile?{thinking:{type:'adaptive'},output_config:{format:documentOutputFormat(),effort:'medium'}}:{}),
   system,messages:[{role:'user',content:prompt}],
  });
 }
