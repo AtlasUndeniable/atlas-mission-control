@@ -2,6 +2,7 @@
 import {operationId} from '@/lib/operation-id';
 import MeetingCoverage from './MeetingCoverage';
 import IntakeStrip from './IntakeStrip';
+import ClientMappingPanel from './ClientMappingPanel';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import styles from './MeetingQueue.module.css';
 import type {ReactNode} from 'react';
@@ -104,6 +105,7 @@ export default function MeetingQueue({engineering=false}:{engineering?:boolean})
  <div className={styles.filterBar}><nav className={styles.tabs} aria-label="Who the work sits with">{actorFilters.map(([k,l])=><button key={k} aria-pressed={actorFilter===k} onClick={()=>{setActorFilter(k)}}>{l}</button>)}</nav><label className={styles.viewFilter}>Show<select value={filter} onChange={e=>{setFilter(e.target.value)}}><option value="all">Everything live</option><option value="review">Waiting on a person</option><option value="deferred">Parked</option><option value="dismissed">Decided against</option></select></label></div>
  {(error||syncError)&&<div role="alert" className={styles.error}><strong>{syncError?(data?'We could not check the board · actions are paused':'Board unavailable'):'That action was not confirmed'}</strong><p>{syncError||error}</p><button disabled={loading||busy} onClick={()=>void refresh()}>Try again</button></div>}<p role="status" className={styles.status}>{busy?'Saving…':fresh?saved:''}</p><p className={styles.sync} role="status">{fresh?`Checked ${checkedAt?new Date(checkedAt).toLocaleTimeString():''} · ${loading?'Checking…':'Updates on its own.'}`:checkedAt?`Last checked ${new Date(checkedAt).toLocaleTimeString()}. What you see may be out of date, so actions are paused.`:syncError?'Not checked yet. Try again when you have access.':'Checking what you are allowed to see…'}</p>
  {engineering?<MeetingCoverage/>:<IntakeStrip canSeeSources={canSeeSources}/>}
+ {!engineering&&canSeeSources&&<ClientMappingPanel/>}
  {!data?(loading?<p role="status" className={styles.empty}>Loading your work…</p>:null):<>
  {engineering&&<details className={styles.coverage}><summary>Recent calls & coverage · {data.meetings.length} permitted entries</summary><p>{data.coverageBoundary}</p>{data.coverage.map(c=><p key={c.start+c.end}>{c.start.slice(0,10)} → {c.end.slice(0,10)} · {c.status} · checked {new Date(c.observedAt).toLocaleString()}</p>)}<p>Missing source is never “no actions”. Task-only access does not include the full recording.</p>
  {data.meetings.map(m=><section key={m.id} className={styles.meeting}><h2>{m.title}</h2><p>{new Date(m.instant).toLocaleString()} · {label(m.state)} · revision {m.revision}</p><p>{m.note}</p>{!m.taskOnly&&<button disabled={blocked} onClick={()=>void showContext(m.id)}>Full source & history</button>}{context[m.id]&&<pre className={styles.context}>{context[m.id]}</pre>}</section>)}

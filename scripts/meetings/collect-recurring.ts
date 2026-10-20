@@ -7,11 +7,14 @@ import {type Rpc}from'../../src/lib/meetings/intake-core.ts';
 import {intakeTick,sweep,processMeeting}from'../../src/lib/meetings/recurring-intake.ts';
 import {vertexExtractor,googleToken,type VertexUsage}from'../../src/lib/meetings/vertex-extractor.ts';
 import {anthropicExtractor,anthropicKey}from'../../src/lib/meetings/anthropic-extractor.ts';
+import {clientMappingConfig,loadEvidenceSources,withClientEvidence}from'../../src/lib/meetings/client-mapping.ts';
 export async function collect(file:string,catchUp=false,reprocess?:{sourceId:string;authorizationId:string}){
  if((await stat(file)).mode&0o077)throw Error('Owner-only configuration required');
  const config=JSON.parse(await readFile(file,'utf8'));
  if(config.enabled!==true||config.mode!=='reviewed-live'||!config.operatorDecision||!config.scopeDecision||!config.provider?.disclosureDecision||!config.provider?.budgetDecision)throw Error('Intake disabled or activation decisions missing');
  if(!config.providerDiagnosticsFile)throw Error('Explicit owner-only provider diagnostics path required');
+ // Optional: local exact-email facts for hosted client mapping (029). Absent means none are sent.
+ const mapping=clientMappingConfig(config.clientMapping);
  await checkProviderDiagnosticPath(config.providerDiagnosticsFile);
  if(!Number.isInteger(config.timeoutMs)||config.timeoutMs<1000||config.timeoutMs>60000)throw Error('Bounded timeout required');
  if(!config.rpcUrl?.endsWith('/rpc/meeting_intake_operational')||new URL(config.rpcUrl).protocol!=='https:')throw Error('Scoped TLS operational RPC required');
@@ -24,7 +27,8 @@ export async function collect(file:string,catchUp=false,reprocess?:{sourceId:str
  else{if(!secrets.providerCredentialsFile)throw Error('Explicit scoped credentials required');validateServiceAccountBinding(config.provider.credentialBinding,config.provider.project)}
  const controller=new AbortController(),stop=()=>controller.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);const limit=setTimeout(stop,8*60000);
  let lease:string|undefined;
- const rpc:Rpc=async(action,payload)=>{const r=await fetch(config.rpcUrl,{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+secrets.ingestionToken,apikey:secrets.gatewayKey,'Content-Type':'application/json'},body:JSON.stringify({action,payload:{...payload,lease,catchUp}}),signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Scoped intake refused');return await intakeJSON(r)as Record<string,unknown>};
+ const scoped:Rpc=async(action,payload)=>{const r=await fetch(config.rpcUrl,{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+secrets.ingestionToken,apikey:secrets.gatewayKey,'Content-Type':'application/json'},body:JSON.stringify({action,payload:{...payload,lease,catchUp}}),signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Scoped intake refused');return await intakeJSON(r)as Record<string,unknown>};
+ const rpc:Rpc=mapping?withClientEvidence(scoped,()=>loadEvidenceSources(mapping)):scoped;
  try{
   const policy=await rpc('configuration',{});
   if(policy.policy!==config.policy||policy.accountId!==config.accountId||Number(policy.interval_seconds)!==config.recurring.intervalSeconds||Date.parse(String(policy.operatingStart))!==Date.parse(config.recurring.startsAt)||(policy.operatingEnd===null?config.recurring.endsAt!==null:Date.parse(String(policy.operatingEnd))!==Date.parse(config.recurring.endsAt)))throw Error('Operational policy mismatch');

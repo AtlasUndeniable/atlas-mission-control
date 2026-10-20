@@ -1,0 +1,24 @@
+/* Same palette and rhythm as IntakeStrip.module.css (Lane D); amber marks what needs a person. */
+.panel{border:1px solid #b99347;border-radius:8px;padding:14px 16px;margin:0 0 20px;background:#1c1912;color:#e9dfc6;font-size:14px}
+.heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.heading strong{font-size:15px;font-weight:600;color:#f6e4b8;line-height:1.45}
+.caveat{margin:8px 0 0;color:#cdbf9d;line-height:1.5}
+.message{margin:8px 0 0;color:#f1cc76}
+.items{list-style:none;margin:12px 0 0;padding:0}
+.item{border-top:1px solid #3f3826;padding:12px 0}
+.itemHead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.itemHead b{color:#f3e3bb;font-weight:600}
+.when{color:#aeb4bf;font-size:13px}
+.badge{border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;border:1px solid #f1cc76;color:#f1cc76}
+.badge[data-badge=new_client]{border-color:#8fc3a1;color:#a7dcb8}
+.item p{margin:6px 0;line-height:1.5}
+.people{list-style:none;margin:6px 0;padding:0;color:#d7d9dc}
+.people li{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:3px 0;overflow-wrap:anywhere}
+.people em{color:#aeb4bf;font-style:normal}
+.actions{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 12px;margin-top:8px}
+.actions label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#cdbf9d}
+.actions select,.actions input{padding:7px 9px;border:1px solid #69717c;border-radius:6px;background:#151719;color:#e5e7eb;min-width:200px}
+.panel button{padding:7px 12px;border:1px solid #58606a;border-radius:6px;background:#232629;color:#e5e7eb;cursor:pointer}
+.panel button:disabled{opacity:.5;cursor:default}
+.panel .link{padding:2px 8px;font-size:12px}
+@media(max-width:639px){.panel{padding:14px}.actions select,.actions input{min-width:0;width:100%}.actions label{width:100%}.actions button{width:100%}}
