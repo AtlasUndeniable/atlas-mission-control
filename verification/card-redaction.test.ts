@@ -82,3 +82,55 @@ test('processMeeting captures only the masked source and sends the masked-span c
  assert.deepEqual(Object.keys(red).sort(),['card','cvc','expiry']);assert.ok(red.card>=1);
  assert.doesNotMatch(JSON.stringify(red),/4111|0827|737/);
 });
+
+// ---- Lane N3 (R11b-1): explicit payment context beats the price/time exemptions --------------
+import {redactText} from '../src/lib/meetings/card-redaction.ts';
+import {catalogTitle} from '../src/lib/meetings/fireflies.ts';
+import {extractionAdapter} from '../src/lib/meetings/recurring-intake.ts';
+test('R11b-1 repro: a card cue then the test PAN in comma-thousands format is masked',()=>{
+ const r=redactCardData(P("What's the card number?","4,111,111,111,111,111"),'');
+ assert.deepEqual(leaks(r.passages.map(p=>p.text),[VISA]),[]);assert.equal(r.counts.card,1);
+});
+test('R11b-1 repro: "am" is a whole token only; a PAN followed by "amount" is masked',()=>{
+ const r=redactCardData(P("Card number please.","4111 1111 1111 1111 amount is fine"),'');
+ assert.deepEqual(leaks(r.passages.map(p=>p.text),[VISA]),[]);assert.match(r.passages[1].text,/amount is fine$/);
+});
+test('R11b-1 repro: single spoken-number turns after a security-code cue are masked',()=>{
+ const r=redactCardData(P("Security code on the back?","one","two","three","Thanks."),'');
+ assert.deepEqual(r.passages.slice(1,4).map(p=>p.text),['[REDACTED-CVC]','[REDACTED-CVC]','[REDACTED-CVC]']);assert.equal(r.counts.cvc,3);assert.equal(r.passages[4].text,'Thanks.');
+});
+test('R11b-1: card-length runs are never exempt, even outside a cue, when Luhn-valid in comma or currency format',()=>{
+ for(const t of ['ref $4111111111111111 thanks','total 4,111,111,111,111,111 dollars']){const r=redactText(t);assert.deepEqual(leaks([r.text],[VISA]),[],r.text);assert.equal(r.counts.card,1)}
+});
+test('R11b-1: bounded exemptions still protect real prices, times and unit counts inside a payment window',()=>{
+ const r=redactCardData(P("Card details?","It's $1,997 now, call me at 10am or 3:30, we have 45 clients and 1,200 views."),'');
+ assert.equal(r.passages[1].text,"It's $1,997 now, call me at 10am or 3:30, we have 45 clients and 1,200 views.");
+});
+test('R11b-1 contract: title and speaker names are masked; catalog titles are masked before storage',()=>{
+ assert.equal(catalogTitle(`Payment call, card ${VISA}`),'Payment call, card [REDACTED-CARD]');
+ assert.equal(catalogTitle('Weekly coaching call'),'Weekly coaching call');
+ const {source,redaction}=normalizeWithRedaction({...CALL,title:`Sign-up, visa ${VISA}`,sentences:[{speaker_name:`Caller ${MC}`,text:'Hello there',start_time:0,end_time:1}]});
+ assert.deepEqual(leaks([source.title,source.passages[0].speaker],[VISA,MC]),[]);assert.ok(redaction.card>=2);
+});
+const PAYMENT_CALL=raw([{speaker_name:'Rhys',text:'Great, what are the car details?'},{speaker_name:'Client',text:'4,111,111,111,111,111'},{speaker_name:'Rhys',text:'And the security code on the back?'},
+ {speaker_name:'Client',text:'seven'},{speaker_name:'Client',text:'three seven'},{speaker_name:'Rhys',text:'I will send the onboarding pack tonight.'}]);
+(PAYMENT_CALL.summary as {action_items:string}).action_items=`Take payment: card ${MC}, exp 01/29, cvc 999. Send the onboarding pack.`;
+test('processMeeting: neither the captured source nor the synthetic extractor input carries card values (transcript and summary)',async()=>{
+ const calls:{action:string;payload:Record<string,unknown>}[]=[];let modelInput='';
+ const rpc=async(action:string,payload:Record<string,unknown>)=>{calls.push({action,payload});
+  if(action==='eligible')return {allowed:true,revision:null,authority:'synthetic'};
+  if(action==='reserve')return {dispatch:true,attempt:'00000000-0000-4000-8000-000000000001'};
+  return {}};
+ const extractor=extractionAdapter({mode:'synthetic',model:'synthetic-model',maxCharacters:100000},async(input)=>{modelInput=JSON.stringify(input);return {reviewedAll:false}});
+ await processMeeting({page:async()=>[],source:async()=>PAYMENT_CALL} as never,rpc,extractor,{id:PAYMENT_CALL.id,title:'Synthetic',instant:new Date(PAYMENT_CALL.date).toISOString(),live:false},{timeoutMs:2000});
+ const cap=JSON.stringify(calls.find(c=>c.action==='capture')!.payload.source);
+ assert.ok(modelInput.length>0,'the synthetic extractor was invoked');
+ for(const text of [cap,modelInput]){
+  assert.deepEqual(leaks([text],[VISA,MC,'0129','999']),[]);
+  assert.doesNotMatch(text,/"seven"|three seven/);
+  assert.match(text,/onboarding pack/);
+ }
+ const red=calls.find(c=>c.action==='capture')!.payload.redaction as Record<string,number>;
+ assert.ok(red.card>=2&&red.expiry>=1&&red.cvc>=3,JSON.stringify(red));
+ for(const v of Object.values(red))assert.equal(Number.isInteger(v),true,'counts are JSON integers');
+});

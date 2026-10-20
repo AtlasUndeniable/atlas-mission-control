@@ -1,6 +1,6 @@
 import {NextRequest,NextResponse} from 'next/server';
 import {authorizeMeeting} from '@/lib/meetings/transport';
-import {parseMappingList,validMappingRequest} from '@/lib/board/client-mapping';
+import {listPayload,parseMappingList,validMappingRequest} from '@/lib/board/client-mapping';
 export const runtime='nodejs';export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store','Vary':'Authorization'};
 // Off unless the install turns it on. The hosted RPC decides who may list and resolve.
@@ -9,7 +9,7 @@ async function rpc(actor:string,body:object){const c=JSON.parse(process.env.ATLA
 export async function GET(request:NextRequest){
  try{const actor=await authorizeMeeting(request);
   if(!enabled())return NextResponse.json({status:'disabled',items:[],clients:[]},{headers});
-  return NextResponse.json({status:'ok',...parseMappingList(await rpc(actor,{action:'list',payload:{}}))},{headers});
+  return NextResponse.json({status:'ok',...parseMappingList(await rpc(actor,{action:'list',payload:listPayload(request.nextUrl.searchParams)}))},{headers});
  }catch{return NextResponse.json({status:'unavailable',items:[],clients:[]},{status:503,headers})}
 }
 export async function POST(request:NextRequest){

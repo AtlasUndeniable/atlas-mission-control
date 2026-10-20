@@ -4,7 +4,8 @@
  * only shapes what it returned and never invents a client or a choice it did not offer.
  *
  * Badges:
- *  - assigned:     mapped automatically by an exact approved identity; "Change client" only.
+ *  - assigned:     mapped, confirmed by a person (or, only under the reviewed flag, automatically);
+ *                  always reachable here (paginated, searchable) with "Change client".
  *  - suggested:    Held; one-click "Confirm suggested client", or "Change client".
  *  - needs_client: Held; ambiguous, unrecognised or incomplete evidence, with the real reason.
  *  - new_client:   a person created it; drafting is shared-method-only until confirmed.
@@ -13,7 +14,8 @@ export type MappingParticipant={email:string;resolved:string|null;suggestion:str
 export type MappingItem={mapping:string;badge:'assigned'|'suggested'|'needs_client'|'new_client';title:string;instant:string;outcome:string;client:string|null;clientName:string|null;company:string|null;confidence:string;reason:string;decidedBy:string;decidedAt:string;suggestions:string[];newClient:{name:string;company:string|null;emails:string[]}|null;participants:MappingParticipant[]};
 export type MappingClient={client:string;name:string;status:string};
 export type RereviewItem={request:string;title:string;recordedClient:string;currentClient:string};
-export type MappingList={items:MappingItem[];clients:MappingClient[];rereview:RereviewItem[]};
+export type MappingList={items:MappingItem[];clients:MappingClient[];rereview:RereviewItem[];total:number;offset:number;limit:number;search:string|null};
+export const PAGE_SIZE=20;
 export const BADGE_LABEL:Record<MappingItem['badge'],string>={assigned:'Client assigned',suggested:'Suggested client',needs_client:'Needs a client',new_client:'New client'};
 export const MAPPING_ACTIONS=['choose_existing','confirm_suggested','confirm_new','mark_internal','rereview_request'] as const;
 export type MappingAction=typeof MAPPING_ACTIONS[number];
@@ -26,7 +28,7 @@ const BADGES=new Set(['assigned','suggested','needs_client','new_client']);
 
 /** Defensive parse: anything malformed is dropped rather than shown half-formed. */
 export function parseMappingList(v:unknown):MappingList{
- const o=(v&&typeof v==='object'?v:{}) as {items?:unknown;clients?:unknown;rereview?:unknown};
+ const o=(v&&typeof v==='object'?v:{}) as {items?:unknown;clients?:unknown;rereview?:unknown;total?:unknown;offset?:unknown;limit?:unknown;search?:unknown};
  const items=(Array.isArray(o.items)?o.items:[]).flatMap((x):MappingItem[]=>{
   if(!x||typeof x!=='object')return [];
   const i=x as Record<string,unknown>;
@@ -49,16 +51,27 @@ export function parseMappingList(v:unknown):MappingList{
   if(!x||typeof x!=='object')return [];const r=x as Record<string,unknown>;
   return typeof r.request==='string'&&UUID.test(r.request)?[{request:r.request,title:str(r.title,300)||'Untitled request',recordedClient:str(r.recordedClient,120),currentClient:str(r.currentClient,120)}]:[];
  });
- return {items,clients,rereview};
+ const int=(x:unknown,d:number)=>typeof x==='number'&&Number.isInteger(x)&&x>=0?x:d;
+ return {items,clients,rereview,total:int(o.total,items.length),offset:int(o.offset,0),limit:int(o.limit,50),search:typeof o.search==='string'&&o.search?o.search.slice(0,100):null};
+}
+/** Query for one page of the correction view: bounded page size, offset and an optional search. */
+export function listQuery(offset:number,search:string):string{
+ const q=new URLSearchParams();q.set('limit',String(PAGE_SIZE));q.set('offset',String(Math.max(0,Math.min(999999,Math.floor(offset)||0))));
+ const s=search.trim().slice(0,100);if(s)q.set('search',s);return q.toString();
+}
+/** The list payload the route forwards: only these three fields, each validated. */
+export function listPayload(params:URLSearchParams):{limit:number;offset:number;search?:string}{
+ const lim=Number(params.get('limit')),off=Number(params.get('offset')),s=(params.get('search')??'').trim().slice(0,100);
+ return {limit:Number.isInteger(lim)&&lim>=1&&lim<=50?lim:PAGE_SIZE,offset:Number.isInteger(off)&&off>=0&&off<=999999?off:0,...(s?{search:s}:{})};
 }
 
 /** One plain line for the panel heading. Empty string when there is nothing to show. */
 export function mappingHeadline(list:MappingList):string{
  const n=(b:MappingItem['badge'])=>list.items.filter(i=>i.badge===b).length;
- const need=n('needs_client'),sug=n('suggested'),fresh=n('new_client'),auto=n('assigned'),rr=list.rereview.length;
+ const need=n('needs_client'),sug=n('suggested'),fresh=n('new_client'),assigned=n('assigned'),rr=list.rereview.length;
  return [need?`${need} ${need===1?'call needs':'calls need'} a client`:'',sug?`${sug} suggested ${sug===1?'client':'clients'} to confirm`:'',
   fresh?`${fresh} new ${fresh===1?'client':'clients'} to confirm`:'',rr?`${rr} ${rr===1?'task needs':'tasks need'} re-review after a client change`:'',
-  auto?`${auto} ${auto===1?'call':'calls'} assigned automatically`:''].filter(Boolean).join(' · ');
+  assigned?`${assigned} assigned ${assigned===1?'call':'calls'} you can change`:''].filter(Boolean).join(' · ');
 }
 
 /** "Change client" choices: existing clients, the call's suggestions first, never its current one or a merged one. */

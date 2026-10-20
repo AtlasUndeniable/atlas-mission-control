@@ -38,9 +38,10 @@ alter table app_private.intake_scope_rules
  add constraint intake_scope_resolved_boundary check(match_kind<>'resolved'or(client='*resolved*'and cardinality(client_emails)=0 and cardinality(allowed_emails)=0 and cardinality(client_domains)=0 and cardinality(allowed_domains)=0 and not excluded));
 
 -- Personal providers never map on domain, only on an exact address. Mirrored and parity-tested in
--- src/lib/meetings/client-mapping.ts (PERSONAL_DOMAINS).
+-- src/lib/meetings/client-mapping.ts (PERSONAL_DOMAINS). Includes Fastmail's full published shared-
+-- domain list as fetched 2026-10-20 (Lane N3; sprint-20261007/laneN-client-mapping/fastmail-published-20261020.txt).
 create function app_private.intake_personal_domains()returns text[] language sql immutable set search_path='' as
-$$select array['123mail.org','150mail.com','150ml.com','16mail.com','2-mail.com','4email.net','50mail.com','aapt.net.au','adam.com.au','aim.com','airpost.net','allmail.net','aol.com','bigpond.com','bigpond.com.au','bigpond.net.au','btinternet.com','chariot.net.au','cluemail.com','comcast.net','dodo.com.au','duck.com','elitemail.org','emailcorner.net','emailengine.net','emailengine.org','emailgroups.net','emailplus.org','emailuser.net','eml.cc','exetel.com.au','f-m.fm','fast-email.com','fast-mail.org','fastem.com','fastemailer.com','fastest.cc','fastimap.com','fastmail.cn','fastmail.co.uk','fastmail.com','fastmail.com.au','fastmail.de','fastmail.es','fastmail.fm','fastmail.fr','fastmail.im','fastmail.in','fastmail.jp','fastmail.mx','fastmail.net','fastmail.nl','fastmail.org','fastmail.se','fastmail.to','fastmail.tw','fastmail.uk','fastmail.us','fastmailbox.net','fastmessaging.com','fea.st','fmail.co.uk','fmailbox.com','fmgirl.com','fmguy.com','ftml.net','gmail.com','gmx.com','gmx.de','gmx.net','googlemail.com','h-mail.us','hailmail.net','hey.com','hotmail.co.nz','hotmail.co.uk','hotmail.com','hotmail.com.au','hushmail.com','icloud.com','iinet.net.au','imap-mail.com','imap.cc','imapmail.org','inbox.com','inoutbox.com','internet-e-mail.com','internet-mail.org','internetemails.net','internetmailing.net','internode.on.net','iprimus.com.au','jetemail.net','justemail.net','letterboxes.org','live.co.uk','live.com','live.com.au','mac.com','mail-central.com','mail-page.com','mail.com','mailandftp.com','mailas.com','mailbolt.com','mailbox.org','mailc.net','mailcan.com','mailforce.net','mailftp.com','mailhaven.com','mailingaddress.org','mailite.com','mailmight.com','mailnew.com','mailsent.net','mailservice.ms','mailup.net','mailworks.org','me.com','ml1.net','mm.st','msn.com','myfastmail.com','mymacmail.com','netspace.net.au','nospammail.net','optusnet.com.au','outlook.co.nz','outlook.com','outlook.com.au','ownmail.net','ozemail.com.au','people.net.au','petml.com','pm.me','posteo.de','postinbox.com','postpro.net','primus.com.au','proinbox.com','promessage.com','proton.me','protonmail.ch','protonmail.com','qq.com','realemail.net','reallyfast.biz','reallyfast.info','rocketmail.com','rushpost.com','sent.as','sent.at','sent.com','sky.com','speedpost.net','speedymail.org','ssl-mail.com','swift-mail.com','the-fastest.net','the-quickest.com','theinternetemail.com','tpg.com.au','tuta.io','tutanota.com','veryfast.biz','veryspeedy.net','virginmedia.com','warpmail.net','web.de','westnet.com.au','xsmail.com','xtra.co.nz','yahoo.ca','yahoo.co.nz','yahoo.co.uk','yahoo.com','yahoo.com.au','yepmail.net','ymail.com','your-mail.com','zoho.com','zohomail.com']$$;
+$$select array['123mail.org','150mail.com','150ml.com','16mail.com','2-mail.com','4email.net','50mail.com','aapt.net.au','adam.com.au','aim.com','airpost.net','aliencamel.com','allmail.net','aol.com','bestmail.us','bigpond.com','bigpond.com.au','bigpond.net.au','btinternet.com','chariot.net.au','cluemail.com','comcast.net','dodo.com.au','duck.com','elitemail.org','emailcorner.net','emailengine.net','emailengine.org','emailgroups.net','emailplus.org','emailuser.net','eml.cc','exetel.com.au','f-m.fm','fast-email.com','fast-mail.org','fastem.com','fastemail.us','fastemailer.com','fastest.cc','fastimap.com','fastmail.ca','fastmail.cn','fastmail.co.uk','fastmail.com','fastmail.com.au','fastmail.de','fastmail.es','fastmail.fm','fastmail.fr','fastmail.im','fastmail.in','fastmail.jp','fastmail.mx','fastmail.net','fastmail.nl','fastmail.org','fastmail.se','fastmail.to','fastmail.tw','fastmail.uk','fastmail.us','fastmailbox.net','fastmessaging.com','fea.st','fmail.co.uk','fmailbox.com','fmgirl.com','fmguy.com','foobox.com','foobox.net','ftml.net','gmail.com','gmx.com','gmx.de','gmx.net','googlemail.com','h-mail.us','hailmail.net','hey.com','hotmail.co.nz','hotmail.co.uk','hotmail.com','hotmail.com.au','hushmail.com','icloud.com','iinet.net.au','imap-mail.com','imap.cc','imapmail.org','immerbox.com','immermail.com','inbox.com','inoutbox.com','internet-e-mail.com','internet-mail.org','internetemails.net','internetmailing.net','internode.on.net','iprimus.com.au','jetemail.net','justemail.net','letterboxes.org','lifetimeaddress.com','live.co.uk','live.com','live.com.au','mac.com','mail-central.com','mail-page.com','mail.com','mailandftp.com','mailas.com','mailbolt.com','mailbox.org','mailc.net','mailcan.com','mailforce.net','mailftp.com','mailhaven.com','mailingaddress.org','mailite.com','mailmight.com','mailnew.com','mailsent.net','mailservice.ms','mailup.net','mailworks.org','mailzone.com','me.com','ml1.net','mm.st','msn.com','myfastmail.com','mymacmail.com','netspace.net.au','nospammail.net','onepost.net','optusnet.com.au','outlook.co.nz','outlook.com','outlook.com.au','ownmail.net','ozemail.com.au','penguinmail.com','people.net.au','permanentmail.com','petml.com','pm.me','pobox.com','posteo.de','postinbox.com','postpro.net','primus.com.au','proinbox.com','promessage.com','proton.me','protonmail.ch','protonmail.com','qq.com','realemail.net','reallyfast.biz','reallyfast.info','rocketmail.com','rushpost.com','sent.as','sent.at','sent.com','siemprebox.com','siempremail.com','sky.com','speedpost.net','speedymail.org','ssl-mail.com','swift-mail.com','the-fastest.net','the-quickest.com','theinternetemail.com','tpg.com.au','tuta.io','tutanota.com','veribox.net','veryfast.biz','veryspeedy.net','virginmedia.com','warpmail.net','web.de','westnet.com.au','xsmail.com','xtra.co.nz','yahoo.ca','yahoo.co.nz','yahoo.co.uk','yahoo.com','yahoo.com.au','yepmail.net','ymail.com','your-mail.com','zoho.com','zohomail.com']$$;
 create function app_private.intake_slug(t text)returns text language sql immutable set search_path='' as
 $$select left(btrim(regexp_replace(lower(coalesce(t,'')),'[^a-z0-9]+','-','g'),'-'),40)$$;
 
@@ -425,11 +426,17 @@ alter function public.meeting_intake_operational_v026(text,jsonb)set schema app_
 create function public.meeting_intake_operational(action text,payload jsonb default '{}')returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb;rws jsonb;clean jsonb;x jsonb;pol text;red jsonb;
 begin
- if action='capture'and payload?'redaction'then
+ -- R11b-4: every capture through this wrapper carries masked-span accounting: exactly the keys
+ -- card, expiry and cvc, each a JSON number that is an integer 0..999. There is no count-free
+ -- capture path: the collector that sends counts is installed before 029 (an older server ignores
+ -- the extra field), so after 029 a capture without accounting is refused, never accepted.
+ if action='capture'then
   red:=payload->'redaction';payload:=payload-'redaction';
-  if jsonb_typeof(red)<>'object'or exists(select 1 from jsonb_object_keys(red)k where k not in('card','expiry','cvc'))
-   -- All three counts required (a missing key is NULL, which must not pass), small integers only.
-   or not coalesce((red->>'card')~'^[0-9]{1,3}$'and(red->>'expiry')~'^[0-9]{1,3}$'and(red->>'cvc')~'^[0-9]{1,3}$',false)then raise exception 'redaction_accounting_invalid';end if;
+  if red is null or jsonb_typeof(red)<>'object'
+   or(select count(*)from jsonb_object_keys(red))<>3
+   or exists(select 1 from jsonb_object_keys(red)k where k not in('card','expiry','cvc'))
+   or exists(select 1 from jsonb_each(red)e where jsonb_typeof(e.value)<>'number'or(e.value#>>'{}')!~'^[0-9]{1,3}$')
+  then raise exception 'redaction_accounting_invalid';end if;
  end if;
  if action in('catalog','refresh_metadata')then
   rws:=case when action='catalog'then payload->'meetings'else jsonb_build_array(payload->'meeting')end;
@@ -466,11 +473,22 @@ $$;
 create function public.meeting_client_mapping(action text,payload jsonb default '{}')returns jsonb language plpgsql security definer set search_path='' as $$
 declare a app_private.workspace_actors:=app_private.meeting_actor();cur app_private.intake_client_mappings;m app_private.intake_client_mappings;t app_private.intake_scope_rules;
  md app_private.intake_metadata;o app_private.intake_operating;who text;target text;em text;nonint text[];chosen text[];nm text;key text;n int:=1;
- q public.requests;cl text;scope_client text;mp app_private.intake_client_mappings;
+ q public.requests;cl text;scope_client text;mp app_private.intake_client_mappings;lim int;off int;srch text;
 begin
  who:='human:'||a.actor;
  if action='list'then
-  return jsonb_build_object('items',coalesce((select jsonb_agg(x order by x->>'decidedAt'desc)from(
+  -- Bounded and paginated (at most 50 per page), optionally searched by call title or client.
+  -- Every current mapping the actor may resolve is reachable here, including human-confirmed
+  -- assignments, so "change client" is always available; team calls are excluded.
+  lim:=case when(payload->>'limit')~'^[0-9]{1,2}$'then least(greatest((payload->>'limit')::int,1),50)else 50 end;
+  off:=case when(payload->>'offset')~'^[0-9]{1,6}$'then(payload->>'offset')::int else 0 end;
+  srch:=nullif(left(btrim(coalesce(payload->>'search','')),100),'');
+  return jsonb_build_object('offset',off,'limit',lim,'search',srch,
+   'total',(select count(*)from app_private.intake_client_mappings m2 join app_private.meetings mt on mt.source_id=m2.source_id and mt.policy=m2.policy
+     left join app_private.intake_clients ic on ic.policy=m2.policy and ic.client=m2.client
+     where m2.superseded_at is null and app_private.intake_client_can_resolve(m2.policy,a.actor)and m2.outcome<>'internal_only'
+      and(srch is null or strpos(lower(mt.title),lower(srch))>0 or strpos(lower(coalesce(m2.client,'')),lower(srch))>0 or strpos(lower(coalesce(ic.display_name,'')),lower(srch))>0)),
+   'items',coalesce((select jsonb_agg(x order by x->>'decidedAt'desc)from(
     select jsonb_build_object('mapping',m2.id,'badge',case when m2.state='held'and m2.outcome='suggested'then 'suggested'when m2.state='held'then 'needs_client'
       when ic.status='provisional'then 'new_client'else 'assigned'end,'title',mt.title,'instant',mt.instant,'outcome',m2.outcome,
      'client',m2.client,'clientName',ic.display_name,'company',ic.company,'confidence',m2.confidence,'reason',m2.reason,'decidedBy',m2.decided_by,'decidedAt',m2.decided_at,
@@ -480,8 +498,8 @@ begin
     from app_private.intake_client_mappings m2 join app_private.meetings mt on mt.source_id=m2.source_id and mt.policy=m2.policy
     left join app_private.intake_clients ic on ic.policy=m2.policy and ic.client=m2.client
     where m2.superseded_at is null and app_private.intake_client_can_resolve(m2.policy,a.actor)and m2.outcome<>'internal_only'
-     and(m2.state='held'or ic.status='provisional'or(m2.decided_by='atlas-resolver:client-mapping-v1'and m2.decided_at>clock_timestamp()-interval '14 days'))
-    order by m2.decided_at desc limit 50)s),'[]'),
+     and(srch is null or strpos(lower(mt.title),lower(srch))>0 or strpos(lower(coalesce(m2.client,'')),lower(srch))>0 or strpos(lower(coalesce(ic.display_name,'')),lower(srch))>0)
+    order by(m2.state='held')desc,m2.decided_at desc,m2.id limit lim offset off)s),'[]'),
    'rereview',coalesce((select jsonb_agg(jsonb_build_object('request',rq.id,'title',rq.requested->>'title','recordedClient',rq.client,'currentClient',ms.client))
     from public.requests rq join app_private.meeting_items mi on mi.request_id=rq.id join app_private.meeting_scope ms on ms.source_id=mi.source_id and ms.active
     where rq.client is distinct from ms.client and app_private.intake_client_can_resolve(ms.policy,a.actor)),'[]'),

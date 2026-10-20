@@ -60,7 +60,7 @@ test('PERSONAL_DOMAINS is byte-for-byte the list in migration 029, sorted, and c
  assert.ok(m,'029 personal domain function not found');
  assert.deepEqual(m![1].split(',').map(s=>s.replace(/'/g,'')),[...PERSONAL_DOMAINS]);
  assert.deepEqual([...PERSONAL_DOMAINS],[...PERSONAL_DOMAINS].sort());
- for(const d of ['pm.me','protonmail.ch','proton.me','fastmail.fm','fastmail.com','sent.com','internode.on.net','westnet.com.au','iinet.net.au','bigpond.net.au','bigpond.com','optusnet.com.au','tpg.com.au','dodo.com.au','aapt.net.au','ozemail.com.au'])
+ for(const d of ['foobox.com','foobox.net','immerbox.com','immermail.com','mailzone.com','pobox.com','siemprebox.com','siempremail.com','veribox.net','pm.me','protonmail.ch','proton.me','fastmail.fm','fastmail.com','sent.com','internode.on.net','westnet.com.au','iinet.net.au','bigpond.net.au','bigpond.com','optusnet.com.au','tpg.com.au','dodo.com.au','aapt.net.au','ozemail.com.au'])
   assert.ok((PERSONAL_DOMAINS as readonly string[]).includes(d),d);
 });
 test('a personal provider never yields a domain suggestion, however many clients use it',()=>{
@@ -193,8 +193,8 @@ const listPayload={items:[
 test('board: badges, headline, one-click suggestion, change-client choices, defaults',()=>{
  const list=parseMappingList(listPayload);
  assert.equal(list.items.length,4,'malformed items are dropped');assert.equal(list.rereview.length,1);
- assert.equal(mappingHeadline(list),'2 calls need a client · 1 suggested client to confirm · 1 task needs re-review after a client change · 1 call assigned automatically');
- assert.equal(mappingHeadline({items:[],clients:[],rereview:[]}),'');
+ assert.equal(mappingHeadline(list),'2 calls need a client · 1 suggested client to confirm · 1 task needs re-review after a client change · 1 assigned call you can change');
+ assert.equal(mappingHeadline({items:[],clients:[],rereview:[],total:0,offset:0,limit:20,search:null}),'');
  assert.equal(singleSuggestion(list.items[1]),'beta');assert.equal(singleSuggestion(list.items[0]),null,'two suggestions are never one click');
  assert.deepEqual(clientChoices(list.items[0],list.clients).map(c=>c.client),['beta','alpha','pat-new','zeta'],'the call suggestions first, then the rest by name; never merged');
  assert.ok(!clientChoices(list.items[2],list.clients).some(c=>c.client==='alpha'),'change client never offers the current one');
@@ -212,4 +212,18 @@ test('board: resolve requests are validated before they leave the route',()=>{
   {action:'mark_internal',payload:{mapping:m,emails:[]}},{action:'confirm_new',payload:{mapping:'x'}},{action:'confirm_new',payload:{mapping:m,extra:1}},{action:'confirm_new',payload:{mapping:m,emails:['nope']}},
   {action:'rereview_request',payload:{request:M(6),note:'short'}},{action:'rereview_request',payload:{request:M(6),note:'long enough note',mapping:m}}])
   assert.equal(validMappingRequest(bad),null,JSON.stringify(bad));
+});
+
+// ---- Lane N3 (R11b-3): the correction view keeps human-confirmed assignments reachable ----------
+import {listQuery,listPayload as routeListPayload,PAGE_SIZE} from '../src/lib/board/client-mapping.ts';
+test('R11b-3: the correction view is bounded, paginated and searchable; a human-confirmed assignment parses as "assigned"',()=>{
+ assert.equal(listQuery(0,''),`limit=${PAGE_SIZE}&offset=0`);
+ assert.equal(listQuery(40,'  Nora  '),`limit=${PAGE_SIZE}&offset=40&search=Nora`);
+ assert.equal(listQuery(-5,'x'.repeat(300)).length<140,true);
+ assert.deepEqual(routeListPayload(new URLSearchParams('limit=500&offset=-1&search=')),{limit:PAGE_SIZE,offset:0});
+ assert.deepEqual(routeListPayload(new URLSearchParams('limit=10&offset=30&search=Acme')),{limit:10,offset:30,search:'Acme'});
+ const l=parseMappingList({items:[{mapping:M(7),badge:'assigned',title:'Confirmed call',outcome:'known',client:'beta',clientName:'Beta Co',confidence:'human',reason:'Client chosen by rhys',decidedBy:'human:rhys',decidedAt:'2026-10-20T03:00:00Z',suggestions:[],participants:[]}],clients:[{client:'beta',name:'Beta Co',status:'confirmed'},{client:'alpha',name:'Alpha Co',status:'confirmed'}],total:41,offset:20,limit:20,search:'call'});
+ assert.equal(l.items[0].badge,'assigned');assert.equal(l.total,41);assert.equal(l.offset,20);assert.equal(l.search,'call');
+ assert.deepEqual(clientChoices(l.items[0],l.clients).map(c=>c.client),['alpha'],'change client offers the others');
+ assert.match(mappingHeadline(l),/1 assigned call you can change/);
 });
