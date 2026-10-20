@@ -1,121 +1,1221 @@
 {
- "note": "Synthetic only. Shared by verification/client-mapping.test.ts (TypeScript decideMapping) and the Lane N native rehearsal (app_private.intake_client_decide). expect.client of null with clientPrefix means a provisional key new-<slug>-<6 hex of md5(primary email)>.",
+ "note": "Synthetic only. Shared by verification/client-mapping.test.ts (TypeScript decideMapping) and the Lane N2 native rehearsal (app_private.intake_client_decide). Lane N2 policy (R11): only an exact approved identity maps; everything else is Held, with suggestions where the evidence supports one. Dante 2026-10-20: automatic assignment is off by default (autoExact false); an exact approved identity is the pre-suggested client. Cases with autoExact true cover the reviewed flag-on path.",
  "defaults": {
-  "organizer": "owner@team.example",
-  "knownClients": ["alpha", "beta", "alpha-person", "gamma"],
+  "organizer": "owner@undeniablementoring.com",
+  "knownClients": [
+   "alpha",
+   "beta",
+   "alpha-person",
+   "gamma"
+  ],
   "clientStatus": {},
   "identities": [],
   "crosswalk": [],
-  "internal": {"emails": [], "domains": []},
+  "internal": {
+   "emails": [],
+   "domains": [
+    "undeniablementoring.com"
+   ]
+  },
   "sharedDomains": [],
-  "evidence": []
+  "evidence": [],
+  "coverage": {
+   "ghl": "complete",
+   "callNotes": "2855-notes",
+   "clientFolders": "4-records"
+  },
+  "autoExact": false
  },
  "cases": [
-  {"name": "known by existing identity on a personal address",
-   "identities": [{"client": "alpha", "email": "client@gmail.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "client@gmail.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha", "confidence": "high"}},
-  {"name": "personal domain never maps on domain: another gmail user is NOT alpha",
-   "identities": [{"client": "alpha", "email": "client@gmail.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "stranger@gmail.com"],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-stranger-", "confidence": "provisional"}},
-  {"name": "company domain maps when exactly one client uses it",
-   "identities": [{"client": "alpha", "email": "boss@acme-fit.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "coach@acme-fit.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha", "confidence": "medium"}},
-  {"name": "company domain used by two clients is ambiguous",
-   "identities": [{"client": "alpha", "email": "boss@acme-fit.com", "status": "confirmed"}, {"client": "beta", "email": "other@acme-fit.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "coach@acme-fit.com"],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "shared or agency domain is ambiguous even with no other client on it",
-   "sharedDomains": ["agency-hub.com"],
-   "participants": ["owner@team.example", "va@agency-hub.com"],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "GoHighLevel contact tagged with a known client",
-   "participants": ["owner@team.example", "lead@gmail.com"],
-   "evidence": [{"email": "lead@gmail.com", "source": "ghl", "ref": "c1", "name": "Somebody Else", "tags": ["Atlas-Client:beta", "vip"]}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "beta", "confidence": "medium"}},
-  {"name": "GoHighLevel contact whose full name is a known client key",
-   "participants": ["owner@team.example", "ap@outlook.com"],
-   "evidence": [{"email": "ap@outlook.com", "source": "ghl", "ref": "c2", "name": "Alpha Person", "tags": []}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha-person", "confidence": "medium"}},
-  {"name": "GoHighLevel contact unknown to the system names a provisional new client",
-   "participants": ["owner@team.example", "jd@gmail.com"],
-   "evidence": [{"email": "jd@gmail.com", "source": "ghl", "ref": "c3", "name": "Jane Doe", "company": "Doe Fitness", "tags": []}],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-jane-doe-", "confidence": "provisional", "name": "Jane Doe", "company": "Doe Fitness"}},
-  {"name": "prior call notes titled with a known client",
-   "participants": ["owner@team.example", "ap2@gmail.com"],
-   "evidence": [{"email": "ap2@gmail.com", "source": "call_notes", "ref": "PRIOR1", "titleTokens": ["weekly", "call", "alpha", "person", "x", "team"]}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha-person", "confidence": "medium"}},
-  {"name": "client-work folder record lists the address",
-   "participants": ["owner@team.example", "g@yahoo.com"],
-   "evidence": [{"email": "g@yahoo.com", "source": "client_folder", "ref": "gamma-vsl", "client": "gamma", "matchedOn": "email"}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "gamma", "confidence": "medium"}},
-  {"name": "client-work folder record lists the company domain",
-   "participants": ["owner@team.example", "ops@gamma-co.io"],
-   "evidence": [{"email": "ops@gamma-co.io", "source": "client_folder", "ref": "gamma-vsl", "client": "gamma", "matchedOn": "domain", "domain": "gamma-co.io"}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "gamma", "confidence": "medium"}},
-  {"name": "two independent sources agreeing is high confidence",
-   "participants": ["owner@team.example", "b2@gmail.com"],
-   "evidence": [{"email": "b2@gmail.com", "source": "ghl", "ref": "c4", "name": "X", "tags": ["atlas-client:beta"]}, {"email": "b2@gmail.com", "source": "client_folder", "ref": "beta-dir", "client": "beta", "matchedOn": "email"}],
-   "expect": {"outcome": "known", "state": "mapped", "client": "beta", "confidence": "high"}},
-  {"name": "conflicting evidence for one person is ambiguous",
-   "participants": ["owner@team.example", "c@gmail.com"],
-   "evidence": [{"email": "c@gmail.com", "source": "ghl", "ref": "c5", "name": "X", "tags": ["atlas-client:alpha"]}, {"email": "c@gmail.com", "source": "client_folder", "ref": "beta-dir", "client": "beta", "matchedOn": "email"}],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "participants of two different clients are ambiguous",
-   "identities": [{"client": "alpha", "email": "a@gmail.com", "status": "confirmed"}, {"client": "beta", "email": "b@gmail.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "a@gmail.com", "b@gmail.com"],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "internal-only meeting is never a client meeting",
-   "internal": {"emails": ["nat@team.example"], "domains": []},
-   "participants": ["owner@team.example", "nat@team.example"],
-   "expect": {"outcome": "internal_only", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "internal person with a client identity is still internal",
-   "internal": {"emails": [], "domains": ["team.example"]},
-   "identities": [{"client": "alpha", "email": "pat@team.example", "status": "confirmed"}, {"client": "beta", "email": "real@gmail.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "pat@team.example", "real@gmail.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "beta", "confidence": "high"}},
-  {"name": "crosswalk staff are internal",
-   "crosswalk": [{"ruleId": "alpha-v1", "client": "alpha", "matchKind": "participant", "clientEmails": ["ac@gmail.com"], "allowedEmails": ["ac@gmail.com", "owner@team.example", "staff@team.example"], "clientDomains": []}],
-   "participants": ["owner@team.example", "staff@team.example"],
-   "expect": {"outcome": "internal_only", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "crosswalk client email is a high-confidence candidate",
-   "crosswalk": [{"ruleId": "alpha-v1", "client": "alpha", "matchKind": "participant", "clientEmails": ["ac@gmail.com"], "allowedEmails": ["ac@gmail.com", "owner@team.example"], "clientDomains": []}],
-   "participants": ["owner@team.example", "ac@gmail.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha", "confidence": "high"}},
-  {"name": "known client with an unaffiliated guest stays known, guest not affiliated",
-   "identities": [{"client": "alpha", "email": "client@gmail.com", "status": "confirmed"}],
-   "participants": ["owner@team.example", "client@gmail.com", "guest@hotmail.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "alpha", "confidence": "high"}},
-  {"name": "two unknown people at one company make one provisional client",
-   "participants": ["owner@team.example", "zed@newco-gym.com", "amy@newco-gym.com"],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-amy-", "confidence": "provisional", "company": "newco-gym.com"}},
-  {"name": "two unrelated unknown people are ambiguous",
-   "participants": ["owner@team.example", "one@gmail.com", "two@icloud.com"],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "a provisional client's identity maps with provisional confidence",
-   "knownClients": ["alpha", "new-pat-abc123"],
-   "clientStatus": {"new-pat-abc123": "provisional"},
-   "identities": [{"client": "new-pat-abc123", "email": "pat.k@gmail.com", "status": "provisional"}],
-   "participants": ["owner@team.example", "pat.k@gmail.com"],
-   "expect": {"outcome": "known", "state": "mapped", "client": "new-pat-abc123", "confidence": "provisional"}},
-  {"name": "evidence naming a client that is not known is ignored",
-   "participants": ["owner@team.example", "solo@gmail.com"],
-   "evidence": [{"email": "solo@gmail.com", "source": "client_folder", "ref": "x", "client": "not-a-client", "matchedOn": "email"}],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-solo-", "confidence": "provisional"}},
-  {"name": "a GoHighLevel contact tagged with two clients is ambiguous",
-   "participants": ["owner@team.example", "dup@gmail.com"],
-   "evidence": [{"email": "dup@gmail.com", "source": "ghl", "ref": "c6", "name": "Dup", "tags": ["atlas-client:alpha", "atlas-client:gamma"]}],
-   "expect": {"outcome": "ambiguous", "state": "held", "client": null, "confidence": "none"}},
-  {"name": "call notes never match a provisional client by title",
-   "knownClients": ["alpha", "new-pat-abc123"],
-   "clientStatus": {"new-pat-abc123": "provisional"},
-   "participants": ["owner@team.example", "x9@gmail.com"],
-   "evidence": [{"email": "x9@gmail.com", "source": "call_notes", "ref": "PRIOR2", "titleTokens": ["new", "pat", "abc123"]}],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-x9-", "confidence": "provisional"}},
-  {"name": "local part with dots and plus tag names the provisional client",
-   "participants": ["owner@team.example", "mary.ann+fit@gmail.com"],
-   "expect": {"outcome": "new", "state": "mapped", "client": null, "clientPrefix": "new-mary-ann-", "confidence": "provisional", "name": "Mary Ann"}}
+  {
+   "name": "flag off: approved identity on a personal address maps exactly",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "personal domain never suggests: another gmail user is not alpha",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "stranger@gmail.com"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": []
+   }
+  },
+  {
+   "name": "R11 repro: pm.me is a personal provider",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "other@pm.me",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "stranger@pm.me"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": []
+   }
+  },
+  {
+   "name": "R11 repro: internode.on.net is a personal provider",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "other@internode.on.net",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "stranger@internode.on.net"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": []
+   }
+  },
+  {
+   "name": "domain-only evidence never binds: a company domain used by one client is a Held suggestion",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "boss@acme-fit.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "coach@acme-fit.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ]
+   }
+  },
+  {
+   "name": "company domain used by two clients is ambiguous",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "boss@acme-fit.com",
+     "status": "confirmed"
+    },
+    {
+     "client": "beta",
+     "email": "other@acme-fit.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "coach@acme-fit.com"
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "shared or agency domain is ambiguous",
+   "sharedDomains": [
+    "agency-hub.com"
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "va@agency-hub.com"
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "R11 repro: a shared domain holds before a CRM tag can suggest or bind",
+   "sharedDomains": [
+    "agency.example"
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "va@agency.example"
+   ],
+   "evidence": [
+    {
+     "email": "va@agency.example",
+     "source": "ghl",
+     "ref": "c0",
+     "name": "VA",
+     "tags": [
+      "atlas-client:alpha"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": []
+   }
+  },
+  {
+   "name": "a single CRM tag is a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "lead@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "lead@gmail.com",
+     "source": "ghl",
+     "ref": "c1",
+     "name": "Somebody Else",
+     "tags": [
+      "Atlas-Client:beta",
+      "vip"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "beta"
+    ]
+   }
+  },
+  {
+   "name": "a CRM full name equal to a client key is a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "ap@outlook.com"
+   ],
+   "evidence": [
+    {
+     "email": "ap@outlook.com",
+     "source": "ghl",
+     "ref": "c2",
+     "name": "Alpha Person",
+     "tags": []
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha-person"
+    ]
+   }
+  },
+  {
+   "name": "a CRM contact unknown to the system is unrecognised with a proposed name, not a client",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "jd@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "jd@gmail.com",
+     "source": "ghl",
+     "ref": "c3",
+     "name": "Jane Doe",
+     "company": "Doe Fitness",
+     "tags": []
+    }
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "name": "Jane Doe",
+    "company": "Doe Fitness"
+   }
+  },
+  {
+   "name": "a prior call title is a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "ap2@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "ap2@gmail.com",
+     "source": "call_notes",
+     "ref": "PRIOR1",
+     "titleTokens": [
+      "weekly",
+      "call",
+      "alpha",
+      "person",
+      "x",
+      "team"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha-person"
+    ]
+   }
+  },
+  {
+   "name": "a client-work folder record is a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "g@yahoo.com"
+   ],
+   "evidence": [
+    {
+     "email": "g@yahoo.com",
+     "source": "client_folder",
+     "ref": "gamma-vsl",
+     "client": "gamma",
+     "matchedOn": "email"
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "gamma"
+    ]
+   }
+  },
+  {
+   "name": "a folder-recorded company domain is a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "ops@gamma-co.io"
+   ],
+   "evidence": [
+    {
+     "email": "ops@gamma-co.io",
+     "source": "client_folder",
+     "ref": "gamma-vsl",
+     "client": "gamma",
+     "matchedOn": "domain",
+     "domain": "gamma-co.io"
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "gamma"
+    ]
+   }
+  },
+  {
+   "name": "R11 repro: CRM name plus a prior title (two correlated weak sources) stays a Held suggestion",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "guest@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "guest@gmail.com",
+     "source": "ghl",
+     "ref": "c4",
+     "name": "Alpha Person",
+     "tags": []
+    },
+    {
+     "email": "guest@gmail.com",
+     "source": "call_notes",
+     "ref": "PRIOR9",
+     "titleTokens": [
+      "alpha",
+      "person",
+      "catch",
+      "up"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha-person"
+    ]
+   }
+  },
+  {
+   "name": "conflicting weak evidence for one person is ambiguous",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "c@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "c@gmail.com",
+     "source": "ghl",
+     "ref": "c5",
+     "name": "X",
+     "tags": [
+      "atlas-client:alpha"
+     ]
+    },
+    {
+     "email": "c@gmail.com",
+     "source": "client_folder",
+     "ref": "beta-dir",
+     "client": "beta",
+     "matchedOn": "email"
+    }
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "approved identities of two clients are ambiguous",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "a@gmail.com",
+     "status": "confirmed"
+    },
+    {
+     "client": "beta",
+     "email": "b@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "a@gmail.com",
+    "b@gmail.com"
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha",
+     "beta"
+    ]
+   }
+  },
+  {
+   "name": "approved identity plus a guest suggested for another client is ambiguous",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "a@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "a@gmail.com",
+    "x@yahoo.com"
+   ],
+   "evidence": [
+    {
+     "email": "x@yahoo.com",
+     "source": "ghl",
+     "ref": "c7",
+     "name": "X",
+     "tags": [
+      "atlas-client:beta"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha",
+     "beta"
+    ]
+   }
+  },
+  {
+   "name": "flag off: an approved identity wins over a stale CRM tag on the same person",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "a@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "a@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "a@gmail.com",
+     "source": "ghl",
+     "ref": "c8",
+     "name": "X",
+     "tags": [
+      "atlas-client:beta"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "team call: only undeniablementoring.com people attended",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "nat@undeniablementoring.com"
+   ],
+   "expect": {
+    "outcome": "internal_only",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "flag off: an internal person with a client identity is still internal",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "pat@undeniablementoring.com",
+     "status": "confirmed"
+    },
+    {
+     "client": "beta",
+     "email": "real@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "pat@undeniablementoring.com",
+    "real@gmail.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "beta"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "crosswalk staff are internal",
+   "crosswalk": [
+    {
+     "ruleId": "alpha-v1",
+     "client": "alpha",
+     "matchKind": "participant",
+     "clientEmails": [
+      "ac@gmail.com"
+     ],
+     "allowedEmails": [
+      "ac@gmail.com",
+      "owner@undeniablementoring.com",
+      "staff@other-team.example"
+     ],
+     "clientDomains": []
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "staff@other-team.example"
+   ],
+   "expect": {
+    "outcome": "internal_only",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "flag off: crosswalk client email maps exactly",
+   "crosswalk": [
+    {
+     "ruleId": "alpha-v1",
+     "client": "alpha",
+     "matchKind": "participant",
+     "clientEmails": [
+      "ac@gmail.com"
+     ],
+     "allowedEmails": [
+      "ac@gmail.com",
+      "owner@undeniablementoring.com"
+     ],
+     "clientDomains": []
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "ac@gmail.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "flag off: approved identity with an unaffiliated guest maps when evidence is complete",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com",
+    "guest@hotmail.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "flag off: approved identity with an unchecked guest is Held when GoHighLevel is first-100 only",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com",
+    "guest@hotmail.com"
+   ],
+   "coverage": {
+    "ghl": "first-100-contacts",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records"
+   },
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "could not be checked: GoHighLevel first-100-contacts"
+   }
+  },
+  {
+   "name": "flag off: an approved identity alone maps even when coverage is incomplete (nobody unchecked)",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "unavailable",
+    "callNotes": "unavailable",
+    "clientFolders": "unavailable"
+   },
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "two unknown people at one company are unrecognised with a proposed name",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "zed@newco-gym.com",
+    "amy@newco-gym.com"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "name": "Amy",
+    "company": "newco-gym.com"
+   }
+  },
+  {
+   "name": "two unrelated unknown people are unrecognised for a person to sort out",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "one@gmail.com",
+    "two@icloud.com"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "flag off: a provisional client's person-recorded identity maps exactly",
+   "knownClients": [
+    "alpha",
+    "pat-new"
+   ],
+   "clientStatus": {
+    "pat-new": "provisional"
+   },
+   "identities": [
+    {
+     "client": "pat-new",
+     "email": "pat.k@gmail.com",
+     "status": "provisional"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "pat.k@gmail.com"
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "pat-new"
+    ],
+    "reasonIncludes": "by approved identity; confirm to assign"
+   }
+  },
+  {
+   "name": "evidence naming a client that is not known is ignored",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "solo@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "solo@gmail.com",
+     "source": "client_folder",
+     "ref": "x",
+     "client": "not-a-client",
+     "matchedOn": "email"
+    }
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "a CRM contact tagged with two clients is ambiguous",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "dup@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "dup@gmail.com",
+     "source": "ghl",
+     "ref": "c6",
+     "name": "Dup",
+     "tags": [
+      "atlas-client:alpha",
+      "atlas-client:gamma"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "ambiguous",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "call notes never suggest a provisional client",
+   "knownClients": [
+    "alpha",
+    "pat-new"
+   ],
+   "clientStatus": {
+    "pat-new": "provisional"
+   },
+   "participants": [
+    "owner@undeniablementoring.com",
+    "x9@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "x9@gmail.com",
+     "source": "call_notes",
+     "ref": "PRIOR2",
+     "titleTokens": [
+      "pat",
+      "new"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none"
+   }
+  },
+  {
+   "name": "local part with dots and a plus tag proposes the name",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "mary.ann+fit@gmail.com"
+   ],
+   "expect": {
+    "outcome": "unrecognised",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "name": "Mary Ann"
+   }
+  },
+  {
+   "name": "R11-3: no coverage report is Held as incomplete, never new",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "unknown@gmail.com"
+   ],
+   "coverage": null,
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "noNewClient": true
+   }
+  },
+  {
+   "name": "R11-3: a failed evidence load is Held as incomplete with its reason",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "unknown@gmail.com"
+   ],
+   "coverage": {
+    "collector": "failed to load evidence sources"
+   },
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "noNewClient": true,
+    "reasonIncludes": "failed to load evidence sources"
+   }
+  },
+  {
+   "name": "R11-3: GoHighLevel first-100 is Held as incomplete",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "unknown@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "first-100-contacts",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records"
+   },
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "noNewClient": true,
+    "reasonIncludes": "GoHighLevel first-100-contacts"
+   }
+  },
+  {
+   "name": "R11-3: truncated evidence is Held as incomplete",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "unknown@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "complete",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records",
+    "truncated": "true"
+   },
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "noNewClient": true,
+    "reasonIncludes": "truncated"
+   }
+  },
+  {
+   "name": "R11-3: an unconfigured source is Held as incomplete",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "unknown@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "not_configured",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records"
+   },
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "noNewClient": true,
+    "reasonIncludes": "not_configured"
+   }
+  },
+  {
+   "name": "a suggestion under incomplete coverage stays a suggestion and says so",
+   "participants": [
+    "owner@undeniablementoring.com",
+    "lead@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "first-100-contacts",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records"
+   },
+   "evidence": [
+    {
+     "email": "lead@gmail.com",
+     "source": "ghl",
+     "ref": "c1",
+     "name": "X",
+     "tags": [
+      "atlas-client:beta"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "suggested",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "beta"
+    ],
+    "reasonIncludes": "evidence incomplete"
+   }
+  },
+  {
+   "name": "flag on: approved identity on a personal address maps exactly",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com"
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "alpha",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: an approved identity wins over a stale CRM tag on the same person",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "a@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "a@gmail.com"
+   ],
+   "evidence": [
+    {
+     "email": "a@gmail.com",
+     "source": "ghl",
+     "ref": "c8",
+     "name": "X",
+     "tags": [
+      "atlas-client:beta"
+     ]
+    }
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "alpha",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: an internal person with a client identity is still internal",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "pat@undeniablementoring.com",
+     "status": "confirmed"
+    },
+    {
+     "client": "beta",
+     "email": "real@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "pat@undeniablementoring.com",
+    "real@gmail.com"
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "beta",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: crosswalk client email maps exactly",
+   "crosswalk": [
+    {
+     "ruleId": "alpha-v1",
+     "client": "alpha",
+     "matchKind": "participant",
+     "clientEmails": [
+      "ac@gmail.com"
+     ],
+     "allowedEmails": [
+      "ac@gmail.com",
+      "owner@undeniablementoring.com"
+     ],
+     "clientDomains": []
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "ac@gmail.com"
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "alpha",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: approved identity with an unaffiliated guest maps when evidence is complete",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com",
+    "guest@hotmail.com"
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "alpha",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: approved identity with an unchecked guest is Held when GoHighLevel is first-100 only",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com",
+    "guest@hotmail.com"
+   ],
+   "coverage": {
+    "ghl": "first-100-contacts",
+    "callNotes": "2855-notes",
+    "clientFolders": "4-records"
+   },
+   "expect": {
+    "outcome": "evidence_incomplete",
+    "state": "held",
+    "client": null,
+    "confidence": "none",
+    "suggestions": [
+     "alpha"
+    ]
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: an approved identity alone maps even when coverage is incomplete (nobody unchecked)",
+   "identities": [
+    {
+     "client": "alpha",
+     "email": "client@gmail.com",
+     "status": "confirmed"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "client@gmail.com"
+   ],
+   "coverage": {
+    "ghl": "unavailable",
+    "callNotes": "unavailable",
+    "clientFolders": "unavailable"
+   },
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "alpha",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  },
+  {
+   "name": "flag on: a provisional client's person-recorded identity maps exactly",
+   "knownClients": [
+    "alpha",
+    "pat-new"
+   ],
+   "clientStatus": {
+    "pat-new": "provisional"
+   },
+   "identities": [
+    {
+     "client": "pat-new",
+     "email": "pat.k@gmail.com",
+     "status": "provisional"
+    }
+   ],
+   "participants": [
+    "owner@undeniablementoring.com",
+    "pat.k@gmail.com"
+   ],
+   "expect": {
+    "outcome": "known",
+    "state": "mapped",
+    "client": "pat-new",
+    "confidence": "exact"
+   },
+   "autoExact": true
+  }
  ]
 }

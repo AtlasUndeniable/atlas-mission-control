@@ -1,11 +1,14 @@
 /** Ingestion only. No client-homework processor, sends, automatic task acceptance or model default. */
 import {createHash} from 'node:crypto';
 import {passageCommitmentKey} from '../commitments/key.ts';
+import {redactCardData,type RedactionCounts} from './card-redaction.ts';
 export const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 export type Passage={speaker:string;text:string;start:number|null;end:number|null};
 export type MeetingSource={id:string;title:string;instant:string;live:boolean;passages:Passage[];summary:string;revision:string};
 export type Proposal={key:string;title:string;kind:'promise'|'request'|'suggestion';quote:string;speaker:string;start:number|null;end:number|null;provenance:'transcript'|'provider_summary';suggestedResponsibility:string|null;due:string|null;dueQuote:string|null;uncertainty:string;sourceRevision:string};
-export function normalize(raw:Record<string,unknown>):MeetingSource{
+/** The only transcript form intake hashes, captures, stores, quotes or sends: card read-outs masked. */
+export function normalize(raw:Record<string,unknown>):MeetingSource{return normalizeWithRedaction(raw).source}
+export function normalizeWithRedaction(raw:Record<string,unknown>):{source:MeetingSource;redaction:RedactionCounts}{
  if(typeof raw.id!=='string'||! /^[A-Za-z0-9_-]{1,180}$/.test(raw.id))throw Error('Invalid stable provider id');
  const instant=new Date(typeof raw.date==='number'?raw.date:String(raw.date)).toISOString();
  if(typeof raw.title!=='string'||typeof raw.is_live!=='boolean')throw Error('Missing title/completed status');
@@ -17,9 +20,9 @@ export function normalize(raw:Record<string,unknown>):MeetingSource{
   const end=typeof u.end_time==='number'&&Number.isFinite(u.end_time)?u.end_time:null;
   return {speaker:u.speaker_name,text:u.text,start,end};
  });
- const summary=String((raw.summary as Record<string,unknown>|null)?.action_items||'');
- const content={id:raw.id,title:raw.title,instant,live:raw.is_live,passages,summary};
- return {...content,revision:hash(content)};
+ const red=redactCardData(passages,String((raw.summary as Record<string,unknown>|null)?.action_items||''));
+ const content={id:raw.id,title:raw.title,instant,live:raw.is_live,passages:red.passages,summary:red.summary};
+ return {source:{...content,revision:hash(content)} as MeetingSource,redaction:red.counts};
 }
 /** Strict output boundary for a separately authorized extractor. No model-selected person keys. */
 export function validateExtraction(source:MeetingSource,raw:unknown):Proposal[]{
