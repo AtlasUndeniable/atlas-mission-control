@@ -7,14 +7,14 @@
  * Logs go to stderr and carry no transcript text, tokens or arguments.
  */
 import {createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse} from 'node:http';
-import {readFileSync, statSync} from 'node:fs';
+
 import {join} from 'node:path';
 import {createInterface} from 'node:readline';
 import {loadBudget, loadConfig, type McpConfig, type Budget} from './config.ts';
 import {hostedClient, loadTransportFromEnvFile, type Hosted} from './hosted.ts';
 import {CallIndex} from './call-index.ts';
 import {AuditLog, BudgetLedger} from './ledger.ts';
-import {RateLimiter, readRegistry, resolveBearer, type TokenRegistry} from './auth.ts';
+import {RateLimiter, readOwnerOnlyFile, readRegistry, resolveBearer, type TokenRegistry} from './auth.ts';
 import {AtlasMcp} from './tools.ts';
 import {handleMessage} from './protocol.ts';
 
@@ -74,11 +74,15 @@ export function listen(a: Assembled): Promise<Server> {
 }
 
 export function readTokenFile(file: string) {
-  const st = statSync(file);
-  if (!st.isFile() || (st.mode & 0o077) !== 0) throw Error('token_file_must_be_owner_only');
-  return readFileSync(file, 'utf8').trim();
+  return readOwnerOnlyFile(file, 'token_file').trim();
 }
 
+/**
+ * stdio session. The token is re-checked against the CURRENT registry before every message,
+ * so revoking it (or its principal disappearing from config) refuses the next request and
+ * ends the session. Work already dispatched (an in-flight ask_call) can only be interrupted
+ * by stopping the process.
+ */
 export async function runStdio(a: Assembled, token: string, input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout) {
   const principal = resolveBearer(a.registry(), token, a.config.principals);
   if (!principal) throw Error('atlas_mcp_token_rejected');
@@ -87,9 +91,16 @@ export async function runStdio(a: Assembled, token: string, input: NodeJS.Readab
     if (!line.trim()) continue;
     let msg: unknown;
     try { msg = JSON.parse(line); } catch { output.write(JSON.stringify({jsonrpc: '2.0', id: null, error: {code: -32700, message: 'Parse error.'}}) + '\n'); continue; }
+    let current: string | null = null;
+    try { current = resolveBearer(a.registry(), token, a.config.principals); } catch { current = null; }
+    if (current !== principal) {
+      const id = msg && typeof msg === 'object' && 'id' in msg ? (msg as {id: unknown}).id : null;
+      output.write(JSON.stringify({jsonrpc: '2.0', id: typeof id === 'string' || typeof id === 'number' ? id : null, error: {code: -32001, message: 'Token revoked or no longer valid; session closed.'}}) + '\n');
+      rl.close();
+      throw Error('atlas_mcp_token_revoked');
+    }
     const out = await handleMessage(a.server, principal, 'stdio', msg);
     if (out) output.write(JSON.stringify(out) + '\n');
   }
 }
-
 export const loadAll = (configFile: string) => loadConfig(configFile);

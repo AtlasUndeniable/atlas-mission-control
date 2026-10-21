@@ -31,12 +31,12 @@ export class ToolRefusal extends Error {
 }
 
 type Prop = {type: 'string' | 'integer'; description: string; maxLength?: number; minimum?: number; maximum?: number; pattern?: string; enum?: string[]};
-type ToolDef = {name: ToolName; title: string; description: string; inputSchema: {type: 'object'; properties: Record<string, Prop>; required: string[]; additionalProperties: false}; annotations: {readOnlyHint: true; destructiveHint: false; idempotentHint: true; openWorldHint: boolean}};
+type ToolDef = {name: ToolName; title: string; description: string; inputSchema: {type: 'object'; properties: Record<string, Prop>; required: string[]; additionalProperties: false}; annotations: {readOnlyHint: true; destructiveHint: false; idempotentHint: boolean; openWorldHint: boolean}};
 
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 const ID = '^[A-Za-z0-9_-]{1,80}$';
 const def = (name: ToolName, title: string, description: string, properties: Record<string, Prop> = {}, required: string[] = [], openWorld = false): ToolDef =>
-  ({name, title, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}, annotations: {readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: openWorld}});
+  ({name, title, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}, annotations: {readOnlyHint: true, destructiveHint: false, idempotentHint: !openWorld, openWorldHint: openWorld}});
 
 export const TOOL_DEFS: ToolDef[] = [
   def('whoami', 'Who am I', 'Who this connection is (principal and hosted actor), what it may see, and the remaining ask_call budget.'),
@@ -105,9 +105,10 @@ function taskViews(queue: Queue, counter: MaskCounter) {
       id: (t?.id as string) ?? it.id, taskId: (t?.id as string) ?? null, requestId: it.id,
       title: maskText(String(t?.title ?? it.title ?? ''), counter),
       owner: (t?.owner as string) ?? it.owner ?? null, executor: t?.executor ?? null, reviewer: t?.next_reviewer ?? null,
-      client: (t?.client as string) ?? null,
+      client: t?.client ? maskText(String(t.client), counter) : m.clientLabel ? maskText(String(m.clientLabel), counter) : null,
       requestState: it.state, workStatus: (t?.work_status as string) ?? null, due: (t?.due as string) ?? it.due ?? null, deferred: !!it.deferred,
-      source: {callId: m.id, title: maskText(m.title ?? '', counter), instant: m.instant, link: firefliesLink(m.id)},
+      // access 'task_only': the caller holds reviewed task context only, never the transcript.
+      source: {callId: m.id, title: maskText(m.title ?? '', counter), instant: m.instant, link: firefliesLink(m.id), access: m.taskOnly === true ? 'task_only' : 'full'},
       _item: it, _meeting: m,
     });
   }
@@ -148,28 +149,41 @@ export class AtlasMcp {
       else if (e instanceof HostedRefusal) { outcome = 'refused'; reason = `hosted_${e.status}`; result = {error: 'hosted_refused', message: e.message}; }
       else { outcome = 'error'; reason = 'internal'; result = {error: 'internal', message: 'The request could not be completed; no diagnostic text was returned.'}; }
     }
+    // Schema-bound audit: only a known tool enum is ever written; a rejected name is hashed.
+    const known = (TOOL_NAMES as readonly string[]).includes(name);
     this.deps.audit.write({
-      at: new Date().toISOString(), principal, transport, tool: String(name).slice(0, 40), argsSha256: argsHash(rawArgs ?? {}),
+      at: new Date().toISOString(), principal, transport, tool: known ? name : 'unknown_tool',
+      ...(known ? {} : {toolNameSha256: argsHash(String(name))}), argsSha256: argsHash(rawArgs ?? {}),
       outcome, ...(reason ? {reason} : {}), resultIds: ctxBase.ids.slice(0, 50), costMicros: ctx?.costMicros ?? 0, maskSpans: ctxBase.counter.spans, ms: Date.now() - started,
     });
     return {isError: outcome !== 'ok', structured: result};
   }
 
-  private async allowedCalls(ctx: Ctx): Promise<{queue: Queue; allowed: 'all' | Set<string>}> {
+  /**
+   * Full-call read permission ONLY. A taskOnly queue row (reviewed task context for a meeting
+   * the actor may not read) contributes nothing here: it never unlocks brain search, summaries,
+   * snippets, hosted transcript reads or model input. Task fields stay available via list_tasks.
+   */
+  private async allowedCalls(ctx: Ctx): Promise<{queue: Queue; full: HostedMeeting[]; allowed: 'all' | Set<string>}> {
     const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-    return {queue, allowed: ctx.p.scope === 'owner' ? 'all' : new Set(queue.meetings.map(m => m.id))};
+    const full = queue.meetings.filter(m => m.taskOnly !== true);
+    return {queue, full, allowed: ctx.p.scope === 'owner' ? 'all' : new Set(full.map(m => m.id))};
   }
 
   private async run(ctx: Ctx, name: ToolName, args: Record<string, string | number>): Promise<Record<string, unknown>> {
     const {config, budget, ledger, index} = this.deps;
     switch (name) {
       case 'whoami': {
-        const s = ledger.state();
+        // Shared usage is global metadata: only the owner sees it. Caps are policy, not usage.
+        const owner = ctx.p.scope === 'owner';
+        const s = owner ? ledger.state() : null;
         return {
           principal: ctx.principal, label: ctx.p.label, hostedActor: ctx.cap.actor, scope: ctx.p.scope,
-          sees: ctx.p.scope === 'owner' ? 'All of Rhys\'s calls, clients and internal tasks.' : 'Only calls and tasks for clients granted to this hosted actor.',
+          sees: owner ? 'All of Rhys\'s calls, clients and internal tasks.' : 'Only calls this hosted actor may read in full, plus task fields for reviewed task-only context.',
           tools: ctx.p.tools, readOnly: true,
-          askCallBudget: {usedThisMonthUsd: usd(s.monthMicros), monthlyCapUsd: usd(budget.monthlyMicros), callsThisMonth: s.monthCalls, monthlyCalls: budget.monthlyCalls, callsToday: s.dayCalls, dailyCalls: budget.dailyCalls},
+          askCallBudget: s
+            ? {usedThisMonthUsd: usd(s.monthMicros), monthlyCapUsd: usd(budget.monthlyMicros), callsThisMonth: s.monthCalls, monthlyCalls: budget.monthlyCalls, callsToday: s.dayCalls, dailyCalls: budget.dailyCalls, halted: s.halted}
+            : {monthlyCapUsd: usd(budget.monthlyMicros), monthlyCalls: budget.monthlyCalls, dailyCalls: budget.dailyCalls, usage: 'not shown to scoped callers'},
         };
       }
       case 'capabilities':
@@ -179,7 +193,8 @@ export class AtlasMcp {
           notAvailable: ['create_task', 'assign_client', 'request_draft', 'approve', 'send_back', 'hand_off', 'deliver'],
           safety: ['Card read-outs are masked before indexing, returning or model use.', 'Scoped callers see only hosted-granted clients.', 'Every call is audited without transcript text.', 'ask_call quotes are verified as exact transcript substrings.'],
           limits: {toolCallsPerMinute: config.rateLimits.toolCallsPerMinute, askCallsPerHour: config.rateLimits.askCallsPerHour, askCallMonthlyUsd: usd(budget.monthlyMicros), askCallMonthlyCalls: budget.monthlyCalls, askCallDailyCalls: budget.dailyCalls},
-          indexedCalls: index.count(),
+          // Global corpus size is owner-only metadata.
+          ...(ctx.p.scope === 'owner' ? {indexedCalls: index.count()} : {}),
         };
       case 'list_tasks': {
         const queue = await this.deps.hosted.list(ctx.p.hostedActor);
@@ -224,17 +239,17 @@ export class AtlasMcp {
         return {taskId: t.taskId, ...status, draft: {version: art.body.version, contentSha256: art.body.hash, content}, citations: facts};
       }
       case 'search_calls': {
-        const {queue, allowed} = await this.allowedCalls(ctx);
+        const {full, allowed} = await this.allowedCalls(ctx);
         const limit = Number(args.limit ?? 8);
         const clientOf = new Map<string, string>();
-        for (const m of queue.meetings) for (const it of m.items ?? []) if (it.task?.client) clientOf.set(m.id, String(it.task.client));
+        for (const m of full) for (const it of m.items ?? []) if (it.task?.client) clientOf.set(m.id, maskText(String(it.task.client), ctx.counter));
         const clientCallIds = args.client ? new Set([...clientOf].filter(([, c]) => c.toLowerCase().includes(String(args.client).toLowerCase())).map(([id]) => id)) : undefined;
         const hits: (CallHit & {client: string | null; source: string})[] = index.search({
           query: String(args.query), from: args.from as string | undefined, to: args.to as string | undefined, limit, client: args.client as string | undefined, clientCallIds, allowed,
         }).map(h => ({...h, client: clientOf.get(h.callId) ?? null, source: 'brain'}));
         // Hosted catalog calls this caller may see that are not (yet) in the brain: title match only.
         const terms = queryTerms(String(args.query));
-        for (const m of queue.meetings) {
+        for (const m of full) {
           if (hits.length >= limit || hits.some(h => h.callId === m.id) || index.fileFor(m.id)) continue;
           const date = (m.instant ?? '').slice(0, 10);
           if ((args.from && date < String(args.from)) || (args.to && date > String(args.to))) continue;
@@ -248,10 +263,11 @@ export class AtlasMcp {
       }
       case 'ask_call': {
         if (!this.deps.limiter.take(`ask:${ctx.principal}`, config.rateLimits.askCallsPerHour, 3_600_000)) throw new ToolRefusal('rate_limited', 'ask_call hourly limit reached for this caller.');
-        const {queue, allowed} = await this.allowedCalls(ctx);
+        const {full, allowed} = await this.allowedCalls(ctx);
         const id = String(args.call_id);
+        // Same refusal for unknown, ungranted and task-only ids, before any hosted read or dispatch.
         if (allowed !== 'all' && !allowed.has(id)) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
-        const source = await this.callSource(ctx, queue, id);
+        const source = await this.callSource(ctx, full, id);
         if (!source) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
         ctx.ids.push(id);
         const r = await runAsk({cfg: config.askCall, budget, ledger, principal: ctx.principal, meta: source.meta, turns: source.turns, question: String(args.question), key: this.deps.askKey, transport: this.deps.askTransport, counter: ctx.counter});
@@ -266,11 +282,16 @@ export class AtlasMcp {
     }
   }
 
-  private async callSource(ctx: Ctx, queue: Queue, id: string): Promise<{kind: 'hosted' | 'brain'; meta: {title: string; date: string | null}; turns: Turn[]} | null> {
-    const hostedMeeting: HostedMeeting | undefined = queue.meetings.find(m => m.id === id);
+  private async callSource(ctx: Ctx, full: HostedMeeting[], id: string): Promise<{kind: 'hosted' | 'brain'; meta: {title: string; date: string | null}; turns: Turn[]} | null> {
+    const hostedMeeting: HostedMeeting | undefined = full.find(m => m.id === id);
     if (hostedMeeting) {
       // Hosted transcript (has timestamps), read with this caller's own hosted credential.
-      const c = await this.deps.hosted.context(ctx.p.hostedActor, id);
+      // A hosted refusal is final: same "not found", and no fallback to the brain copy.
+      let c;
+      try { c = await this.deps.hosted.context(ctx.p.hostedActor, id); } catch (e) {
+        if (e instanceof HostedRefusal) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
+        throw e;
+      }
       const passages = Array.isArray(c?.source?.passages) ? c.source.passages : [];
       const texts = maskTurns(passages.map(p => String(p.text ?? '')), ctx.counter);
       const speakers = maskTurns(passages.map(p => String(p.speaker ?? '')), ctx.counter);
@@ -290,8 +311,9 @@ export class AtlasMcp {
     const r = await this.deps.hosted.documentRead(ctx.p.hostedActor, taskId);
     if (r.status === 401 || r.status === 403) return {available: false, reason: 'Draft access is not provisioned for this caller yet (the hosted service refused the read).'};
     if (r.status !== 200 || !r.body) return {available: false, reason: 'Draft status could not be read.'};
-    if (r.body.available !== true) return {available: false, reason: typeof r.body.reason === 'string' ? r.body.reason : 'No draft is set up for this task.'};
-    return {available: true, status: String(r.body.status ?? ''), currentVersion: Number.isInteger(r.body.currentVersion) ? r.body.currentVersion as number : undefined,
+    if (r.body.available !== true) return {available: false, reason: typeof r.body.reason === 'string' ? maskText(r.body.reason.slice(0, 2000), ctx.counter).slice(0, 300) : 'No draft is set up for this task.'};
+    const status = typeof r.body.status === 'string' && /^[a-z_]{1,40}$/.test(r.body.status) ? r.body.status : 'unknown';
+    return {available: true, status, currentVersion: Number.isInteger(r.body.currentVersion) ? r.body.currentVersion as number : undefined,
       title: maskText(String(r.body.title ?? ''), ctx.counter), owner: r.body.owner as string, reviewer: r.body.reviewer as string};
   }
 }

@@ -13,7 +13,9 @@ export type Capability = {actor: string; triage: boolean; review: boolean; rhysA
 export type Evidence = {quote?: string; speaker?: string; start?: number; end?: number; title?: string; kind?: string; provenance?: string};
 export type HostedTask = Record<string, unknown> & {id?: string; client?: string; owner?: string; executor?: string | null; next_reviewer?: string | null; work_status?: string; title?: string; due?: string | null};
 export type HostedItem = {id: string; title: string; due: string | null; owner: string | null; state: string; deferred?: boolean; evidence?: Evidence; task: HostedTask | null};
-export type HostedMeeting = {id: string; title: string; instant: string; state: string; items: HostedItem[]};
+// taskOnly: the hosted queue returns limited reviewed task context for meetings the actor
+// may NOT read in full (021 meeting_task_grants). Such a row never grants transcript access.
+export type HostedMeeting = {id: string; title: string; instant: string; state: string; items: HostedItem[]; taskOnly?: boolean; clientLabel?: string};
 export type Queue = {capability: Capability; meetings: HostedMeeting[]};
 export type Passage = {speaker: string; text: string; start: number; end: number};
 export type Context = {source: {id: string; title: string; instant: string; summary?: string; passages: Passage[]}};

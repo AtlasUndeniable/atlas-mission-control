@@ -37,16 +37,34 @@ export function queryTerms(query: string): string[] {
 const ftsQuery = (terms: string[]) => terms.map(t => `"${t.replace(/"/g, '')}"`).join(' OR ');
 const stem = (t: string) => t.slice(0, Math.max(4, Math.min(t.length, 5)));
 
+/** Bump whenever masking or parsing of indexed fields changes (G2: attendees masked, strict URLs). */
+export const INDEX_POLICY = 'atlas-mcp-index-v2-g2-mask';
+
 export class CallIndex {
   readonly db: DatabaseSync;
   readonly dir: string;
+  rebuilt = false;
   constructor(dbFile: string, brainCallsDir: string) {
     const parent = dbFile.slice(0, dbFile.lastIndexOf('/'));
     if (parent && !existsSync(parent)) mkdirSync(parent, {recursive: true, mode: 0o700});
     this.db = new DatabaseSync(dbFile);
     try { chmodSync(dbFile, 0o600); } catch { /* memory or test path */ }
+    // Deleted or replaced records are overwritten on disk, not left in free pages.
+    this.db.exec('pragma secure_delete = on');
     this.db.exec(SCHEMA);
     this.dir = brainCallsDir;
+    // A masking/parsing policy change invalidates every cached record: unchanged files would
+    // otherwise keep the old policy's output. Wipe and let refresh() rebuild everything.
+    this.db.exec('create table if not exists meta(key text primary key, value text not null)');
+    const policy = this.db.prepare("select value from meta where key = 'policy'").get();
+    if (policy?.value !== INDEX_POLICY) {
+      this.db.exec('begin');
+      this.db.exec('delete from fts; delete from files;');
+      this.db.prepare("insert into meta(key, value) values ('policy', ?) on conflict(key) do update set value = excluded.value").run(INDEX_POLICY);
+      this.db.exec('commit');
+      this.db.exec('vacuum');
+      this.rebuilt = true;
+    }
   }
 
   /** Incremental refresh. Returns counts only; the mask span total never includes text. */

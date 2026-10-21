@@ -9,7 +9,7 @@
 import {anthropicDispatch, anthropicKey} from '../../src/lib/meetings/anthropic-extractor.ts';
 import {intakeJSON} from '../../src/lib/meetings/intake-http.ts';
 import type {AskCallConfig, Budget} from './config.ts';
-import {costBound, usageMicros, type BudgetLedger} from './ledger.ts';
+import {costBound, normalizeOutcome, usageMicros, validUsage, type BudgetLedger} from './ledger.ts';
 import type {Turn} from './notes.ts';
 import {maskText, type MaskCounter} from './mask.ts';
 
@@ -81,7 +81,8 @@ export async function runAsk(opts: {
   const started = Date.now();
   const {cfg, budget, ledger} = opts;
   if (!opts.turns.length) return {ok: false, reason: 'This call has no transcript to answer from.', costMicros: 0, boundMicros: 0, dispatched: false, latencyMs: 0};
-  const prompt = askPrompt(opts.meta, opts.turns, opts.question);
+  // The caller's question is masked too: card digits typed into a question never reach the model.
+  const prompt = askPrompt(opts.meta, opts.turns, maskText(opts.question, opts.counter));
   if (prompt.length > cfg.maxPromptCharacters) return {ok: false, reason: 'This call is too long for ask_call in Phase A.', costMicros: 0, boundMicros: 0, dispatched: false, latencyMs: 0};
   const body = askBody(cfg, prompt);
   const bound = costBound(body, cfg.maxOutputTokens, budget);
@@ -96,16 +97,17 @@ export async function runAsk(opts: {
     raw = await intakeJSON(response, 1_000_000) as typeof raw;
   } catch {
     // Outcome unknown: the reservation stays at its full bound. No retry.
-    ledger.settle(reservation.id, null, 'unresolved');
+    ledger.settle(reservation.id, null, 'unresolved', bound.micros);
     return {ok: false, reason: 'The model call did not complete; no retry was attempted.', costMicros: bound.micros, boundMicros: bound.micros, dispatched: true, latencyMs: Date.now() - started};
   }
-  const u = raw.usage;
-  const usage = Number.isInteger(u?.input_tokens) && Number.isInteger(u?.output_tokens) ? {input_tokens: u!.input_tokens as number, output_tokens: u!.output_tokens as number} : null;
+  // Usage must be well formed (nonnegative safe integers, output within max_tokens) or the
+  // full reservation is kept. A cost above the bound is recorded as-is and halts dispatch.
+  const usage = validUsage(raw.usage, cfg.maxOutputTokens);
   const actual = usage ? usageMicros(usage, budget) : null;
-  ledger.settle(reservation.id, actual, raw.stop_reason ?? 'unknown');
+  ledger.settle(reservation.id, actual, actual === null ? 'invalid_usage' : normalizeOutcome(raw.stop_reason), bound.micros);
   const cost = actual ?? bound.micros;
   const latencyMs = Date.now() - started;
-  if (raw.stop_reason !== 'end_turn' || !usage) return {ok: false, reason: 'The model response was incomplete.', costMicros: cost, boundMicros: bound.micros, dispatched: true, latencyMs};
+  if (raw.stop_reason !== 'end_turn' || actual === null) return {ok: false, reason: 'The model response was incomplete.', costMicros: cost, boundMicros: bound.micros, dispatched: true, latencyMs};
   let parsed: {supported?: unknown; answer?: unknown; quotes?: unknown};
   try {
     const text = (Array.isArray(raw.content) ? raw.content : []).filter((b: {type?: string}) => b?.type === 'text').map((b: {text?: string}) => b.text ?? '').join('');
@@ -114,5 +116,7 @@ export async function runAsk(opts: {
   if (parsed.supported !== true) return {ok: false, reason: 'Not supported by this call: the transcript does not answer the question.', costMicros: cost, boundMicros: bound.micros, dispatched: true, latencyMs};
   const {verified, rejected} = verifyQuotes(opts.turns, parsed.quotes);
   if (!verified.length) return {ok: false, reason: 'Refused: no supporting quote could be verified against the transcript.', costMicros: cost, boundMicros: bound.micros, dispatched: true, latencyMs};
-  return {ok: true, answer: maskText(typeof parsed.answer === 'string' ? parsed.answer.slice(0, 2000) : '', opts.counter), quotes: verified, rejectedQuotes: rejected, costMicros: cost, boundMicros: bound.micros, usage, latencyMs};
+  // Mask the WHOLE answer first, then clip: clipping first could cut a number below the mask's thresholds.
+  const answer = typeof parsed.answer === 'string' ? maskText(parsed.answer, opts.counter).slice(0, 2000) : '';
+  return {ok: true, answer, quotes: verified, rejectedQuotes: rejected, costMicros: cost, boundMicros: bound.micros, usage: usage!, latencyMs};
 }

@@ -149,3 +149,26 @@ Tests: `node --test atlas-mcp/test/*.test.ts`. These cover:
 - **Client field.** For brain notes, `client` comes from a hosted task on the same call. Otherwise the client filter matches the call title and attendee emails (prefix match). The 2,800 historical notes are not client-mapped. This is why scoped callers see only hosted-granted calls.
 - **Hosted-only calls.** search_calls matches calls in the hosted catalog but not yet in the brain on their title only.
 - **Index size.** The index is a local derivative of atlas-brain: about 230 MB, 0600, masked.
+
+## Behaviour added after review R14 (Lane G2)
+
+- **Task-only rows give task fields only.** The hosted queue can return a `taskOnly: true` meeting: reviewed task context for a call the actor may not read in full. Such a row never unlocks full-call access. That covers brain search results, summaries, snippets, `ask_call`, hosted transcript reads and model input. Its tasks still appear in `list_tasks` and `get_task`, with `source.access = "task_only"`. Unknown, ungranted and task-only call ids all get the same `not_found`, before any hosted read or model call. A hosted transcript refusal is final; there is no fallback to the brain copy.
+- **More fields are masked.** Masking now also covers:
+  - note attendees;
+  - the caller's question, before it reaches the model;
+  - the whole model answer, masked before it is clipped to 2,000 characters;
+  - task client labels;
+  - hosted draft reasons.
+
+  `transcript_url` is accepted only in the exact `https://app.fireflies.ai/view/<id>` shape.
+- **The index rebuilds when the masking policy changes.** The index records its masking policy (`INDEX_POLICY`). When the policy changes, opening the index wipes it and runs `VACUUM`, and the next refresh rebuilds every record. `secure_delete` is on.
+- **The audit log is schema-bound.** `tool` is either a known tool name or `unknown_tool`; a rejected name is stored only as a SHA-256 hash. The ledger outcome is limited to a fixed set: `end_turn`, `max_tokens`, `refusal`, `unresolved`, `invalid_usage`, `other`.
+- **Revoking a token ends a stdio session.** The token is re-checked against the current registry before every stdio message. A revoked token gets error `-32001` and the session ends. An `ask_call` already sent to the model can only be interrupted by stopping the process.
+- **Token files are hardened.** The token files and the registry must not be symlinks. Each must be a regular file owned by this user with no group or other permissions, in a directory owned by this user that is not group- or world-writable. They are opened with `O_NOFOLLOW`.
+- **The budget fails closed.**
+  - Provider usage must be nonnegative safe integers, with output no larger than `max_tokens`. Otherwise the full reservation is kept and the outcome is recorded as `invalid_usage`.
+  - Usage above the byte-floor bound is recorded as reported, and it halts every further dispatch until a person reconciles the ledger.
+  - A malformed ledger row (negative amount, duplicate settle, unknown kind, bad JSON) marks the ledger invalid, and every new reservation is refused.
+- **Scoped callers see less metadata.** For `nat` and `grok_as_nat`, `capabilities` omits the global indexed-call count and `whoami` omits shared ask_call usage; they see the caps only.
+- **`ask_call` is not idempotent.** Its `idempotentHint` is now `false`, because a repeated call spends again.
+- **HTTP tests skip when binding is denied.** If the environment denies binding to loopback (`EPERM`/`EACCES`), the three HTTP tests are skipped instead of failing.

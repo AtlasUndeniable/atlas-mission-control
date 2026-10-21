@@ -13,9 +13,16 @@ import {TOOL_DEFS} from '../src/tools.ts';
 import {newToken} from '../src/auth.ts';
 import {readRegistry, writeRegistry} from '../src/auth.ts';
 
-async function withServer(fn: (url: string, s: ReturnType<typeof setup>) => Promise<void>) {
+type T = {skip: (msg?: string) => void};
+/** Binds 127.0.0.1. In a sandbox that denies binding (EPERM/EACCES) the test is SKIPPED, not failed. */
+async function withServer(t: T, fn: (url: string, s: ReturnType<typeof setup>) => Promise<void>) {
   const s = setup();
-  const srv = await listen(s);
+  let srv;
+  try { srv = await listen(s); } catch (e) {
+    const code = (e as {code?: string}).code;
+    if (code === "EPERM" || code === "EACCES") { t.skip(`loopback bind denied in this environment (${code})`); return; }
+    throw e;
+  }
   const addr = srv.address();
   assert.ok(addr && typeof addr === 'object');
   assert.equal(addr.address, '127.0.0.1', 'must bind loopback only');
@@ -24,8 +31,8 @@ async function withServer(fn: (url: string, s: ReturnType<typeof setup>) => Prom
 const rpc = (method: string, params: object = {}, id: number | null = 1) => JSON.stringify({jsonrpc: '2.0', ...(id === null ? {} : {id}), method, params});
 const post = (url: string, body: string, headers: Record<string, string> = {}) => fetch(url, {method: 'POST', headers: {'content-type': 'application/json', ...headers}, body});
 
-test('HTTP: missing, malformed, unknown and revoked tokens are rejected with 401', async () => {
-  await withServer(async (url, s) => {
+test('HTTP: missing, malformed, unknown and revoked tokens are rejected with 401', async t => {
+  await withServer(t, async (url, s) => {
     for (const auth of [undefined, 'Bearer nope', `Bearer ${newToken()}`, `Basic ${s.tokens.rhys}`]) {
       const r = await post(url, rpc('tools/list'), auth ? {authorization: auth} : {});
       assert.equal(r.status, 401, String(auth).slice(0, 12));
@@ -37,8 +44,8 @@ test('HTTP: missing, malformed, unknown and revoked tokens are rejected with 401
   });
 });
 
-test('HTTP: Host and Origin must be loopback (DNS-rebinding guard); only POST /mcp', async () => {
-  await withServer(async (url, s) => {
+test('HTTP: Host and Origin must be loopback (DNS-rebinding guard); only POST /mcp', async t => {
+  await withServer(t, async (url, s) => {
     const auth = {authorization: `Bearer ${s.tokens.rhys}`};
     assert.equal((await post(url, rpc('tools/list'), {...auth, origin: 'https://evil.example'})).status, 403);
     assert.equal((await fetch(url, {headers: auth})).status, 405);
@@ -53,8 +60,8 @@ test('HTTP: Host and Origin must be loopback (DNS-rebinding guard); only POST /m
   });
 });
 
-test('HTTP: MCP handshake, tools/list (read-only tools only) and a tool call', async () => {
-  await withServer(async (url, s) => {
+test('HTTP: MCP handshake, tools/list (read-only tools only) and a tool call', async t => {
+  await withServer(t, async (url, s) => {
     const auth = {authorization: `Bearer ${s.tokens.grok_as_nat}`};
     const init = await (await post(url, rpc('initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 't', version: '1'}}), auth)).json();
     assert.equal(init.result.protocolVersion, '2025-06-18');

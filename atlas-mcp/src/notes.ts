@@ -52,8 +52,10 @@ export function parseNote(file: string, raw: string, counter?: MaskCounter): Par
     const line = /^\*\*(?:Participants|Attendees):\*\*\s*(.+)$/m.exec(rest);
     if (line) attendees = line[1].split(',').map(s => s.trim()).filter(Boolean);
   }
-  attendees = attendees.map(a => a.toLowerCase()).slice(0, 40);
-  const url = typeof fm.transcript_url === 'string' && /^https:\/\/app\.fireflies\.ai\//.test(fm.transcript_url) ? fm.transcript_url : null;
+  // Attendees are free text from the note: masked like every other note-derived field.
+  attendees = attendees.slice(0, 40).map(a => maskText(a.replace(/\s+/g, ' ').trim().toLowerCase(), counter).slice(0, 200));
+  // URLs are not masked; they are validated to the exact Fireflies view shape instead.
+  const url = typeof fm.transcript_url === 'string' && /^https:\/\/app\.fireflies\.ai\/view\/[A-Za-z0-9_-]{6,64}$/.test(fm.transcript_url) ? fm.transcript_url : null;
   const link = url ?? (fid && FIREFLIES_ID.test(fid) ? `https://app.fireflies.ai/view/${fid}` : null);
 
   // Transcript section: from "## Transcript" to the next rule, H2 or tag block.
