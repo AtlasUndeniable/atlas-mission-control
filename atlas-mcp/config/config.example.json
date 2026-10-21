@@ -1,0 +1,24 @@
+{
+  "host": "127.0.0.1",
+  "port": 4019,
+  "brainCallsDir": "/Users/atlasai/atlas-brain/content/calls",
+  "stateDir": "/Users/atlasai/.local/state/atlas-mcp",
+  "tokensFile": "/Users/atlasai/.config/atlas/atlas-mcp/tokens.json",
+  "hostedTransportEnvFile": "/Users/atlasai/atlas-mission-control/.env.local",
+  "principals": {
+    "rhys": {"hostedActor": "rhys", "scope": "owner", "label": "Rhys", "tools": ["whoami", "capabilities", "list_tasks", "get_task", "get_draft", "search_calls", "ask_call"]},
+    "nat": {"hostedActor": "nat", "scope": "granted", "label": "Natalie", "tools": ["whoami", "capabilities", "list_tasks", "get_task", "get_draft", "search_calls", "ask_call"]},
+    "grok_as_nat": {"hostedActor": "nat", "scope": "granted", "label": "Grok acting for Natalie", "tools": ["whoami", "capabilities", "list_tasks", "get_task", "get_draft", "search_calls", "ask_call"]}
+  },
+  "rateLimits": {"toolCallsPerMinute": 30, "askCallsPerHour": 10},
+  "askCall": {
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "maxOutputTokens": 3000,
+    "maxPromptCharacters": 300000,
+    "timeoutMs": 60000,
+    "keyFile": "/Users/atlasai/.config/atlas/credentials/anthropic-intake.key",
+    "budgetFile": "/Users/atlasai/.config/atlas/atlas-mcp/ask-call-budget.json",
+    "decisionReference": "sprint-20261007 DECISIONS item 14(b)"
+  }
+}

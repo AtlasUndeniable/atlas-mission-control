@@ -1,0 +1,8 @@
+{
+  "monthlyMicros": 20000000,
+  "monthlyCalls": 200,
+  "dailyCalls": 30,
+  "inputMicrosPerToken": 2,
+  "outputMicrosPerToken": 10,
+  "decisionReference": "Proposed Lane G Phase A cap (US$20/month, 200 calls/month, 30/day UTC) under sprint-20261007 DECISIONS item 14(b); inside the item 6 workspace limit"
+}
