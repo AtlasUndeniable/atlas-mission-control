@@ -6,8 +6,9 @@
  * so a caller limited to some calls never receives a title, summary or quote from another.
  */
 import {DatabaseSync} from 'node:sqlite';
-import {readdirSync, readFileSync, statSync, mkdirSync, chmodSync, existsSync} from 'node:fs';
-import {join} from 'node:path';
+import {readdirSync, readFileSync, statSync, mkdirSync, chmodSync, existsSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync} from 'node:fs';
+import {randomBytes} from 'node:crypto';
+import {basename, dirname, join} from 'node:path';
 import {parseNote, type ParsedNote} from './notes.ts';
 import type {MaskCounter} from './mask.ts';
 
@@ -29,6 +30,8 @@ create table if not exists files(id integer primary key, file text unique not nu
 create index if not exists files_call on files(call_id);
 create virtual table if not exists fts using fts5(title, attendees, analysis, body, tokenize='porter unicode61');
 `;
+const META = `create table if not exists meta(key text primary key, value text not null);
+`;
 
 export function queryTerms(query: string): string[] {
   const terms = (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(t => t.length > 1).slice(0, 12);
@@ -37,34 +40,73 @@ export function queryTerms(query: string): string[] {
 const ftsQuery = (terms: string[]) => terms.map(t => `"${t.replace(/"/g, '')}"`).join(' OR ');
 const stem = (t: string) => t.slice(0, Math.max(4, Math.min(t.length, 5)));
 
-/** Bump whenever masking or parsing of indexed fields changes (G2: attendees masked, strict URLs). */
+/** Bump whenever masking or parsing of indexed fields changes (G2: attendees masked, strict URLs). A change replaces the index file. */
 export const INDEX_POLICY = 'atlas-mcp-index-v2-g2-mask';
+
+const SIDECARS = ['-wal', '-shm', '-journal'];
+const fsyncPath = (p: string) => { const fd = openSync(p, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } };
+const removeIfPresent = (p: string) => { try { unlinkSync(p); } catch (e) { if ((e as {code?: string}).code !== 'ENOENT') throw e; } };
+
+/** The policy recorded in an existing index file, read through a read-only handle; null if absent or unreadable. */
+function recordedPolicy(dbFile: string): string | null {
+  if (!existsSync(dbFile)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbFile, {readOnly: true});
+    const row = db.prepare("select value from meta where key = 'policy'").get();
+    return typeof row?.value === 'string' ? row.value : null;
+  } catch { return null; } finally { try { db?.close(); } catch { /* ignore */ } }
+}
+
+/**
+ * Replace the index with a brand-new empty database (never reusing the old file's pages or
+ * FTS segments): build it in a fresh owner-only temp file in the same directory, stamp the
+ * policy, fsync it, remove the old sidecars, atomically rename it over the old path, fsync
+ * the directory. Any crash leaves either the old file (re-detected next open, temp removed)
+ * or the new empty, policy-stamped file (refresh() fills it).
+ */
+function replaceWithFresh(dbFile: string, parent: string) {
+  const tmp = `${dbFile}.rebuild-${process.pid}-${randomBytes(6).toString('hex')}`;
+  closeSync(openSync(tmp, 'wx', 0o600));
+  const fresh = new DatabaseSync(tmp);
+  try {
+    fresh.exec('pragma journal_mode = delete');
+    fresh.exec('pragma secure_delete = on');
+    fresh.exec(SCHEMA);
+    fresh.exec(META);
+    fresh.prepare("insert into meta(key, value) values ('policy', ?)").run(INDEX_POLICY);
+  } finally { fresh.close(); }
+  for (const s of SIDECARS) removeIfPresent(tmp + s);
+  fsyncPath(tmp);
+  for (const s of SIDECARS) removeIfPresent(dbFile + s);
+  renameSync(tmp, dbFile);
+  fsyncPath(parent);
+}
 
 export class CallIndex {
   readonly db: DatabaseSync;
   readonly dir: string;
   rebuilt = false;
   constructor(dbFile: string, brainCallsDir: string) {
-    const parent = dbFile.slice(0, dbFile.lastIndexOf('/'));
-    if (parent && !existsSync(parent)) mkdirSync(parent, {recursive: true, mode: 0o700});
+    const parent = dirname(dbFile);
+    if (!existsSync(parent)) mkdirSync(parent, {recursive: true, mode: 0o700});
+    // Leftovers of an interrupted upgrade may hold old-policy data: remove them first.
+    const base = basename(dbFile);
+    for (const n of readdirSync(parent)) if (n.startsWith(`${base}.rebuild-`)) removeIfPresent(join(parent, n));
+    // A masking/parsing policy change (or a predecessor file with no policy marker) means the
+    // file may hold old-policy text. DELETE + VACUUM does not reliably purge FTS segments
+    // (R14b), so the file is replaced, never reused.
+    if (existsSync(dbFile) && recordedPolicy(dbFile) !== INDEX_POLICY) { replaceWithFresh(dbFile, parent); this.rebuilt = true; }
+    if (!existsSync(dbFile)) replaceWithFresh(dbFile, parent);
     this.db = new DatabaseSync(dbFile);
-    try { chmodSync(dbFile, 0o600); } catch { /* memory or test path */ }
-    // Deleted or replaced records are overwritten on disk, not left in free pages.
+    chmodSync(dbFile, 0o600);
+    // Normal operation: rollback journal deleted after each commit (no lingering -wal/-shm),
+    // and deleted content overwritten in freed pages.
+    this.db.exec('pragma journal_mode = delete');
     this.db.exec('pragma secure_delete = on');
     this.db.exec(SCHEMA);
+    this.db.exec(META);
     this.dir = brainCallsDir;
-    // A masking/parsing policy change invalidates every cached record: unchanged files would
-    // otherwise keep the old policy's output. Wipe and let refresh() rebuild everything.
-    this.db.exec('create table if not exists meta(key text primary key, value text not null)');
-    const policy = this.db.prepare("select value from meta where key = 'policy'").get();
-    if (policy?.value !== INDEX_POLICY) {
-      this.db.exec('begin');
-      this.db.exec('delete from fts; delete from files;');
-      this.db.prepare("insert into meta(key, value) values ('policy', ?) on conflict(key) do update set value = excluded.value").run(INDEX_POLICY);
-      this.db.exec('commit');
-      this.db.exec('vacuum');
-      this.rebuilt = true;
-    }
   }
 
   /** Incremental refresh. Returns counts only; the mask span total never includes text. */

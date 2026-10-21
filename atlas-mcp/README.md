@@ -161,7 +161,14 @@ Tests: `node --test atlas-mcp/test/*.test.ts`. These cover:
   - hosted draft reasons.
 
   `transcript_url` is accepted only in the exact `https://app.fireflies.ai/view/<id>` shape.
-- **The index rebuilds when the masking policy changes.** The index records its masking policy (`INDEX_POLICY`). When the policy changes, opening the index wipes it and runs `VACUUM`, and the next refresh rebuilds every record. `secure_delete` is on.
+- **The index file is replaced when the masking policy changes (G3, after R14b).** The index records its masking policy (`INDEX_POLICY`). A missing marker, a different marker or an unreadable file means the file may hold old-policy text. In-place DELETE plus VACUUM does not reliably purge FTS segments, so the old file is never reused. Instead:
+  1. A brand-new empty database is built in a fresh owner-only temp file in the same directory.
+  2. The temp file is fsynced.
+  3. The old `-wal`, `-shm` and `-journal` files are removed.
+  4. The temp file is atomically renamed over the old path, and the directory is fsynced.
+  5. The next refresh fills the new file.
+
+  Leftover `.rebuild-*` temp files from an interrupted upgrade are removed at open. In normal operation the index uses `journal_mode = delete` and `secure_delete = on`. This sanitizes the active cache only; it does not erase APFS snapshots or backups.
 - **The audit log is schema-bound.** `tool` is either a known tool name or `unknown_tool`; a rejected name is stored only as a SHA-256 hash. The ledger outcome is limited to a fixed set: `end_turn`, `max_tokens`, `refusal`, `unresolved`, `invalid_usage`, `other`.
 - **Revoking a token ends a stdio session.** The token is re-checked against the current registry before every stdio message. A revoked token gets error `-32001` and the session ends. An `ask_call` already sent to the model can only be interrupted by stopping the process.
 - **Token files are hardened.** The token files and the registry must not be symlinks. Each must be a regular file owned by this user with no group or other permissions, in a directory owned by this user that is not group- or world-writable. They are opened with `O_NOFOLLOW`.
