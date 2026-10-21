@@ -168,6 +168,8 @@ Tests: `node --test atlas-mcp/test/*.test.ts`. These cover:
   4. The temp file is atomically renamed over the old path, and the directory is fsynced.
   5. The next refresh fills the new file.
 
+  The file also carries a separate purge-generation marker (`PURGE_GENERATION`, G4), which is written only into a freshly created file. Any file without exactly that generation is replaced, never reused. That covers a missing marker, a G2 in-place purge stamp and a G3 file.
+
   Leftover `.rebuild-*` temp files from an interrupted upgrade are removed at open. In normal operation the index uses `journal_mode = delete` and `secure_delete = on`. This sanitizes the active cache only; it does not erase APFS snapshots or backups.
 - **The audit log is schema-bound.** `tool` is either a known tool name or `unknown_tool`; a rejected name is stored only as a SHA-256 hash. The ledger outcome is limited to a fixed set: `end_turn`, `max_tokens`, `refusal`, `unresolved`, `invalid_usage`, `other`.
 - **Revoking a token ends a stdio session.** The token is re-checked against the current registry before every stdio message. A revoked token gets error `-32001` and the session ends. An `ask_call` already sent to the model can only be interrupted by stopping the process.

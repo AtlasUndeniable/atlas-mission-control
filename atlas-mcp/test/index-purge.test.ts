@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, readdirSync, writeFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import {setup, TEST_PAN_DIGITS} from './fixtures.ts';
-import {CallIndex, INDEX_POLICY} from '../src/call-index.ts';
+import {CallIndex, INDEX_POLICY, PURGE_GENERATION} from '../src/call-index.ts';
 
 const STALE = 'r14buniquestaleunmaskedterm';
 
@@ -79,3 +79,47 @@ test('an unreadable or non-SQLite index file is replaced, not trusted', () => {
   idx.db.close();
   assert.deepEqual(rawHits(s.config.stateDir), []);
 });
+
+/**
+ * R14c: a cache already stamped by G2's defective in-place purge (correct masking policy,
+ * no purge generation) must be replaced, not reused, and so must a G3-era file (policy
+ * marker only). Exact G2 purge recipe; raw-byte scan of every index-prefixed file.
+ */
+for (const shape of ['g2-stamped-after-defective-purge', 'g3-policy-only-marker'] as const) {
+  test(`R14c predecessor (${shape}): replaced once, no stale bytes, then reused`, () => {
+    const s = setup();
+    const dir = s.config.stateDir;
+    const file = join(dir, 'calls-index.sqlite');
+    s.index.db.prepare('update files set attendees = ?').run(JSON.stringify([STALE, TEST_PAN_DIGITS]));
+    s.index.db.prepare('update fts set attendees = ?').run(`${STALE} ${TEST_PAN_DIGITS}`);
+    if (shape === 'g2-stamped-after-defective-purge') {
+      // G2's exact logical purge and policy stamp (rows gone, FTS bytes retained).
+      s.index.db.exec('begin; delete from fts; delete from files;');
+      s.index.db.exec("delete from meta where key = 'purge_generation'");
+      s.index.db.prepare("insert into meta(key, value) values ('policy', ?) on conflict(key) do update set value = excluded.value").run('atlas-mcp-index-v2-g2-mask');
+      s.index.db.exec('commit; vacuum');
+    } else {
+      s.index.db.exec("delete from meta where key = 'purge_generation'");
+    }
+    s.index.db.close();
+    assert.ok(rawHits(dir).length > 0, 'precondition: stale bytes are in the predecessor file');
+    const inode = statSync(file).ino;
+
+    const upgraded = new CallIndex(file, s.brain);
+    assert.equal(upgraded.rebuilt, true);
+    assert.notEqual(statSync(file).ino, inode, 'a new file replaced the predecessor');
+    assert.deepEqual(rawHits(dir), []);
+    assert.equal(upgraded.refresh().changed, 3);
+    assert.equal(upgraded.search({query: STALE, limit: 5, allowed: 'all'}).length, 0);
+    upgraded.db.close();
+
+    const reopened = new CallIndex(file, s.brain);
+    assert.equal(reopened.rebuilt, false, 'a current-generation file is reused normally');
+    assert.equal(reopened.count(), 3);
+    assert.equal(String(reopened.db.prepare("select value from meta where key = 'purge_generation'").get()?.value), PURGE_GENERATION);
+    assert.equal(String(reopened.db.prepare("select value from meta where key = 'policy'").get()?.value), INDEX_POLICY);
+    reopened.db.close();
+    assert.deepEqual(rawHits(dir), []);
+    assert.deepEqual(indexFiles(dir).map(f => f.split('/').pop()), ['calls-index.sqlite']);
+  });
+}

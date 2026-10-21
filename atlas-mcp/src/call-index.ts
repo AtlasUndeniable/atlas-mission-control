@@ -42,20 +42,27 @@ const stem = (t: string) => t.slice(0, Math.max(4, Math.min(t.length, 5)));
 
 /** Bump whenever masking or parsing of indexed fields changes (G2: attendees masked, strict URLs). A change replaces the index file. */
 export const INDEX_POLICY = 'atlas-mcp-index-v2-g2-mask';
+/**
+ * Purge generation, separate from the masking policy. It is written ONLY into a file created by
+ * replaceWithFresh(). A file without exactly this generation (no marker, G2 in-place purge stamp,
+ * G3 file) may hold bytes from an older purge method and is replaced, never reused (R14c).
+ */
+export const PURGE_GENERATION = 'atlas-mcp-purge-g4-fresh-file';
 
 const SIDECARS = ['-wal', '-shm', '-journal'];
 const fsyncPath = (p: string) => { const fd = openSync(p, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } };
 const removeIfPresent = (p: string) => { try { unlinkSync(p); } catch (e) { if ((e as {code?: string}).code !== 'ENOENT') throw e; } };
 
-/** The policy recorded in an existing index file, read through a read-only handle; null if absent or unreadable. */
-function recordedPolicy(dbFile: string): string | null {
-  if (!existsSync(dbFile)) return null;
+/** Markers recorded in an existing index file, via a read-only handle; nulls if absent or unreadable. */
+function recordedMarkers(dbFile: string): {policy: string | null; generation: string | null} {
+  const none = {policy: null, generation: null};
+  if (!existsSync(dbFile)) return none;
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(dbFile, {readOnly: true});
-    const row = db.prepare("select value from meta where key = 'policy'").get();
-    return typeof row?.value === 'string' ? row.value : null;
-  } catch { return null; } finally { try { db?.close(); } catch { /* ignore */ } }
+    const get = (k: string) => { const r = db!.prepare('select value from meta where key = ?').get(k); return typeof r?.value === 'string' ? r.value : null; };
+    return {policy: get('policy'), generation: get('purge_generation')};
+  } catch { return none; } finally { try { db?.close(); } catch { /* ignore */ } }
 }
 
 /**
@@ -74,7 +81,7 @@ function replaceWithFresh(dbFile: string, parent: string) {
     fresh.exec('pragma secure_delete = on');
     fresh.exec(SCHEMA);
     fresh.exec(META);
-    fresh.prepare("insert into meta(key, value) values ('policy', ?)").run(INDEX_POLICY);
+    fresh.prepare("insert into meta(key, value) values ('policy', ?), ('purge_generation', ?)").run(INDEX_POLICY, PURGE_GENERATION);
   } finally { fresh.close(); }
   for (const s of SIDECARS) removeIfPresent(tmp + s);
   fsyncPath(tmp);
@@ -96,7 +103,10 @@ export class CallIndex {
     // A masking/parsing policy change (or a predecessor file with no policy marker) means the
     // file may hold old-policy text. DELETE + VACUUM does not reliably purge FTS segments
     // (R14b), so the file is replaced, never reused.
-    if (existsSync(dbFile) && recordedPolicy(dbFile) !== INDEX_POLICY) { replaceWithFresh(dbFile, parent); this.rebuilt = true; }
+    if (existsSync(dbFile)) {
+      const m = recordedMarkers(dbFile);
+      if (m.policy !== INDEX_POLICY || m.generation !== PURGE_GENERATION) { replaceWithFresh(dbFile, parent); this.rebuilt = true; }
+    }
     if (!existsSync(dbFile)) replaceWithFresh(dbFile, parent);
     this.db = new DatabaseSync(dbFile);
     chmodSync(dbFile, 0o600);
