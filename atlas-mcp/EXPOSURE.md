@@ -36,3 +36,13 @@ Phase A is bound to `127.0.0.1` on Rhys's Mac Studio. Grok runs in xAI's cloud, 
 3. Does Grok have fixed egress IPs that could be allowlisted?
 4. Does Grok call tools only when Natalie asks, or can it run them on a schedule? This affects budget and rate limits.
 5. Where does Grok store the token, and who at Natalie's end can see it?
+
+## Lane X (2026-10-22): option A prepared, not enabled
+
+DECISIONS item 19(c) gave GO to build option A for `grok_as_nat` only. It is built and tested locally on branch `atlas-mcp-exposure-20261022`; nothing is exposed. See [EXPOSURE-RUNBOOK.md](EXPOSURE-RUNBOOK.md) for the human steps, the acceptance test, the kill switch, rollback and the Funnel trade-offs. Summary of what now exists:
+
+- `exposure-http`: a separate origin listener (own config, own token registry with exposable principals only, own audit), still bound to 127.0.0.1, behind a strict Host check for the tunnel hostname, no Origin, POST `/mcp` only, size/time limits, optional Cloudflare Access JWT and service-token header checks, expiring bearer tokens, per-principal and unauthenticated rate limits and concurrency.
+- A hard exposed-tool ceiling in code: `whoami`, `capabilities`, `list_tasks`, `get_task`.
+- The sensitivity policy (`config/sensitivity.json`, DECISIONS 19(b)) applies to nat and grok_as_nat on every transport, with posture `task_fields_only` (no quotes, search, drafts or ask_call without a per-client full-call grant; none exist).
+- Kill switch (`exposure-kill`, `deploy/kill-switch.sh`), `rotate`, `revoke-principal`, and a launchd plist that is prepared but not loaded.
+- Grok's MCP transport and header support remain **unverified**; the runbook lists the unknowns.

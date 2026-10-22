@@ -181,3 +181,16 @@ Tests: `node --test atlas-mcp/test/*.test.ts`. These cover:
 - **Scoped callers see less metadata.** For `nat` and `grok_as_nat`, `capabilities` omits the global indexed-call count and `whoami` omits shared ask_call usage; they see the caps only.
 - **`ask_call` is not idempotent.** Its `idempotentHint` is now `false`, because a repeated call spends again.
 - **HTTP tests skip when binding is denied.** If the environment denies binding to loopback (`EPERM`/`EACCES`), the three HTTP tests are skipped instead of failing.
+
+## Lane X: sensitivity policy and exposure origin (2026-10-22)
+
+**Sensitivity policy ("never share with Nat/Grok", DECISIONS 19(a)(b)).** `src/sensitivity.ts`, reviewed proposal in `config/sensitivity.json` (installed owner-only as `sensitivity.json` next to the token registry, or `sensitivityFile` in config).
+- Applies to every principal with scope `granted` (nat, grok_as_nat) on every tool and transport. Rhys (owner) is never affected.
+- Topics (financials, pricing, payroll/team pay, staff/HR, internal strategy, Undeniable financials, bank/card), built-in patterns (money amounts, long digit runs, percentages), classifications (`client_financial`, `internal`, `restricted`), and Rhys's excluded client labels, task/request ids, call ids and brain path fragments.
+- A matching task, call, query, question, draft or answer is answered exactly like something that does not exist (same refusal or the ordinary empty list). Withheld items are not counted. Every scoped success carries one constant `sharingPolicy` note. The audit row records `reason: withheld` with no text.
+- Posture `task_fields_only`: scoped callers get task fields only. Call quotes, `search_calls`, `get_draft` and `ask_call` need a per-client full-call grant recorded in the policy with its decision reference; there are none. Even with a grant, a call carrying any withheld task stays closed to transcript tools.
+- Fail closed: if the policy is missing, not owner-only or invalid, scoped callers get `not_available` from every tool. `policy-check` validates it (counts only).
+
+**Exposure origin.** `src/exposure.ts`, `src/cf-access.ts`, commands `exposure-http`, `exposure-kill`, `exposure-resume`, `exposure-status`, `rotate`, `revoke-principal`; `mint-token --expires-days`. See [EXPOSURE-RUNBOOK.md](EXPOSURE-RUNBOOK.md). Prepared only; not enabled.
+
+Tests: `test/sensitivity.test.ts` (17) and `test/exposure.test.ts` (13), in addition to the Phase A suites. The Phase A fixtures use a permissive synthetic policy with a synthetic full-call grant for client `acme`, so the original scope tests keep exercising what they were written for.

@@ -1,0 +1,26 @@
+{
+  "version": "laneX-20261022-proposed-1",
+  "decisionReference": "sprint-20261007 DECISIONS item 19(a)(b): never share with Nat/Grok",
+  "reviewState": "PROPOSED by Lane X (Claude Opus 5.5); needs independent review (Lane R16) and Rhys's confirmation before exposure",
+  "topics": [
+    {"id": "financials", "terms": ["revenue*", "profit*", "margin*", "turnover", "ebitda", "p&l", "profit and loss", "cash flow", "cashflow", "balance sheet", "net income", "gross income", "earnings", "financial*", "finance*", "financing", "invoice*", "invoicing", "accounts receivable", "accounts payable", "receivable*", "payable*", "bookkeep*", "accountant*", "accounting", "tax", "taxes", "gst", "bas", "xero", "quickbooks", "myob", "refund*", "chargeback*", "payout*", "mrr", "arr", "ltv", "cac", "roi", "forecast*", "budget*", "spend", "expenses", "overheads", "debt", "loan*", "overdue"]},
+    {"id": "pricing", "terms": ["pric*", "fee", "fees", "cost", "costs", "costing", "discount*", "payment plan*", "deposit*", "rate card", "retainer*", "quote", "quoted", "quotes for", "upfront", "per month", "per week", "per year", "per annum", "per session", "per hour", "instal*", "how much", "dollars", "dollar", "bucks", "grand", "aud", "usd", "nzd", "gbp", "eur"]},
+    {"id": "payroll_team_pay", "terms": ["payroll", "salar*", "wage*", "pay rate*", "pay rise*", "pay raise*", "payrise", "pay cut*", "pay slip*", "payslip*", "team pay", "staff pay", "bonus*", "commission*", "superannuation", "super contribution*", "hourly rate*", "day rate*", "contractor rate*", "remuneration", "compensation", "equity grant*", "stock option*", "invoice from contractor*"]},
+    {"id": "staff_hr", "terms": ["hr", "human resources", "hiring", "hire", "fire", "fired", "firing", "terminat*", "dismissal", "let go", "letting go", "redundan*", "resign*", "performance review*", "performance issue*", "performance plan", "pip", "underperform*", "disciplinar*", "warning letter", "grievance*", "complaint about", "sick leave", "annual leave", "parental leave", "maternity", "paternity", "employment contract*", "contractor agreement*", "recruit*", "interview candidate*", "candidate*", "background check*", "workers comp*", "staff issue*", "team issue*", "probation"]},
+    {"id": "internal_strategy", "terms": ["internal strategy", "company strategy", "business strategy", "our strategy", "strategic plan*", "board meeting*", "shareholder*", "equity", "valuation*", "acquisition*", "acquire", "merger*", "investor*", "fundrais*", "exit strategy", "partnership terms", "joint venture", "confidential", "internal only", "do not share", "dont share", "not for sharing", "nda", "non disclosure", "legal advice", "lawyer*", "solicitor*", "lawsuit*", "dispute*"]},
+    {"id": "undeniable_financials", "terms": ["undeniable revenue", "undeniable profit*", "undeniable financial*", "undeniable mentoring revenue", "company revenue", "business revenue", "our revenue", "our numbers", "the numbers", "monthly numbers", "sales numbers", "sales figures", "cash in bank", "runway", "burn rate", "bank balance", "net worth"]},
+    {"id": "bank_card", "terms": ["bank*", "bsb", "iban", "swift", "sort code", "routing number*", "account number*", "account no", "credit card*", "debit card*", "card number*", "card detail*", "card ending", "cvv", "cvc", "security code", "expiry", "expiration date", "pin number", "visa card", "mastercard", "amex", "american express", "paypal", "stripe", "direct debit", "wire transfer", "bank transfer", "password*", "passcode*", "login detail*", "credential*", "api key*", "redacted card", "redacted expiry", "redacted cvc"]}
+  ],
+  "patterns": ["money_amount", "long_digit_run", "percentage_figure"],
+  "classifications": ["client_financial", "internal", "restricted"],
+  "excluded": {
+    "clientLabels": [],
+    "taskIds": [],
+    "callIds": [],
+    "brainPathFragments": ["finance", "financial", "payroll", "invoice", "accounts", "bank", "salary", "salaries", "hr/", "staff", "team-pay", "internal"]
+  },
+  "principals": {
+    "nat": {"posture": "task_fields_only", "fullCallClients": []},
+    "grok_as_nat": {"posture": "task_fields_only", "fullCallClients": []}
+  }
+}

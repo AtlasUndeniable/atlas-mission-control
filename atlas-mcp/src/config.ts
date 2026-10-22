@@ -5,7 +5,7 @@
  * relative path, an unknown tool, an unknown scope, or a model other than the reviewed one.
  */
 import {readFileSync} from 'node:fs';
-import {isAbsolute} from 'node:path';
+import {dirname, isAbsolute, join} from 'node:path';
 
 export const TOOL_NAMES = ['whoami', 'capabilities', 'list_tasks', 'get_task', 'get_draft', 'search_calls', 'ask_call'] as const;
 export type ToolName = typeof TOOL_NAMES[number];
@@ -20,6 +20,31 @@ export type McpConfig = {
   hostedTransportEnvFile: string; principals: Record<string, PrincipalConfig>;
   rateLimits: {toolCallsPerMinute: number; askCallsPerHour: number};
   askCall: AskCallConfig;
+  /** The reviewed "never share with Nat/Grok" policy. Default: sensitivity.json next to tokensFile. */
+  sensitivityFile: string;
+  /** Present only in the exposure server's own config file (Lane X). */
+  exposure: ExposureConfig | null;
+};
+
+/**
+ * Lane X exposure (tunnel origin) settings. Hard ceiling: an exposed principal can never get
+ * more than these four task-level tools, whatever its config says. Widening needs a code
+ * change and an independent review.
+ */
+export const EXPOSED_TOOL_CEILING = ['whoami', 'capabilities', 'list_tasks', 'get_task'] as const;
+export type ExposedTool = typeof EXPOSED_TOOL_CEILING[number];
+export type ExposureConfig = {
+  port: number;
+  publicHostname: string;
+  allowedOrigins: string[];
+  principals: Record<string, {tools: ExposedTool[]}>;
+  killSwitchFile: string;
+  maxBodyBytes: number; maxResponseBytes: number; requestTimeoutMs: number;
+  limits: {perMinute: number; perHour: number; perDay: number; maxConcurrent: number; unauthenticatedPerMinute: number};
+  tokenMaxAgeDays: number;
+  cfAccess: {mode: 'off'} | {mode: 'jwt'; teamDomain: string; aud: string; serviceTokenClientIdSha256: string | null};
+  serviceTokenHeaders: {clientIdSha256: string; clientSecretSha256: string} | null;
+  decisionReference: string;
 };
 export type Budget = {
   monthlyMicros: number; monthlyCalls: number; dailyCalls: number;
@@ -37,8 +62,68 @@ const exactKeys = (o: unknown, keys: string[], what: string) => {
   return o as Record<string, unknown>;
 };
 
+const hex64 = (v: unknown, what: string) => (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : fail(what));
+
+export function parseExposure(raw: unknown, principals: Record<string, PrincipalConfig>, mainPort: number): ExposureConfig {
+  const e = exactKeys(raw, ['port', 'publicHostname', 'allowedOrigins', 'principals', 'killSwitchFile', 'maxBodyBytes', 'maxResponseBytes', 'requestTimeoutMs', 'limits', 'tokenMaxAgeDays', 'cfAccess', 'serviceTokenHeaders', 'decisionReference'], 'exposure');
+  const port = int(e.port, 1024, 65535, 'exposure.port');
+  if (port === mainPort) fail('exposure.port_must_differ_from_local_port');
+  const host = e.publicHostname;
+  // A real DNS name with at least one dot; no IP literal, no localhost, no port, no wildcard.
+  if (typeof host !== 'string' || host.length > 253 || !/^(?=.*[a-z])([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host) || /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.endsWith('localhost')) fail('exposure.publicHostname');
+  if (!Array.isArray(e.allowedOrigins) || e.allowedOrigins.length > 10 || e.allowedOrigins.some(o => typeof o !== 'string' || !/^https:\/\/[a-z0-9.-]+(?::\d+)?$/.test(o))) fail('exposure.allowedOrigins');
+  const ep = e.principals;
+  if (!ep || typeof ep !== 'object' || Array.isArray(ep) || !Object.keys(ep).length) fail('exposure.principals');
+  const outP: Record<string, {tools: ExposedTool[]}> = {};
+  for (const [name, v] of Object.entries(ep as object)) {
+    const pc = principals[name];
+    // Only scoped (granted) principals can ever be exposed; the owner never is.
+    if (!pc || pc.scope !== 'granted') fail(`exposure.principal:${name}:must_be_granted_scope`);
+    const o = exactKeys(v, ['tools'], `exposure.principal:${name}`);
+    if (!Array.isArray(o.tools) || !o.tools.length || o.tools.some(t => !(EXPOSED_TOOL_CEILING as readonly string[]).includes(t) || !pc.tools.includes(t as ToolName))) fail(`exposure.principal:${name}:tools`);
+    outP[name] = {tools: [...new Set(o.tools as ExposedTool[])]};
+  }
+  // The exposure config file may hold ONLY exposable principals: a separate token registry
+  // that cannot contain an owner token.
+  for (const [name, pc] of Object.entries(principals)) if (pc.scope !== 'granted' || !outP[name]) fail(`exposure.config_principal_not_exposable:${name}`);
+  const l = exactKeys(e.limits, ['perMinute', 'perHour', 'perDay', 'maxConcurrent', 'unauthenticatedPerMinute'], 'exposure.limits');
+  const cf = e.cfAccess as Record<string, unknown> | null;
+  let cfAccess: ExposureConfig['cfAccess'];
+  if (cf && typeof cf === 'object' && cf.mode === 'off') { exactKeys(cf, ['mode'], 'exposure.cfAccess'); cfAccess = {mode: 'off'}; }
+  else {
+    const c = exactKeys(cf, ['mode', 'teamDomain', 'aud', 'serviceTokenClientIdSha256'], 'exposure.cfAccess');
+    if (c.mode !== 'jwt') fail('exposure.cfAccess.mode');
+    if (typeof c.teamDomain !== 'string' || !/^[a-z0-9-]{1,63}\.cloudflareaccess\.com$/.test(c.teamDomain)) fail('exposure.cfAccess.teamDomain');
+    if (typeof c.aud !== 'string' || !/^[0-9a-f]{64}$/.test(c.aud)) fail('exposure.cfAccess.aud');
+    cfAccess = {mode: 'jwt', teamDomain: c.teamDomain as string, aud: c.aud as string, serviceTokenClientIdSha256: c.serviceTokenClientIdSha256 === null ? null : hex64(c.serviceTokenClientIdSha256, 'exposure.cfAccess.serviceTokenClientIdSha256')};
+  }
+  let sth: ExposureConfig['serviceTokenHeaders'] = null;
+  if (e.serviceTokenHeaders !== null) {
+    const s = exactKeys(e.serviceTokenHeaders, ['clientIdSha256', 'clientSecretSha256'], 'exposure.serviceTokenHeaders');
+    sth = {clientIdSha256: hex64(s.clientIdSha256, 'exposure.serviceTokenHeaders.clientIdSha256'), clientSecretSha256: hex64(s.clientSecretSha256, 'exposure.serviceTokenHeaders.clientSecretSha256')};
+  }
+  if (typeof e.decisionReference !== 'string' || e.decisionReference.trim().length < 8) fail('exposure.decisionReference');
+  return {
+    port, publicHostname: host as string, allowedOrigins: e.allowedOrigins as string[], principals: outP,
+    killSwitchFile: absolute(e.killSwitchFile, 'exposure.killSwitchFile'),
+    maxBodyBytes: int(e.maxBodyBytes, 512, 65536, 'exposure.maxBodyBytes'),
+    maxResponseBytes: int(e.maxResponseBytes, 1024, 1_048_576, 'exposure.maxResponseBytes'),
+    requestTimeoutMs: int(e.requestTimeoutMs, 1000, 60000, 'exposure.requestTimeoutMs'),
+    limits: {
+      perMinute: int(l.perMinute, 1, 120, 'exposure.limits.perMinute'), perHour: int(l.perHour, 1, 2000, 'exposure.limits.perHour'),
+      perDay: int(l.perDay, 1, 10000, 'exposure.limits.perDay'), maxConcurrent: int(l.maxConcurrent, 1, 8, 'exposure.limits.maxConcurrent'),
+      unauthenticatedPerMinute: int(l.unauthenticatedPerMinute, 1, 600, 'exposure.limits.unauthenticatedPerMinute'),
+    },
+    tokenMaxAgeDays: int(e.tokenMaxAgeDays, 1, 90, 'exposure.tokenMaxAgeDays'),
+    cfAccess, serviceTokenHeaders: sth, decisionReference: e.decisionReference as string,
+  };
+}
+
 export function parseConfig(raw: unknown): McpConfig {
-  const c = exactKeys(raw, ['host', 'port', 'brainCallsDir', 'stateDir', 'tokensFile', 'hostedTransportEnvFile', 'principals', 'rateLimits', 'askCall'], 'root');
+  // sensitivityFile and exposure are optional, so the installed Phase A config stays valid.
+  const keys = ['host', 'port', 'brainCallsDir', 'stateDir', 'tokensFile', 'hostedTransportEnvFile', 'principals', 'rateLimits', 'askCall'];
+  const optional = ['sensitivityFile', 'exposure'].filter(k => raw && typeof raw === 'object' && k in (raw as object));
+  const c = exactKeys(raw, [...keys, ...optional], 'root');
   // Phase A rule: never exposed beyond loopback. There is no option to change this.
   if (c.host !== '127.0.0.1') fail('host_must_be_127.0.0.1');
   const principals: Record<string, PrincipalConfig> = {};
@@ -58,12 +143,16 @@ export function parseConfig(raw: unknown): McpConfig {
   if (a.model !== 'claude-sonnet-5-5') fail('askCall.model');
   if (a.effort !== 'low') fail('askCall.effort');
   if (typeof a.decisionReference !== 'string' || !a.decisionReference.trim()) fail('askCall.decisionReference');
+  const port = int(c.port, 1024, 65535, 'port');
+  const tokensFile = absolute(c.tokensFile, 'tokensFile');
   return {
     host: '127.0.0.1',
-    port: int(c.port, 1024, 65535, 'port'),
+    port,
     brainCallsDir: absolute(c.brainCallsDir, 'brainCallsDir'),
     stateDir: absolute(c.stateDir, 'stateDir'),
-    tokensFile: absolute(c.tokensFile, 'tokensFile'),
+    tokensFile,
+    sensitivityFile: 'sensitivityFile' in c ? absolute(c.sensitivityFile, 'sensitivityFile') : join(dirname(tokensFile), 'sensitivity.json'),
+    exposure: 'exposure' in c && c.exposure !== null ? parseExposure(c.exposure, principals, port) : null,
     hostedTransportEnvFile: absolute(c.hostedTransportEnvFile, 'hostedTransportEnvFile'),
     principals,
     rateLimits: {toolCallsPerMinute: int(r.toolCallsPerMinute, 1, 600, 'toolCallsPerMinute'), askCallsPerHour: int(r.askCallsPerHour, 0, 100, 'askCallsPerHour')},

@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 /**
  * Atlas MCP Phase A command line.
- *   node atlas-mcp/bin/atlas-mcp.ts http        [--config FILE]   serve streamable HTTP on 127.0.0.1
+ *   node atlas-mcp/bin/atlas-mcp.ts http        [--config FILE]   serve streamable HTTP on 127.0.0.1 (local)
  *   node atlas-mcp/bin/atlas-mcp.ts stdio       [--config FILE] --token-file FILE
  *   node atlas-mcp/bin/atlas-mcp.ts index       [--config FILE]   refresh the call index (counts only)
- *   node atlas-mcp/bin/atlas-mcp.ts mint-token  [--config FILE] --principal NAME --out FILE [--label TEXT]
+ *   node atlas-mcp/bin/atlas-mcp.ts mint-token  [--config FILE] --principal NAME --out FILE [--label TEXT] [--expires-days N]
  *   node atlas-mcp/bin/atlas-mcp.ts revoke      [--config FILE] --sha256-prefix HEX
+ *   node atlas-mcp/bin/atlas-mcp.ts policy-check [--config FILE]  validate the sensitivity policy (counts only)
+ * Lane X exposure (its OWN config file; prepared, not enabled):
+ *   node atlas-mcp/bin/atlas-mcp.ts exposure-http    --config FILE   tunnel origin on 127.0.0.1:<exposure.port>
+ *   node atlas-mcp/bin/atlas-mcp.ts exposure-kill    --config FILE [--revoke-tokens]   refuse ALL external requests now
+ *   node atlas-mcp/bin/atlas-mcp.ts exposure-resume  --config FILE --confirm
+ *   node atlas-mcp/bin/atlas-mcp.ts exposure-status  --config FILE
+ *   node atlas-mcp/bin/atlas-mcp.ts rotate           --config FILE --principal NAME --out FILE --expires-days N
+ *   node atlas-mcp/bin/atlas-mcp.ts revoke-principal --config FILE --principal NAME
  * Nothing here prints a token, credential or transcript text.
  */
 import {existsSync, writeFileSync} from 'node:fs';
@@ -14,13 +22,23 @@ import {join} from 'node:path';
 import {loadConfig} from '../src/config.ts';
 import {assemble, listen, readTokenFile, runStdio} from '../src/server.ts';
 import {CallIndex} from '../src/call-index.ts';
-import {digest, newToken, readRegistry, writeRegistry} from '../src/auth.ts';
+import {mintEntry, readRegistry, revokePrincipal, writeRegistry} from '../src/auth.ts';
+import {loadSensitivity} from '../src/sensitivity.ts';
+import {engageKill, killed, listenExposure, releaseKill, requireExposure} from '../src/exposure.ts';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const opt = (name: string) => { const i = argv.indexOf(`--${name}`); return i > 0 ? argv[i + 1] : undefined; };
+const flag = (name: string) => argv.includes(`--${name}`);
 const configFile = opt('config') ?? process.env.ATLAS_MCP_CONFIG ?? join(homedir(), '.config/atlas/atlas-mcp/config.json');
 const log = (o: object) => process.stderr.write(JSON.stringify({at: new Date().toISOString(), ...o}) + '\n');
+const days = (v: string | undefined, required: boolean) => {
+  if (v === undefined) { if (required) throw Error('--expires-days required'); return undefined; }
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 365) throw Error('--expires-days must be 1..365');
+  return n;
+};
+const newOut = (out: string | undefined) => { if (!out || !out.startsWith('/') || existsSync(out)) throw Error('--out must be a new absolute path'); return out; };
 
 async function main() {
   process.umask(0o077); // every file this process creates is owner-only
@@ -33,15 +51,31 @@ async function main() {
     return;
   }
   if (cmd === 'mint-token') {
-    const principal = opt('principal'), out = opt('out');
+    const principal = opt('principal'), out = newOut(opt('out'));
     if (!principal || !config.principals[principal]) throw Error('unknown principal');
-    if (!out || !out.startsWith('/') || existsSync(out)) throw Error('--out must be a new absolute path');
-    const token = newToken();
+    const expiresDays = days(opt('expires-days'), !!config.exposure);
+    if (config.exposure && expiresDays! > config.exposure.tokenMaxAgeDays) throw Error('--expires-days exceeds exposure.tokenMaxAgeDays');
+    const {token, entry} = mintEntry(principal, opt('label') ?? principal, expiresDays);
     writeFileSync(out, token + '\n', {mode: 0o600, flag: 'wx'});
     const reg = readRegistry(config.tokensFile);
-    reg.tokens.push({principal, sha256: digest(token), created: new Date().toISOString(), label: (opt('label') ?? principal).slice(0, 80)});
+    reg.tokens.push(entry);
     writeRegistry(config.tokensFile, reg);
-    console.log(JSON.stringify({principal, tokenFile: out, sha256Prefix: digest(token).slice(0, 12)}));
+    console.log(JSON.stringify({principal, tokenFile: out, sha256Prefix: entry.sha256.slice(0, 12), expires: entry.expires ?? null}));
+    return;
+  }
+  if (cmd === 'rotate') {
+    // New token first, then every other active token of the principal is revoked in the same write.
+    const principal = opt('principal'), out = newOut(opt('out'));
+    if (!principal || !config.principals[principal]) throw Error('unknown principal');
+    const expiresDays = days(opt('expires-days'), true)!;
+    if (config.exposure && expiresDays > config.exposure.tokenMaxAgeDays) throw Error('--expires-days exceeds exposure.tokenMaxAgeDays');
+    const {token, entry} = mintEntry(principal, opt('label') ?? `${principal} (rotated)`, expiresDays);
+    writeFileSync(out, token + '\n', {mode: 0o600, flag: 'wx'});
+    const reg = readRegistry(config.tokensFile);
+    reg.tokens.push(entry);
+    const revoked = revokePrincipal(reg, principal, entry.sha256);
+    writeRegistry(config.tokensFile, reg);
+    console.log(JSON.stringify({principal, tokenFile: out, sha256Prefix: entry.sha256.slice(0, 12), expires: entry.expires, revokedPrevious: revoked}));
     return;
   }
   if (cmd === 'revoke') {
@@ -53,6 +87,63 @@ async function main() {
     hits[0].revoked = true;
     writeRegistry(config.tokensFile, reg);
     console.log(JSON.stringify({revoked: prefix, principal: hits[0].principal}));
+    return;
+  }
+  if (cmd === 'revoke-principal') {
+    const principal = opt('principal');
+    if (!principal || !config.principals[principal]) throw Error('unknown principal');
+    const reg = readRegistry(config.tokensFile);
+    const n = revokePrincipal(reg, principal);
+    writeRegistry(config.tokensFile, reg);
+    console.log(JSON.stringify({principal, revoked: n}));
+    return;
+  }
+  if (cmd === 'policy-check') {
+    const p = loadSensitivity(config.sensitivityFile).spec;
+    console.log(JSON.stringify({version: p.version, topics: p.topics.length, terms: p.topics.reduce((n, t) => n + t.terms.length, 0), patterns: p.patterns.length,
+      classifications: p.classifications, excluded: Object.fromEntries(Object.entries(p.excluded).map(([k, v]) => [k, v.length])),
+      principals: Object.fromEntries(Object.entries(p.principals).map(([k, v]) => [k, {posture: v.posture, fullCallClients: v.fullCallClients.length}]))}));
+    return;
+  }
+  if (cmd === 'exposure-kill') {
+    const e = requireExposure(config);
+    engageKill(e, 'exposure-kill');
+    let revoked = 0;
+    if (flag('revoke-tokens')) {
+      const reg = readRegistry(config.tokensFile);
+      for (const p of Object.keys(e.principals)) revoked += revokePrincipal(reg, p);
+      writeRegistry(config.tokensFile, reg);
+    }
+    console.log(JSON.stringify({killed: true, revokedTokens: revoked}));
+    return;
+  }
+  if (cmd === 'exposure-resume') {
+    const e = requireExposure(config);
+    if (!flag('confirm')) throw Error('--confirm required');
+    releaseKill(e);
+    console.log(JSON.stringify({killed: killed(e)}));
+    return;
+  }
+  if (cmd === 'exposure-status') {
+    const e = requireExposure(config);
+    const reg = readRegistry(config.tokensFile);
+    const now = Date.now();
+    const active = reg.tokens.filter(t => !t.revoked && (t.expires === undefined || Date.parse(t.expires) > now));
+    let policy: string;
+    try { policy = loadSensitivity(config.sensitivityFile).spec.version; } catch { policy = 'INVALID (scoped callers refused)'; }
+    console.log(JSON.stringify({killed: killed(e), publicHostname: e.publicHostname, port: e.port, cfAccess: e.cfAccess.mode, serviceTokenHeaders: !!e.serviceTokenHeaders, policy,
+      principals: Object.fromEntries(Object.entries(e.principals).map(([k, v]) => [k, {tools: v.tools, activeTokens: active.filter(t => t.principal === k).map(t => ({sha256Prefix: t.sha256.slice(0, 12), expires: t.expires ?? null}))}]))}));
+    return;
+  }
+  if (cmd === 'exposure-http') {
+    requireExposure(config);
+    loadSensitivity(config.sensitivityFile); // refuse to start without a valid reviewed policy
+    // The exposed tools never touch the call index or brain: no refresh at start.
+    const a = assemble({config, refreshIndex: false});
+    const srv = await listenExposure(a);
+    log({event: 'exposure_listening', host: '127.0.0.1', port: config.exposure!.port, killed: killed(config.exposure!)});
+    const stop = () => { srv.close(); log({event: 'exposure_stopped'}); process.exit(0); };
+    process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;
   }
   if (cmd === 'http') {
@@ -70,7 +161,7 @@ async function main() {
     await runStdio(a, readTokenFile(file));
     return;
   }
-  throw Error('usage: atlas-mcp.ts http|stdio|index|mint-token|revoke');
+  throw Error('usage: atlas-mcp.ts http|stdio|index|mint-token|revoke|policy-check|exposure-http|exposure-kill|exposure-resume|exposure-status|rotate|revoke-principal');
 }
 
 main().catch(e => { log({event: 'fatal', error: e instanceof Error ? e.message.slice(0, 200) : 'error'}); process.exit(1); });

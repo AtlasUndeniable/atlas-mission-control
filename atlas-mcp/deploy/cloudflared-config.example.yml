@@ -1,0 +1,26 @@
+# Lane X: PREPARED, NOT INSTALLED. cloudflared config for a NAMED tunnel (never a quick tunnel).
+# Place at ~/.cloudflared/config.yml only during EXPOSURE-RUNBOOK.md step 4, after review.
+# TUNNEL_ID, HOSTNAME, TEAM and AUD come from the human Cloudflare setup; none are secrets
+# except the credentials file, which cloudflared writes owner-only and which is never printed.
+tunnel: TUNNEL_ID
+credentials-file: /Users/atlasai/.cloudflared/TUNNEL_ID.json
+# No metrics listener beyond loopback; no request-body logging exists in cloudflared.
+metrics: 127.0.0.1:0
+loglevel: info
+ingress:
+  - hostname: HOSTNAME
+    path: ^/mcp$
+    service: http://127.0.0.1:4020
+    originRequest:
+      # Keep the public Host header: the origin accepts ONLY this hostname (strict Host check).
+      # Do not set httpHostHeader. Do not disable TLS verification anywhere.
+      connectTimeout: 10s
+      noHappyEyeballs: true
+      # cloudflared itself refuses requests without a valid Access JWT for this application.
+      access:
+        required: true
+        teamName: TEAM
+        audTag:
+          - AUD
+  # Everything else, including other paths on the same hostname, is refused at the edge.
+  - service: http_status:404

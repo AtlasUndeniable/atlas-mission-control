@@ -13,7 +13,7 @@
 import {readFileSync} from 'node:fs';
 import type {Budget, McpConfig, PrincipalConfig, ToolName} from './config.ts';
 import {TOOL_NAMES} from './config.ts';
-import type {Capability, Hosted, HostedMeeting, HostedTask, Queue} from './hosted.ts';
+import type {Capability, Hosted, HostedItem, HostedMeeting, HostedTask, Queue} from './hosted.ts';
 import {HostedRefusal} from './hosted.ts';
 import type {CallIndex, CallHit} from './call-index.ts';
 import {queryTerms} from './call-index.ts';
@@ -22,6 +22,8 @@ import type {RateLimiter} from './auth.ts';
 import {maskJson, maskText, maskTurns, type MaskCounter} from './mask.ts';
 import {parseNote, type Turn} from './notes.ts';
 import {runAsk} from './ask-call.ts';
+import type {SensitivityPolicy} from './sensitivity.ts';
+import {relative} from 'node:path';
 
 export const SERVER_INFO = {name: 'atlas-mcp', title: 'Atlas (Rhys AI) — Phase A, read-only', version: '0.1.0'};
 
@@ -29,6 +31,23 @@ export class ToolRefusal extends Error {
   code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }
 }
+/**
+ * Sensitivity-policy withholding. The caller sees EXACTLY the same refusal as for an id that
+ * does not exist (same code and message); only the local audit row records 'withheld'.
+ */
+export class Withheld extends ToolRefusal {
+  /** For list/search tools: the ordinary empty result, identical to "nothing matched". */
+  empty?: Record<string, unknown>;
+  constructor(message: string, empty?: Record<string, unknown>) { super('not_found', message); this.empty = empty; }
+}
+const EMPTY: Partial<Record<ToolName, Record<string, unknown>>> = {
+  list_tasks: {count: 0, totalMatching: 0, tasks: []},
+  search_calls: {count: 0, calls: []},
+};
+const NOT_FOUND_TASK = 'No task with that id is visible to this caller.';
+const NOT_FOUND_CALL = 'No call with that id is visible to this caller.';
+/** A constant note on every scoped response; it never varies with what was withheld. */
+export const SHARING_NOTE = 'Rhys\'s sharing policy applies to this caller: some items are not available and are not listed.';
 
 type Prop = {type: 'string' | 'integer'; description: string; maxLength?: number; minimum?: number; maximum?: number; pattern?: string; enum?: string[]};
 type ToolDef = {name: ToolName; title: string; description: string; inputSchema: {type: 'object'; properties: Record<string, Prop>; required: string[]; additionalProperties: false}; annotations: {readOnlyHint: true; destructiveHint: false; idempotentHint: boolean; openWorldHint: boolean}};
@@ -90,8 +109,12 @@ function validate(def: ToolDef, args: unknown): Record<string, string | number> 
 export type Deps = {
   config: McpConfig; budget: Budget; hosted: Hosted; index: CallIndex; audit: AuditLog; ledger: BudgetLedger; limiter: RateLimiter;
   askKey?: (signal: AbortSignal) => Promise<string>; askTransport?: typeof fetch;
+  /** The reviewed sensitivity policy; null when it could not be loaded (scoped callers then get nothing). */
+  sensitivity: SensitivityPolicy | null;
 };
-type Ctx = {principal: string; p: PrincipalConfig; cap: Capability; counter: MaskCounter; ids: string[]; costMicros: number};
+/** policy: the sensitivity policy for scoped callers; null for the owner (never affected). */
+type Ctx = {principal: string; p: PrincipalConfig; cap: Capability; counter: MaskCounter; ids: string[]; costMicros: number; policy: SensitivityPolicy | null; tools: ToolName[]};
+export type CallOpts = {toolCeiling?: readonly ToolName[]};
 
 const firefliesLink = (id: string) => (/^[A-Za-z0-9_-]{6,64}$/.test(id) ? `https://app.fireflies.ai/view/${id}` : null);
 const usd = (micros: number) => Math.round(micros) / 1e6;
@@ -120,12 +143,19 @@ export class AtlasMcp {
   deps: Deps;
   constructor(deps: Deps) { this.deps = deps; }
 
-  toolsFor(principal: string) {
+  /** The tools this principal may use, narrowed by an optional transport ceiling (exposure). */
+  effectiveTools(principal: string, ceiling?: readonly ToolName[]): ToolName[] {
     const p = this.deps.config.principals[principal];
-    return p ? TOOL_DEFS.filter(d => p.tools.includes(d.name)) : [];
+    if (!p) return [];
+    return p.tools.filter(t => !ceiling || ceiling.includes(t));
   }
 
-  async callTool(principal: string, name: string, rawArgs: unknown, transport: 'http' | 'stdio' | 'test') {
+  toolsFor(principal: string, ceiling?: readonly ToolName[]) {
+    const allowed = this.effectiveTools(principal, ceiling);
+    return TOOL_DEFS.filter(d => allowed.includes(d.name));
+  }
+
+  async callTool(principal: string, name: string, rawArgs: unknown, transport: 'http' | 'stdio' | 'test' | 'exposure', opts: CallOpts = {}) {
     const started = Date.now();
     const ctxBase = {principal, counter: {spans: 0}, ids: [] as string[], costMicros: 0};
     let ctx: Ctx | undefined;
@@ -136,16 +166,35 @@ export class AtlasMcp {
       if (!p) throw new ToolRefusal('unauthorized', 'Unknown principal.');
       const d = TOOL_DEFS.find(t => t.name === name);
       if (!d || !(TOOL_NAMES as readonly string[]).includes(name)) throw new ToolRefusal('unknown_tool', 'Unknown tool. Phase A tools are read-only.');
-      if (!p.tools.includes(d.name)) throw new ToolRefusal('forbidden', 'This tool is not enabled for this caller.');
+      // Per-principal allowlist, enforced here in tools/call (not only in discovery).
+      const tools = this.effectiveTools(principal, opts.toolCeiling);
+      if (!tools.includes(d.name)) throw new ToolRefusal('forbidden', 'This tool is not enabled for this caller.');
+      // Scoped callers are ALWAYS subject to the sensitivity policy; without a valid policy
+      // (or a posture for this principal) they get nothing. The owner is never affected.
+      let policy: SensitivityPolicy | null = null;
+      if (p.scope !== 'owner') {
+        policy = this.deps.sensitivity;
+        if (!policy || !policy.posture(principal)) throw new ToolRefusal('not_available', 'Not available to this caller.');
+      }
       if (!this.deps.limiter.take(`tool:${principal}`, this.deps.config.rateLimits.toolCallsPerMinute, 60_000)) throw new ToolRefusal('rate_limited', 'Too many requests; try again in a minute.');
       const args = validate(d, rawArgs);
       // Server-side hosted authorisation on every call, with this principal's own credential.
       const cap = await this.deps.hosted.capability(p.hostedActor);
       if (p.scope === 'owner' && !(cap.review && cap.rhysActor === cap.actor)) throw new ToolRefusal('forbidden', 'Owner scope is not confirmed by the hosted service for this caller.');
-      ctx = {...ctxBase, p, cap};
+      ctx = {...ctxBase, p, cap, policy, tools};
       result = await this.run(ctx, d.name, args);
+      if (policy) {
+        // Final safety net over every free-text value of the response, for every tool.
+        if (d.name !== 'whoami' && d.name !== 'capabilities' && policy.scan(result)) throw new Withheld(d.name === 'ask_call' ? NOT_FOUND_CALL : NOT_FOUND_TASK, EMPTY[d.name]);
+        result = {...result, sharingPolicy: SHARING_NOTE};
+      }
     } catch (e) {
-      if (e instanceof ToolRefusal) { outcome = 'refused'; reason = e.code; result = {error: e.code, message: e.message}; }
+      if (e instanceof Withheld) {
+        reason = 'withheld'; ctxBase.ids.length = 0;
+        if (e.empty) result = {...e.empty, sharingPolicy: SHARING_NOTE};
+        else { outcome = 'refused'; result = {error: e.code, message: e.message}; }
+      }
+      else if (e instanceof ToolRefusal) { outcome = 'refused'; reason = e.code; result = {error: e.code, message: e.message}; }
       else if (e instanceof HostedRefusal) { outcome = 'refused'; reason = `hosted_${e.status}`; result = {error: 'hosted_refused', message: e.message}; }
       else { outcome = 'error'; reason = 'internal'; result = {error: 'internal', message: 'The request could not be completed; no diagnostic text was returned.'}; }
     }
@@ -166,8 +215,55 @@ export class AtlasMcp {
    */
   private async allowedCalls(ctx: Ctx): Promise<{queue: Queue; full: HostedMeeting[]; allowed: 'all' | Set<string>}> {
     const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-    const full = queue.meetings.filter(m => m.taskOnly !== true);
+    let full = queue.meetings.filter(m => m.taskOnly !== true);
+    // Scoped callers: further narrowed by the sensitivity policy and per-client full-call grants.
+    if (ctx.policy) full = this.fullCallMeetings(ctx, queue, full);
     return {queue, full, allowed: ctx.p.scope === 'owner' ? 'all' : new Set(full.map(m => m.id))};
+  }
+
+  private brainPath(callId: string): string | null {
+    const f = this.deps.index.fileFor(callId);
+    return f ? relative(this.deps.config.brainCallsDir, f) : null;
+  }
+
+  /** Sensitivity check of one task view against the RAW (pre-mask) hosted record. */
+  private taskWithheld(ctx: Ctx, t: ReturnType<typeof taskViews>[number]): boolean {
+    const pol = ctx.policy;
+    if (!pol) return false;
+    const m = t._meeting as HostedMeeting & Record<string, unknown>;
+    const it = t._item as HostedItem & Record<string, unknown>;
+    const task = (it.task ?? {}) as HostedTask;
+    if (pol.excludedFacts({
+      callId: m.id, taskIds: [t.taskId, t.requestId], clients: [t.client, m.clientLabel, task.client],
+      classifications: [m.classification, m.sensitivity, it.classification, it.sensitivity, task.classification, task.sensitivity],
+      brainPath: this.brainPath(m.id),
+    })) return true;
+    return pol.scan({meeting: {title: m.title, clientLabel: m.clientLabel}, item: {title: it.title, evidence: it.evidence}, task});
+  }
+
+  /** The tasks of a queue this caller may see (sensitivity-withheld ones removed). */
+  private visibleTasks(ctx: Ctx, queue: Queue) {
+    return taskViews(queue, ctx.counter).filter(t => !this.taskWithheld(ctx, t));
+  }
+
+  /**
+   * Full-call meetings a scoped caller may use for transcript-derived output (search, quotes,
+   * drafts, ask_call): only with a per-client full-call grant, and never for a meeting with
+   * an excluded id/client/classification/path or any withheld task. The owner keeps all.
+   */
+  private fullCallMeetings(ctx: Ctx, queue: Queue, full: HostedMeeting[]): HostedMeeting[] {
+    const pol = ctx.policy;
+    if (!pol) return full;
+    const views = taskViews(queue, {spans: 0});
+    return full.filter(m => {
+      const mine = views.filter(v => v.source.callId === m.id);
+      const client = mine.find(v => v.client)?.client ?? m.clientLabel ?? null;
+      if (!pol.fullCallGranted(ctx.principal, client)) return false;
+      if (mine.some(v => this.taskWithheld(ctx, v))) return false;
+      const mm = m as HostedMeeting & Record<string, unknown>;
+      return !pol.excludedFacts({callId: m.id, clients: [m.clientLabel, client], classifications: [mm.classification, mm.sensitivity], brainPath: this.brainPath(m.id)})
+        && !pol.scan({title: m.title, clientLabel: m.clientLabel});
+    });
   }
 
   private async run(ctx: Ctx, name: ToolName, args: Record<string, string | number>): Promise<Record<string, unknown>> {
@@ -179,8 +275,9 @@ export class AtlasMcp {
         const s = owner ? ledger.state() : null;
         return {
           principal: ctx.principal, label: ctx.p.label, hostedActor: ctx.cap.actor, scope: ctx.p.scope,
-          sees: owner ? 'All of Rhys\'s calls, clients and internal tasks.' : 'Only calls this hosted actor may read in full, plus task fields for reviewed task-only context.',
-          tools: ctx.p.tools, readOnly: true,
+          sees: owner ? 'All of Rhys\'s calls, clients and internal tasks.'
+            : 'Task-level fields for clients Rhys has granted. Call quotes, transcript search, drafts and call questions only for clients with a separate full-call grant from Rhys. Items under Rhys\'s sharing policy are never available.',
+          tools: ctx.tools, readOnly: true,
           askCallBudget: s
             ? {usedThisMonthUsd: usd(s.monthMicros), monthlyCapUsd: usd(budget.monthlyMicros), callsThisMonth: s.monthCalls, monthlyCalls: budget.monthlyCalls, callsToday: s.dayCalls, dailyCalls: budget.dailyCalls, halted: s.halted}
             : {monthlyCapUsd: usd(budget.monthlyMicros), monthlyCalls: budget.monthlyCalls, dailyCalls: budget.dailyCalls, usage: 'not shown to scoped callers'},
@@ -188,8 +285,8 @@ export class AtlasMcp {
       }
       case 'capabilities':
         return {
-          server: SERVER_INFO, phase: 'A', readOnly: true, exposure: 'Bound to 127.0.0.1 only; not reachable from other machines.',
-          tools: this.toolsFor(ctx.principal).map(t => ({name: t.name, description: t.description})),
+          server: SERVER_INFO, phase: 'A', readOnly: true, exposure: 'Runs on Rhys\'s Mac, bound to 127.0.0.1. Remote access, where separately enabled, passes an authenticated tunnel.',
+          tools: TOOL_DEFS.filter(t => ctx.tools.includes(t.name)).map(t => ({name: t.name, description: t.description})),
           notAvailable: ['create_task', 'assign_client', 'request_draft', 'approve', 'send_back', 'hand_off', 'deliver'],
           safety: ['Card read-outs are masked before indexing, returning or model use.', 'Scoped callers see only hosted-granted clients.', 'Every call is audited without transcript text.', 'ask_call quotes are verified as exact transcript substrings.'],
           limits: {toolCallsPerMinute: config.rateLimits.toolCallsPerMinute, askCallsPerHour: config.rateLimits.askCallsPerHour, askCallMonthlyUsd: usd(budget.monthlyMicros), askCallMonthlyCalls: budget.monthlyCalls, askCallDailyCalls: budget.dailyCalls},
@@ -198,7 +295,7 @@ export class AtlasMcp {
         };
       case 'list_tasks': {
         const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        let tasks = taskViews(queue, ctx.counter);
+        let tasks = this.visibleTasks(ctx, queue);
         if (args.owner) tasks = tasks.filter(t => (t.owner ?? '').toLowerCase() === String(args.owner).toLowerCase());
         if (args.status) tasks = tasks.filter(t => [t.requestState, t.workStatus].includes(String(args.status).toLowerCase()));
         if (args.client) tasks = tasks.filter(t => (t.client ?? '').toLowerCase().includes(String(args.client).toLowerCase()));
@@ -208,17 +305,21 @@ export class AtlasMcp {
       }
       case 'get_task': {
         const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        const t = taskViews(queue, ctx.counter).find(x => x.taskId === args.id || x.requestId === args.id);
-        if (!t) throw new ToolRefusal('not_found', 'No task with that id is visible to this caller.');
+        const t = this.visibleTasks(ctx, queue).find(x => x.taskId === args.id || x.requestId === args.id);
+        if (!t) throw new ToolRefusal('not_found', NOT_FOUND_TASK);
         ctx.ids.push(t.id);
-        const ev = t._item.evidence ?? {};
+        // task_fields_only posture: no call quotes and no draft read unless this client has a
+        // full-call grant from Rhys (none exist today).
+        const fullCall = !ctx.policy || ctx.policy.fullCallGranted(ctx.principal, t.client);
+        const ev = fullCall ? t._item.evidence ?? {} : {};
         const task = (t._item.task ?? {}) as HostedTask;
-        const draft = t.taskId ? await this.draftStatus(ctx, t.taskId) : {available: false, reason: 'This suggestion has not been accepted as a task yet.'};
+        const draft = !fullCall ? {available: false, reason: 'Not available to this caller.'}
+          : t.taskId ? await this.draftStatus(ctx, t.taskId) : {available: false, reason: 'This suggestion has not been accepted as a task yet.'};
         return {
           task: {...publicTask(t), kind: task.kind ?? null, origin: task.origin ?? null, executionGate: task.execution_gate ?? null, createdAt: task.created_at ?? null, updatedAt: task.updated_at ?? null,
             sentBackReason: task.sent_back_reason ? maskText(String(task.sent_back_reason), ctx.counter) : null, declinedReason: task.declined_reason ? maskText(String(task.declined_reason), ctx.counter) : null},
           request: {id: t.requestId, title: maskText(t._item.title ?? '', ctx.counter), state: t.requestState, due: t._item.due ?? null, owner: t._item.owner ?? null},
-          quotes: [ev.quote, task.source_quote].filter((q, i, a): q is string => typeof q === 'string' && !!q && a.indexOf(q) === i)
+          quotes: (fullCall ? [ev.quote, task.source_quote] : []).filter((q, i, a): q is string => typeof q === 'string' && !!q && a.indexOf(q) === i)
             .map((q, i) => ({text: maskText(q, ctx.counter), speaker: i === 0 && ev.speaker ? maskText(ev.speaker, ctx.counter) : null, timestamp: i === 0 ? ts(ev.start) : null})),
           status: {request: t.requestState, work: t.workStatus, deferred: t.deferred},
           draft,
@@ -227,8 +328,9 @@ export class AtlasMcp {
       }
       case 'get_draft': {
         const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        const t = taskViews(queue, ctx.counter).find(x => x.taskId === args.task_id);
-        if (!t || !t.taskId) throw new ToolRefusal('not_found', 'No task with that id is visible to this caller.');
+        const t = this.visibleTasks(ctx, queue).find(x => x.taskId === args.task_id);
+        if (!t || !t.taskId) throw new ToolRefusal('not_found', NOT_FOUND_TASK);
+        if (ctx.policy && !ctx.policy.fullCallGranted(ctx.principal, t.client)) throw new Withheld(NOT_FOUND_TASK);
         ctx.ids.push(t.taskId);
         const status = await this.draftStatus(ctx, t.taskId);
         if (!status.available || !status.currentVersion) return {taskId: t.taskId, ...status, draft: null};
@@ -239,6 +341,8 @@ export class AtlasMcp {
         return {taskId: t.taskId, ...status, draft: {version: art.body.version, contentSha256: art.body.hash, content}, citations: facts};
       }
       case 'search_calls': {
+        // A denylisted query or client gets the ordinary empty result (same as no match).
+        if (ctx.policy && (ctx.policy.textHits(args.query) || ctx.policy.textHits(args.client) || ctx.policy.clientExcluded(args.client))) throw new Withheld(NOT_FOUND_CALL, EMPTY.search_calls);
         const {full, allowed} = await this.allowedCalls(ctx);
         const limit = Number(args.limit ?? 8);
         const clientOf = new Map<string, string>();
@@ -246,7 +350,10 @@ export class AtlasMcp {
         const clientCallIds = args.client ? new Set([...clientOf].filter(([, c]) => c.toLowerCase().includes(String(args.client).toLowerCase())).map(([id]) => id)) : undefined;
         const hits: (CallHit & {client: string | null; source: string})[] = index.search({
           query: String(args.query), from: args.from as string | undefined, to: args.to as string | undefined, limit, client: args.client as string | undefined, clientCallIds, allowed,
-        }).map(h => ({...h, client: clientOf.get(h.callId) ?? null, source: 'brain'}));
+        }).map(h => ({...h, client: clientOf.get(h.callId) ?? null, source: 'brain'}))
+          // Per-hit sensitivity check: any denylisted text or path drops the whole hit.
+          .filter(h => !ctx.policy || !(ctx.policy.scan({title: h.title, summary: h.summary, attendees: h.attendees, quotes: h.quotes, client: h.client})
+            || ctx.policy.excludedFacts({callId: h.callId, clients: [h.client], brainPath: this.brainPath(h.callId)})));
         // Hosted catalog calls this caller may see that are not (yet) in the brain: title match only.
         const terms = queryTerms(String(args.query));
         for (const m of full) {
@@ -263,12 +370,15 @@ export class AtlasMcp {
       }
       case 'ask_call': {
         if (!this.deps.limiter.take(`ask:${ctx.principal}`, config.rateLimits.askCallsPerHour, 3_600_000)) throw new ToolRefusal('rate_limited', 'ask_call hourly limit reached for this caller.');
+        // A denylisted question is refused exactly like an unknown call, before any read or spend.
+        if (ctx.policy && ctx.policy.textHits(args.question)) throw new Withheld(NOT_FOUND_CALL);
         const {full, allowed} = await this.allowedCalls(ctx);
         const id = String(args.call_id);
-        // Same refusal for unknown, ungranted and task-only ids, before any hosted read or dispatch.
-        if (allowed !== 'all' && !allowed.has(id)) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
+        // Same refusal for unknown, ungranted, task-only and withheld ids, before any hosted read or dispatch.
+        if (allowed !== 'all' && !allowed.has(id)) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
         const source = await this.callSource(ctx, full, id);
-        if (!source) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
+        if (!source) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
+        if (ctx.policy && (ctx.policy.scan(source.meta) || ctx.policy.excludedFacts({callId: id, brainPath: this.brainPath(id)}))) throw new Withheld(NOT_FOUND_CALL);
         ctx.ids.push(id);
         const r = await runAsk({cfg: config.askCall, budget, ledger, principal: ctx.principal, meta: source.meta, turns: source.turns, question: String(args.question), key: this.deps.askKey, transport: this.deps.askTransport, counter: ctx.counter});
         ctx.costMicros = r.costMicros;
@@ -277,6 +387,8 @@ export class AtlasMcp {
           if (!r.dispatched && r.reason.startsWith('Budget')) throw new ToolRefusal('budget_refused', r.reason);
           return {...base, supported: false, reason: r.reason, quotes: []};
         }
+        // A scoped answer or quote touching a denylisted topic is withheld (the spend is kept).
+        if (ctx.policy && ctx.policy.scan({answer: r.answer, quotes: r.quotes})) throw new Withheld(NOT_FOUND_CALL);
         return {...base, supported: true, answer: r.answer, quotes: r.quotes, rejectedQuotes: r.rejectedQuotes};
       }
     }

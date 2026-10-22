@@ -17,16 +17,25 @@ import {AuditLog, BudgetLedger} from './ledger.ts';
 import {RateLimiter, readOwnerOnlyFile, readRegistry, resolveBearer, type TokenRegistry} from './auth.ts';
 import {AtlasMcp} from './tools.ts';
 import {handleMessage} from './protocol.ts';
+import {loadSensitivity, type SensitivityPolicy} from './sensitivity.ts';
 
 export type Assembled = {server: AtlasMcp; config: McpConfig; registry: () => TokenRegistry; index: CallIndex};
 
-export function assemble(opts: {config: McpConfig; budget?: Budget; hosted?: Hosted; askKey?: (s: AbortSignal) => Promise<string>; askTransport?: typeof fetch; refreshIndex?: boolean}): Assembled {
+/**
+ * The sensitivity policy is loaded once at start. If it is missing or invalid, scoped callers
+ * (nat, grok_as_nat) are refused on every tool; the owner is unaffected. `sensitivity: null`
+ * in opts simulates that; omitting it loads config.sensitivityFile.
+ */
+export function assemble(opts: {config: McpConfig; budget?: Budget; hosted?: Hosted; askKey?: (s: AbortSignal) => Promise<string>; askTransport?: typeof fetch; refreshIndex?: boolean; sensitivity?: SensitivityPolicy | null}): Assembled {
   const {config} = opts;
   const budget = opts.budget ?? loadBudget(config.askCall.budgetFile);
   const hosted = opts.hosted ?? hostedClient(loadTransportFromEnvFile(config.hostedTransportEnvFile));
   const index = new CallIndex(join(config.stateDir, 'calls-index.sqlite'), config.brainCallsDir);
   if (opts.refreshIndex !== false) index.refresh();
-  const server = new AtlasMcp({config, budget, hosted, index, audit: new AuditLog(config.stateDir), ledger: new BudgetLedger(config.stateDir, budget), limiter: new RateLimiter(), askKey: opts.askKey, askTransport: opts.askTransport});
+  let sensitivity: SensitivityPolicy | null;
+  if (opts.sensitivity !== undefined) sensitivity = opts.sensitivity;
+  else { try { sensitivity = loadSensitivity(config.sensitivityFile); } catch { sensitivity = null; } }
+  const server = new AtlasMcp({config, budget, hosted, index, audit: new AuditLog(config.stateDir), ledger: new BudgetLedger(config.stateDir, budget), limiter: new RateLimiter(), askKey: opts.askKey, askTransport: opts.askTransport, sensitivity});
   return {server, config, index, registry: () => readRegistry(config.tokensFile)};
 }
 

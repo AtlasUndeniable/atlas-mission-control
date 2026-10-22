@@ -27,7 +27,7 @@ function append(file: string, row: object) {
 }
 
 export type AuditRow = {
-  at: string; principal: string; transport: 'http' | 'stdio' | 'test'; tool: string; toolNameSha256?: string; argsSha256: string;
+  at: string; principal: string; transport: 'http' | 'stdio' | 'test' | 'exposure'; tool: string; toolNameSha256?: string; argsSha256: string;
   outcome: 'ok' | 'refused' | 'error'; reason?: string; resultIds: string[]; costMicros: number; maskSpans: number; ms: number;
 };
 export class AuditLog {

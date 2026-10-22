@@ -9,6 +9,7 @@ import {parseConfig, parseBudget, type McpConfig, type Budget} from '../src/conf
 import type {Hosted, Queue, Capability, Context} from '../src/hosted.ts';
 import {assemble} from '../src/server.ts';
 import {digest, newToken, writeRegistry} from '../src/auth.ts';
+import {SensitivityPolicy, REQUIRED_TOPICS} from '../src/sensitivity.ts';
 
 export const A = '01AAAAAAAAAAAAAAAAAAAAAAAA'; // Acme (granted to nat)
 export const B = '01BBBBBBBBBBBBBBBBBBBBBBBB'; // Zenith (NOT granted to nat)
@@ -167,13 +168,29 @@ export function fakeModel(answer: (prompt: string) => object, opts: {fail?: bool
 
 export const TEST_KEY = async () => 'sk-ant-' + 'x'.repeat(40);
 
-export function setup(over: Parameters<typeof makeConfig>[1] = {}, budget: Budget = BUDGET, model = fakeModel(() => ({supported: false, answer: '', quotes: []}))) {
+/**
+ * The pre-Lane-X test policy: no topics or patterns match (terms that never occur), and nat /
+ * grok_as_nat hold a synthetic full-call grant for client "acme", so every Phase A test keeps
+ * exercising the behaviour it was written for. The REAL shipped policy is exercised by
+ * sensitivity.test.ts and exposure.test.ts. Built without the strict loader on purpose.
+ */
+export function permissivePolicy(grants: string[] = ['acme']): SensitivityPolicy {
+  const never = 'zzqqxxnevermatches';
+  return new SensitivityPolicy({
+    version: 'test-permissive', decisionReference: 'synthetic test policy', reviewState: 'synthetic test policy',
+    topics: REQUIRED_TOPICS.map(id => ({id, terms: [never]})), patterns: [], classifications: ['client_financial', 'internal'],
+    excluded: {clientLabels: [], taskIds: [], callIds: [], brainPathFragments: []},
+    principals: Object.fromEntries(['nat', 'grok_as_nat'].map(p => [p, {posture: 'task_fields_only' as const, fullCallClients: grants.map(client => ({client, decisionReference: 'synthetic test grant'}))}])),
+  });
+}
+
+export function setup(over: Parameters<typeof makeConfig>[1] = {}, budget: Budget = BUDGET, model = fakeModel(() => ({supported: false, answer: '', quotes: []})), sensitivity: SensitivityPolicy | null = permissivePolicy()) {
   const brain = makeBrain();
   const config = makeConfig(brain, over);
   const hosted = fakeHosted();
   const tokens: Record<string, string> = {};
   const reg = {tokens: Object.keys(config.principals).map(p => { tokens[p] = newToken(); return {principal: p, sha256: digest(tokens[p]), created: 'test', label: p}; })};
   writeRegistry(config.tokensFile, reg);
-  const a = assemble({config, budget, hosted, askKey: TEST_KEY, askTransport: model.transport});
+  const a = assemble({config, budget, hosted, askKey: TEST_KEY, askTransport: model.transport, sensitivity});
   return {...a, hosted, tokens, model, brain};
 }

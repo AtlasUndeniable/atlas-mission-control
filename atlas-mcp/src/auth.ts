@@ -7,7 +7,7 @@ import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import {readFileSync, writeFileSync, existsSync, renameSync, lstatSync, openSync, fstatSync, closeSync, constants} from 'node:fs';
 import {dirname, isAbsolute} from 'node:path';
 
-export type TokenEntry = {principal: string; sha256: string; created: string; label: string; revoked?: boolean};
+export type TokenEntry = {principal: string; sha256: string; created: string; label: string; revoked?: boolean; expires?: string};
 export type TokenRegistry = {tokens: TokenEntry[]};
 
 const TOKEN_SHAPE = /^atlas_mcp_[A-Za-z0-9_-]{43}$/;
@@ -48,19 +48,45 @@ export function writeRegistry(file: string, registry: TokenRegistry) {
 }
 
 /** Returns the principal for a presented bearer value, or null. Never throws on input. */
-export function resolveBearer(registry: TokenRegistry, presented: string | null | undefined, principals: Record<string, unknown>): string | null {
+export function resolveBearer(registry: TokenRegistry, presented: string | null | undefined, principals: Record<string, unknown>, now: number = Date.now()): string | null {
+  return resolveBearerEntry(registry, presented, principals, now)?.principal ?? null;
+}
+
+/**
+ * The matching, unrevoked, unexpired registry entry, or null. Every registered digest is
+ * compared in constant time (no early exit). A token with an `expires` time in the past is
+ * rejected; `expires` is optional for local tokens and mandatory for exposed ones (checked
+ * by the exposure server).
+ */
+export function resolveBearerEntry(registry: TokenRegistry, presented: string | null | undefined, principals: Record<string, unknown>, now: number = Date.now()): TokenEntry | null {
   if (typeof presented !== 'string') return null;
   const m = /^Bearer ([^\s]+)$/.exec(presented.trim());
   const token = m ? m[1] : presented.trim();
   if (!TOKEN_SHAPE.test(token)) return null;
   const want = Buffer.from(digest(token), 'hex');
-  let found: string | null = null;
+  let found: TokenEntry | null = null;
   for (const e of registry.tokens) {
     if (!/^[0-9a-f]{64}$/.test(e.sha256)) continue;
     const match = timingSafeEqual(want, Buffer.from(e.sha256, 'hex'));
-    if (match && !e.revoked && Object.hasOwn(principals, e.principal)) found = e.principal;
+    const expired = e.expires !== undefined && !(Date.parse(e.expires) > now);
+    if (match && !e.revoked && !expired && Object.hasOwn(principals, e.principal)) found = e;
   }
   return found;
+}
+
+/** Mint a token entry (optionally expiring). Returns the raw token for the caller to store. */
+export function mintEntry(principal: string, label: string, expiresDays?: number, now = Date.now()): {token: string; entry: TokenEntry} {
+  const token = newToken();
+  const entry: TokenEntry = {principal, sha256: digest(token), created: new Date(now).toISOString(), label: label.slice(0, 80)};
+  if (expiresDays !== undefined) entry.expires = new Date(now + expiresDays * 86_400_000).toISOString();
+  return {token, entry};
+}
+
+/** Revoke every active token of a principal (rotation and emergency revocation). */
+export function revokePrincipal(registry: TokenRegistry, principal: string, keepSha256?: string): number {
+  let n = 0;
+  for (const e of registry.tokens) if (e.principal === principal && !e.revoked && e.sha256 !== keepSha256) { e.revoked = true; n++; }
+  return n;
 }
 
 export class RateLimiter {

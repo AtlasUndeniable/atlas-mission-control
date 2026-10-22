@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lane X: PREPARED, NOT LOADED. Do not copy into ~/Library/LaunchAgents until Lane R16 has
+  reviewed the exact commit and Dante has given the enable decision (EXPOSURE-RUNBOOK.md step 6).
+  Anything in ~/Library/LaunchAgents loads at the next login, so it must not be placed there early.
+  WORKTREE below must be replaced with the reviewed, installed worktree path.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.atlas.atlas-mcp-exposure</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--no-warnings</string>
+    <string>WORKTREE/atlas-mcp/bin/atlas-mcp.ts</string>
+    <string>exposure-http</string>
+    <string>--config</string>
+    <string>/Users/atlasai/.config/atlas/atlas-mcp-exposure/config.json</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>WORKTREE</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/server.log</string>
+</dict>
+</plist>

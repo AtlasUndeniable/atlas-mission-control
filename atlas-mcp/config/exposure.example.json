@@ -1,0 +1,38 @@
+{
+  "host": "127.0.0.1",
+  "port": 4029,
+  "brainCallsDir": "/Users/atlasai/atlas-brain/content/calls",
+  "stateDir": "/Users/atlasai/.local/state/atlas-mcp-exposure",
+  "tokensFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure/tokens.json",
+  "sensitivityFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure/sensitivity.json",
+  "hostedTransportEnvFile": "/Users/atlasai/atlas-mission-control/.env.local",
+  "principals": {
+    "grok_as_nat": {"hostedActor": "nat", "scope": "granted", "label": "Grok acting for Natalie", "tools": ["whoami", "capabilities", "list_tasks", "get_task"]}
+  },
+  "rateLimits": {"toolCallsPerMinute": 20, "askCallsPerHour": 0},
+  "askCall": {
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "maxOutputTokens": 3000,
+    "maxPromptCharacters": 300000,
+    "timeoutMs": 60000,
+    "keyFile": "/nonexistent/no-model-calls-on-the-exposure-server.key",
+    "budgetFile": "/Users/atlasai/.config/atlas/atlas-mcp/ask-call-budget.json",
+    "decisionReference": "sprint-20261007 DECISIONS item 19(c): exposure server makes no model calls (ask_call is outside the exposed ceiling)"
+  },
+  "exposure": {
+    "port": 4020,
+    "publicHostname": "atlas-mcp.replace-with-domain.invalid",
+    "allowedOrigins": [],
+    "principals": {"grok_as_nat": {"tools": ["whoami", "capabilities", "list_tasks", "get_task"]}},
+    "killSwitchFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure/EXPOSURE-DISABLED",
+    "maxBodyBytes": 16384,
+    "maxResponseBytes": 262144,
+    "requestTimeoutMs": 20000,
+    "limits": {"perMinute": 20, "perHour": 200, "perDay": 1000, "maxConcurrent": 2, "unauthenticatedPerMinute": 20},
+    "tokenMaxAgeDays": 30,
+    "cfAccess": {"mode": "jwt", "teamDomain": "replace-team.cloudflareaccess.com", "aud": "0000000000000000000000000000000000000000000000000000000000000000", "serviceTokenClientIdSha256": null},
+    "serviceTokenHeaders": null,
+    "decisionReference": "sprint-20261007 DECISIONS item 19(c); enabling needs Lane R16 review + human account setup"
+  }
+}
