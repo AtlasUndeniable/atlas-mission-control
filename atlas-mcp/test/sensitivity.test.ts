@@ -78,8 +78,8 @@ ${turns.map(([s, t]) => `**${s}:** ${t}`).join('\n\n')}
 function world(sensitivity: SensitivityPolicy | null, model = fakeModel(() => ({supported: false, answer: '', quotes: []}))) {
   const s = setup({}, undefined, model, sensitivity);
   const extra: HostedMeeting[] = [
-    {id: M, title: 'Bright Studio x Rhys', instant: '2026-10-20T01:00:00Z', state: 'ready', items: ITEMS.filter(([k]) => k !== 'excl').map(([k, t, q, x]) => item(k, t, q, 'bright', x))},
-    {id: H, title: 'Weekly check-in', instant: '2026-10-21T01:00:00Z', state: 'ready', items: [item('excl', 'Book the follow-up session', 'book a follow-up', 'Hidden Co')]},
+    {id: M, title: 'Bright Studio x Rhys', instant: '2026-10-20T01:00:00Z', state: 'ready', classification: 'client_confidential', items: ITEMS.filter(([k]) => k !== 'excl').map(([k, t, q, x]) => item(k, t, q, 'bright', x))},
+    {id: H, title: 'Weekly check-in', instant: '2026-10-21T01:00:00Z', state: 'ready', classification: 'client_confidential', items: [item('excl', 'Book the follow-up session', 'book a follow-up', 'Hidden Co')]},
   ];
   const list = s.hosted.list.bind(s.hosted);
   s.hosted.list = async (actor: string): Promise<Queue> => { const q = await list(actor); q.meetings.push(...clone(extra)); return q; };
@@ -178,11 +178,15 @@ for (const who of ['nat', 'grok_as_nat']) {
     assert.ok(!s.hosted.calls.some(c => c.method === 'context'), 'no hosted transcript read');
   });
 
-  test(`${who}: a full-call grant releases quotes for clean tasks, but a call carrying any withheld task stays closed`, async () => {
+  test(`${who}: a full-call grant never releases quotes, drafts, search or ask for a call carrying any withheld task (R16 #3)`, async () => {
     const model = fakeModel(() => ({supported: true, answer: 'The checklist is coming tomorrow.', quotes: [{turn: 0, text: 'I will send the onboarding checklist tomorrow.'}]}));
     const s = world(policy(['bright']), model);
     const g = await s.server.callTool(who, 'get_task', {id: 'task-clean'}, 'test');
-    assert.equal((g.structured.quotes as unknown[]).length, 1, 'quotes allowed for a granted client');
+    assert.deepEqual(g.structured.quotes, [], 'withheld sibling closes quotes too');
+    assert.equal((g.structured.draft as {available: boolean}).available, false);
+    const unknownDraft = await s.server.callTool(who, 'get_draft', {task_id: 'task-nope'}, 'test');
+    assert.deepEqual(await s.server.callTool(who, 'get_draft', {task_id: 'task-clean'}, 'test'), unknownDraft);
+    assert.ok(!s.hosted.calls.some(c => c.method === 'documentRead'), 'no draft read');
     assert.deepEqual(ids(await s.server.callTool(who, 'list_tasks', {limit: 100}, 'test')), ['task-clean'], 'a grant never releases denylisted tasks');
     // The Bright call carries withheld tasks, so its transcript is not searchable or askable.
     const nothing = await s.server.callTool(who, 'search_calls', {query: 'zzzz'}, 'test');

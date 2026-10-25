@@ -194,3 +194,10 @@ Tests: `node --test atlas-mcp/test/*.test.ts`. These cover:
 **Exposure origin.** `src/exposure.ts`, `src/cf-access.ts`, commands `exposure-http`, `exposure-kill`, `exposure-resume`, `exposure-status`, `rotate`, `revoke-principal`; `mint-token --expires-days`. See [EXPOSURE-RUNBOOK.md](EXPOSURE-RUNBOOK.md). Prepared only; not enabled.
 
 Tests: `test/sensitivity.test.ts` (17) and `test/exposure.test.ts` (13), in addition to the Phase A suites. The Phase A fixtures use a permissive synthetic policy with a synthetic full-call grant for client `acme`, so the original scope tests keep exercising what they were written for.
+
+## Lane X2 changes (after R16)
+
+- **One release decision per request** (`decide()` in `src/tools.ts`): classification (meeting `classification` required unless `classificationEnforcement` records an `allow` decision), exclusions, brain paths from `src/brain-files.ts` (the brain directory itself, not the search index; unreadable brain = nothing released), sibling withholding and per-client full-call grants. Quotes, drafts, search and ask all use the same result; search ranks only eligible calls.
+- **Current policy**: `PolicySource` re-reads the owner-only policy (optionally pinned by `sensitivitySha256`) on every scoped call and again at release.
+- **Hosted reads take the caller's deadline signal**; `src/synthetic-hosted.ts` provides the isolated synthetic source (`hostedSource: synthetic`, actors `synthetic_*` only) for remote acceptance.
+- Tests: `test/r16.test.ts` (16) turns every R16 reproduction into a regression.

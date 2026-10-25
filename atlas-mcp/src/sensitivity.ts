@@ -21,6 +21,7 @@
  * The loader is strict and fails closed: an unreadable or invalid policy refuses every tool
  * for every scoped principal.
  */
+import {createHash} from 'node:crypto';
 import {readOwnerOnlyFile} from './auth.ts';
 
 export const REQUIRED_TOPICS = ['financials', 'pricing', 'payroll_team_pay', 'staff_hr', 'internal_strategy', 'undeniable_financials', 'bank_card'] as const;
@@ -123,7 +124,7 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const STRUCTURAL = new Set(['id', 'taskId', 'requestId', 'callId', 'link', 'instant', 'due', 'date', 'createdAt', 'updatedAt', 'contentSha256', 'hash', 'requestState', 'workStatus', 'state', 'status', 'access', 'transcriptSource', 'version', 'currentVersion',
   'created_at', 'updated_at', 'work_status', 'execution_gate', 'sourceRevision', 'projectionHash', 'revision', 'sharingPolicy']);
 
-export type ItemFacts = {callId?: string | null; taskIds?: (string | null | undefined)[]; clients?: unknown[]; classifications?: unknown[]; brainPath?: string | null};
+export type ItemFacts = {callId?: string | null; taskIds?: (string | null | undefined)[]; clients?: unknown[]; classifications?: unknown[]; brainPaths?: string[]};
 
 export class SensitivityPolicy {
   readonly spec: SensitivitySpec;
@@ -171,12 +172,15 @@ export class SensitivityPolicy {
     if ((f.taskIds ?? []).some(t => typeof t === 'string' && ex.taskIds.includes(t))) return true;
     if ((f.clients ?? []).some(c => this.clientExcluded(c))) return true;
     if ((f.classifications ?? []).some(c => typeof c === 'string' && this.spec.classifications.includes(c.toLowerCase()))) return true;
-    if (f.brainPath) {
-      const p = f.brainPath.toLowerCase();
+    for (const bp of f.brainPaths ?? []) {
+      const p = bp.toLowerCase();
       if (ex.brainPathFragments.some(fr => p.includes(fr))) return true;
     }
     return false;
   }
+
+  /** True when the policy has path rules, so an unreadable brain directory must withhold. */
+  needsBrainPaths(): boolean { return this.spec.excluded.brainPathFragments.length > 0; }
 
   posture(principal: string): Posture | null { return this.spec.principals[principal]?.posture ?? null; }
 
@@ -185,6 +189,42 @@ export class SensitivityPolicy {
     if (typeof client !== 'string' || !client || this.clientExcluded(client)) return false;
     const c = normalize(client).trim();
     return (this.spec.principals[principal]?.fullCallClients ?? []).some(g => normalize(g.client).trim() === c);
+  }
+}
+
+export type PolicyState = {policy: SensitivityPolicy; sha256: string};
+
+/**
+ * The CURRENT validated policy, re-read on every use (R16 finding 5): a deleted, insecure,
+ * invalid or re-pinned file yields null, so scoped callers are refused on the next call and
+ * any in-flight result whose policy changed is not released. Parsing is cached by content
+ * hash; the owner-only checks run on every read.
+ */
+export class PolicySource {
+  private file: string | null;
+  private pin: string | null;
+  private fixedState: PolicyState | null = null;
+  private cache = new Map<string, SensitivityPolicy>();
+  private constructor(file: string | null, pin: string | null) { this.file = file; this.pin = pin; }
+  static file(path: string, pinSha256: string | null = null) { return new PolicySource(path, pinSha256); }
+  /** Tests / in-process: a fixed policy object (null = unavailable). */
+  static fixed(p: SensitivityPolicy | null) {
+    const s = new PolicySource(null, null);
+    s.fixedState = p ? {policy: p, sha256: 'fixed:' + createHash('sha256').update(JSON.stringify(p.spec)).digest('hex')} : null;
+    return s;
+  }
+  current(): PolicyState | null {
+    if (this.file === null) return this.fixedState;
+    let bytes: string;
+    try { bytes = readOwnerOnlyFile(this.file, 'sensitivity_policy'); } catch { return null; }
+    const sha256 = createHash('sha256').update(bytes, 'utf8').digest('hex');
+    if (this.pin && sha256 !== this.pin) return null;
+    let policy = this.cache.get(sha256);
+    if (!policy) {
+      try { policy = new SensitivityPolicy(parseSensitivity(JSON.parse(bytes))); } catch { return null; }
+      this.cache.clear(); this.cache.set(sha256, policy);
+    }
+    return {policy, sha256};
   }
 }
 

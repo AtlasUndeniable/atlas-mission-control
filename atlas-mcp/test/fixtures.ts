@@ -97,9 +97,9 @@ export type HostedCalls = {method: string; actor: string; arg?: unknown}[];
 export function fakeHosted(): Hosted & {calls: HostedCalls} {
   const calls: HostedCalls = [];
   const meetings: Record<string, object> = {
-    [A]: {id: A, title: 'Acme Coaching x Rhys', instant: '2026-10-01T01:00:00Z', state: 'ready', items: [item('a', A, 'acme', 'rhys', 'move the group program price to nine ninety seven', 30)]},
-    [B]: {id: B, title: 'Zenith Fitness x Rhys', instant: '2026-10-05T01:00:00Z', state: 'ready', items: [item('b', B, 'zenith', 'nat', 'zebracorn pricing is confidential', 12)]},
-    [HOSTED_ONLY]: {id: HOSTED_ONLY, title: 'Orbit Strategy x Rhys', instant: '2026-10-19T01:00:00Z', state: 'held', items: []},
+    [A]: {id: A, title: 'Acme Coaching x Rhys', instant: '2026-10-01T01:00:00Z', state: 'ready', classification: 'client_confidential', items: [item('a', A, 'acme', 'rhys', 'move the group program price to nine ninety seven', 30)]},
+    [B]: {id: B, title: 'Zenith Fitness x Rhys', instant: '2026-10-05T01:00:00Z', state: 'ready', classification: 'client_confidential', items: [item('b', B, 'zenith', 'nat', 'zebracorn pricing is confidential', 12)]},
+    [HOSTED_ONLY]: {id: HOSTED_ONLY, title: 'Orbit Strategy x Rhys', instant: '2026-10-19T01:00:00Z', state: 'held', classification: 'client_confidential', items: []},
   };
   const visible: Record<string, string[]> = {rhys: [A, B, HOSTED_ONLY], nat: [A]};
   const caps: Record<string, Capability> = {rhys: {actor: 'rhys', triage: true, review: true, rhysActor: 'rhys'}, nat: {actor: 'nat', triage: true, review: false, rhysActor: 'rhys'}};

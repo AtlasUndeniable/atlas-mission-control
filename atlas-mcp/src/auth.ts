@@ -93,6 +93,13 @@ export class RateLimiter {
   private hits = new Map<string, number[]>();
   private now: () => number;
   constructor(now: () => number = Date.now) { this.now = now; }
+  /** Hits in the window, without recording one (a cheap pre-check before expensive work). */
+  count(key: string, windowMs: number) {
+    const t = this.now();
+    const list = (this.hits.get(key) ?? []).filter(x => t - x < windowMs);
+    this.hits.set(key, list);
+    return list.length;
+  }
   /** True and recorded when under the limit; false (not recorded) otherwise. */
   take(key: string, limit: number, windowMs: number) {
     const t = this.now();

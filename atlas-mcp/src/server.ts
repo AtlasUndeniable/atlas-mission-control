@@ -17,7 +17,9 @@ import {AuditLog, BudgetLedger} from './ledger.ts';
 import {RateLimiter, readOwnerOnlyFile, readRegistry, resolveBearer, type TokenRegistry} from './auth.ts';
 import {AtlasMcp} from './tools.ts';
 import {handleMessage} from './protocol.ts';
-import {loadSensitivity, type SensitivityPolicy} from './sensitivity.ts';
+import {PolicySource, type SensitivityPolicy} from './sensitivity.ts';
+import {BrainFiles} from './brain-files.ts';
+import {loadSyntheticFixture, syntheticHosted} from './synthetic-hosted.ts';
 
 export type Assembled = {server: AtlasMcp; config: McpConfig; registry: () => TokenRegistry; index: CallIndex};
 
@@ -26,16 +28,20 @@ export type Assembled = {server: AtlasMcp; config: McpConfig; registry: () => To
  * (nat, grok_as_nat) are refused on every tool; the owner is unaffected. `sensitivity: null`
  * in opts simulates that; omitting it loads config.sensitivityFile.
  */
-export function assemble(opts: {config: McpConfig; budget?: Budget; hosted?: Hosted; askKey?: (s: AbortSignal) => Promise<string>; askTransport?: typeof fetch; refreshIndex?: boolean; sensitivity?: SensitivityPolicy | null}): Assembled {
+export function assemble(opts: {config: McpConfig; budget?: Budget; hosted?: Hosted; askKey?: (s: AbortSignal) => Promise<string>; askTransport?: typeof fetch; refreshIndex?: boolean; sensitivity?: SensitivityPolicy | PolicySource | null}): Assembled {
   const {config} = opts;
   const budget = opts.budget ?? loadBudget(config.askCall.budgetFile);
-  const hosted = opts.hosted ?? hostedClient(loadTransportFromEnvFile(config.hostedTransportEnvFile));
+  // Synthetic mode (remote acceptance) never touches the production transport file or JWTs.
+  const hosted = opts.hosted ?? (config.hostedSource.mode === 'synthetic'
+    ? syntheticHosted(loadSyntheticFixture(config.hostedSource.fixtureFile))
+    : hostedClient(loadTransportFromEnvFile(config.hostedTransportEnvFile)));
   const index = new CallIndex(join(config.stateDir, 'calls-index.sqlite'), config.brainCallsDir);
   if (opts.refreshIndex !== false) index.refresh();
-  let sensitivity: SensitivityPolicy | null;
-  if (opts.sensitivity !== undefined) sensitivity = opts.sensitivity;
-  else { try { sensitivity = loadSensitivity(config.sensitivityFile); } catch { sensitivity = null; } }
-  const server = new AtlasMcp({config, budget, hosted, index, audit: new AuditLog(config.stateDir), ledger: new BudgetLedger(config.stateDir, budget), limiter: new RateLimiter(), askKey: opts.askKey, askTransport: opts.askTransport, sensitivity});
+  // The policy is re-read and validated on every scoped call and again at release (R16 #5).
+  const sensitivity = opts.sensitivity !== undefined
+    ? (opts.sensitivity instanceof PolicySource ? opts.sensitivity : PolicySource.fixed(opts.sensitivity))
+    : PolicySource.file(config.sensitivityFile, config.sensitivitySha256);
+  const server = new AtlasMcp({config, budget, hosted, index, audit: new AuditLog(config.stateDir), ledger: new BudgetLedger(config.stateDir, budget), limiter: new RateLimiter(), askKey: opts.askKey, askTransport: opts.askTransport, sensitivity, brain: new BrainFiles(config.brainCallsDir)});
   return {server, config, index, registry: () => readRegistry(config.tokensFile)};
 }
 

@@ -1,0 +1,34 @@
+{
+  "version": "laneX2-synthetic-acceptance-1",
+  "synthetic": true,
+  "actors": {
+    "synthetic_nat": {
+      "capability": {"actor": "synthetic_nat", "triage": true, "review": false, "rhysActor": "synthetic_rhys"},
+      "meetings": [
+        {"id": "SYNTHETIC0000000000000001", "title": "Synthetic Client Alpha x Coach", "instant": "2026-10-20T01:00:00Z", "state": "ready", "classification": "client_confidential", "items": [
+          {"id": "req-syn-alpha-1", "title": "Send Alpha the onboarding checklist", "due": "2026-11-03", "owner": "synthetic_nat", "state": "approved",
+           "evidence": {"quote": "SYNTHETIC: I will send the onboarding checklist tomorrow", "speaker": "Synthetic Coach", "start": 42},
+           "task": {"id": "task-syn-alpha-1", "title": "Send Alpha the onboarding checklist", "client": "Synthetic Client Alpha", "owner": "synthetic_nat", "work_status": "todo", "due": "2026-11-03", "source_quote": "SYNTHETIC: I will send the onboarding checklist tomorrow"}},
+          {"id": "req-syn-alpha-2", "title": "Book Alpha's kickoff session", "due": "2026-11-05", "owner": "synthetic_nat", "state": "pending_approval",
+           "evidence": {"quote": "SYNTHETIC: let's do the kickoff on Monday", "speaker": "Synthetic Coach", "start": 90},
+           "task": null}
+        ]},
+        {"id": "SYNTHETIC0000000000000002", "title": "Synthetic Client Beta x Coach", "instant": "2026-10-21T01:00:00Z", "state": "ready", "classification": "client_confidential", "items": [
+          {"id": "req-syn-beta-1", "title": "Review Beta's Q3 revenue", "due": null, "owner": "synthetic_nat", "state": "approved",
+           "evidence": {"quote": "SYNTHETIC: revenue was up this quarter", "start": 12},
+           "task": {"id": "task-syn-beta-1", "title": "Review Beta's Q3 revenue", "client": "Synthetic Client Beta", "owner": "synthetic_nat", "work_status": "todo"}}
+        ]},
+        {"id": "SYNTHETIC0000000000000003", "title": "Synthetic finance sync", "instant": "2026-10-22T01:00:00Z", "state": "ready", "classification": "client_financial", "items": [
+          {"id": "req-syn-fin-1", "title": "Prepare the synthetic welcome pack", "due": null, "owner": "synthetic_nat", "state": "approved", "task": {"id": "task-syn-fin-1", "title": "Prepare the synthetic welcome pack", "client": "Synthetic Client Gamma", "owner": "synthetic_nat", "work_status": "todo"}}
+        ]},
+        {"id": "SYNTHETIC0000000000000004", "title": "Synthetic Client Delta x Coach", "instant": "2026-10-23T01:00:00Z", "state": "ready", "items": [
+          {"id": "req-syn-unclassified-1", "title": "Send Delta the session notes", "due": null, "owner": "synthetic_nat", "state": "approved", "task": {"id": "task-syn-unclassified-1", "title": "Send Delta the session notes", "client": "Synthetic Client Delta", "owner": "synthetic_nat", "work_status": "todo"}}
+        ]},
+        {"id": "SYNTHETIC0000000000000005", "title": "Reviewed task context only", "instant": "2026-10-24T01:00:00Z", "state": "ready", "taskOnly": true, "clientLabel": "Synthetic Client Epsilon", "classification": "client_confidential", "items": [
+          {"id": "req-syn-taskonly-1", "title": "Share the Epsilon resource list", "due": null, "owner": "synthetic_nat", "state": "approved", "task": null, "evidence": {"quote": "SYNTHETIC reviewed excerpt"}}
+        ]}
+      ],
+      "contexts": {}
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "host": "127.0.0.1",
+  "port": 4028,
+  "brainCallsDir": "/Users/atlasai/.config/atlas/atlas-mcp-exposure-acceptance/empty-brain",
+  "stateDir": "/Users/atlasai/.local/state/atlas-mcp-exposure-acceptance",
+  "tokensFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure-acceptance/tokens.json",
+  "sensitivityFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure-acceptance/sensitivity.json",
+  "sensitivitySha256": "c1611d8a79c6a4c1937260369efa8d20e4f51ad3f1238a3c07f54a4f41cf0d97",
+  "classificationEnforcement": {"unclassified": "withhold"},
+  "hostedSource": {"mode": "synthetic", "fixtureFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure-acceptance/acceptance-fixture.json", "decisionReference": "R16 finding 6: isolated synthetic hosted principal for remote acceptance; no production data"},
+  "hostedTransportEnvFile": "/nonexistent/synthetic-mode-never-reads-the-production-transport",
+  "principals": {
+    "grok_as_nat": {"hostedActor": "synthetic_nat", "scope": "granted", "label": "Grok acceptance (synthetic data only)", "tools": ["whoami", "capabilities", "list_tasks", "get_task"]}
+  },
+  "rateLimits": {"toolCallsPerMinute": 20, "askCallsPerHour": 0},
+  "askCall": {
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "maxOutputTokens": 3000,
+    "maxPromptCharacters": 300000,
+    "timeoutMs": 60000,
+    "keyFile": "/nonexistent/no-model-calls-on-the-exposure-server.key",
+    "budgetFile": "/Users/atlasai/.config/atlas/atlas-mcp/ask-call-budget.json",
+    "decisionReference": "Synthetic acceptance server: no model calls"
+  },
+  "exposure": {
+    "port": 4020,
+    "publicHostname": "atlas-mcp.replace-with-domain.invalid",
+    "allowedOrigins": [],
+    "principals": {"grok_as_nat": {"tools": ["whoami", "capabilities", "list_tasks", "get_task"]}},
+    "killSwitchFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure-acceptance/EXPOSURE-DISABLED",
+    "maxBodyBytes": 16384,
+    "maxResponseBytes": 262144,
+    "requestTimeoutMs": 20000,
+    "limits": {"perMinute": 20, "perHour": 200, "perDay": 1000, "maxConcurrent": 2, "unauthenticatedPerMinute": 30, "bearerFailuresPerMinute": 10},
+    "tokenMaxAgeDays": 7,
+    "cfAccess": {"mode": "jwt", "teamDomain": "replace-team.cloudflareaccess.com", "aud": "0000000000000000000000000000000000000000000000000000000000000000", "serviceTokenClientIdSha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "serviceTokenHeaders": null,
+    "decisionReference": "R16 finding 6: SYNTHETIC remote acceptance only (non-production service token, synthetic hosted actor)"
+  }
+}

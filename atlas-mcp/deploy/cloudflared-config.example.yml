@@ -1,5 +1,6 @@
 # Lane X: PREPARED, NOT INSTALLED. cloudflared config for a NAMED tunnel (never a quick tunnel).
-# Place at ~/.cloudflared/config.yml only during EXPOSURE-RUNBOOK.md step 4, after review.
+# Place at ~/.cloudflared/atlas-mcp-grok.yml (NOT config.yml: an existing system tunnel runs on this Mac)
+# only during EXPOSURE-RUNBOOK.md step 4, after review.
 # TUNNEL_ID, HOSTNAME, TEAM and AUD come from the human Cloudflare setup; none are secrets
 # except the credentials file, which cloudflared writes owner-only and which is never printed.
 tunnel: TUNNEL_ID

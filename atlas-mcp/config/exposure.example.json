@@ -5,6 +5,9 @@
   "stateDir": "/Users/atlasai/.local/state/atlas-mcp-exposure",
   "tokensFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure/tokens.json",
   "sensitivityFile": "/Users/atlasai/.config/atlas/atlas-mcp-exposure/sensitivity.json",
+  "sensitivitySha256": "c1611d8a79c6a4c1937260369efa8d20e4f51ad3f1238a3c07f54a4f41cf0d97",
+  "classificationEnforcement": {"unclassified": "withhold"},
+  "hostedSource": {"mode": "production"},
   "hostedTransportEnvFile": "/Users/atlasai/atlas-mission-control/.env.local",
   "principals": {
     "grok_as_nat": {"hostedActor": "nat", "scope": "granted", "label": "Grok acting for Natalie", "tools": ["whoami", "capabilities", "list_tasks", "get_task"]}
@@ -29,10 +32,10 @@
     "maxBodyBytes": 16384,
     "maxResponseBytes": 262144,
     "requestTimeoutMs": 20000,
-    "limits": {"perMinute": 20, "perHour": 200, "perDay": 1000, "maxConcurrent": 2, "unauthenticatedPerMinute": 20},
+    "limits": {"perMinute": 20, "perHour": 200, "perDay": 1000, "maxConcurrent": 2, "unauthenticatedPerMinute": 30, "bearerFailuresPerMinute": 10},
     "tokenMaxAgeDays": 30,
-    "cfAccess": {"mode": "jwt", "teamDomain": "replace-team.cloudflareaccess.com", "aud": "0000000000000000000000000000000000000000000000000000000000000000", "serviceTokenClientIdSha256": null},
+    "cfAccess": {"mode": "jwt", "teamDomain": "replace-team.cloudflareaccess.com", "aud": "0000000000000000000000000000000000000000000000000000000000000000", "serviceTokenClientIdSha256": "0000000000000000000000000000000000000000000000000000000000000000"},
     "serviceTokenHeaders": null,
-    "decisionReference": "sprint-20261007 DECISIONS item 19(c); enabling needs Lane R16 review + human account setup"
+    "decisionReference": "sprint-20261007 DECISIONS item 19(c); PRODUCTION data. Only after R16b acceptance, the synthetic acceptance pass, the classification decision and Dante's enable go"
   }
 }

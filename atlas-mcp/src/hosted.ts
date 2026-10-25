@@ -15,7 +15,10 @@ export type HostedTask = Record<string, unknown> & {id?: string; client?: string
 export type HostedItem = {id: string; title: string; due: string | null; owner: string | null; state: string; deferred?: boolean; evidence?: Evidence; task: HostedTask | null};
 // taskOnly: the hosted queue returns limited reviewed task context for meetings the actor
 // may NOT read in full (021 meeting_task_grants). Such a row never grants transcript access.
-export type HostedMeeting = {id: string; title: string; instant: string; state: string; items: HostedItem[]; taskOnly?: boolean; clientLabel?: string};
+// classification: the REQUIRED contract field for scoped release (R16 finding 2). The current
+// installed meeting_queue does not emit it, so scoped callers are withheld everything unless a
+// reviewed hosted projection adds it or a recorded decision sets classificationEnforcement=allow.
+export type HostedMeeting = {id: string; title: string; instant: string; state: string; items: HostedItem[]; taskOnly?: boolean; clientLabel?: string; classification?: string};
 export type Queue = {capability: Capability; meetings: HostedMeeting[]};
 export type Passage = {speaker: string; text: string; start: number; end: number};
 export type Context = {source: {id: string; title: string; instant: string; summary?: string; passages: Passage[]}};
@@ -47,16 +50,18 @@ export function loadTransportFromEnvFile(file: string): HostedTransport {
   return cfg;
 }
 
+/** Every read takes an optional AbortSignal: the caller's end-to-end deadline (R16 finding 7). */
 export type Hosted = {
-  capability(actor: string): Promise<Capability>;
-  list(actor: string): Promise<Queue>;
-  context(actor: string, sourceId: string): Promise<Context>;
-  documentRead(actor: string, taskId: string): Promise<DocumentResult>;
-  documentArtifact(actor: string, taskId: string, version: number): Promise<DocumentResult>;
+  capability(actor: string, signal?: AbortSignal): Promise<Capability>;
+  list(actor: string, signal?: AbortSignal): Promise<Queue>;
+  context(actor: string, sourceId: string, signal?: AbortSignal): Promise<Context>;
+  documentRead(actor: string, taskId: string, signal?: AbortSignal): Promise<DocumentResult>;
+  documentArtifact(actor: string, taskId: string, version: number, signal?: AbortSignal): Promise<DocumentResult>;
 };
 
 export function hostedClient(transport: HostedTransport, request: typeof fetch = fetch, timeoutMs = 15000): Hosted {
-  async function rpc(actor: string, fn: string, body: Record<string, unknown>): Promise<{status: number; data: unknown}> {
+  async function rpc(actor: string, fn: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<{status: number; data: unknown}> {
+    if (signal?.aborted) throw new HostedRefusal(503, 'Hosted service unavailable.');
     const action = typeof body.action === 'string' ? body.action : '';
     if (!READ_ACTIONS[fn]?.includes(action)) throw new HostedRefusal(403, 'Phase A is read-only; this hosted action is not allowed.');
     const token = transport.principals[actor];
@@ -66,7 +71,7 @@ export function hostedClient(transport: HostedTransport, request: typeof fetch =
     if (new URL(transport.url).hostname.endsWith('.supabase.co') && !headers.apikey) throw new HostedRefusal(503, 'Hosted gateway credential is not configured.');
     let response: Response;
     try {
-      response = await request(`${transport.url.replace(/\/$/, '')}/rpc/${fn}`, {method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs)});
+      response = await request(`${transport.url.replace(/\/$/, '')}/rpc/${fn}`, {method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', cache: 'no-store', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)});
     } catch { throw new HostedRefusal(503, 'Hosted service unavailable.'); }
     let data: unknown = null;
     try { data = await response.json(); } catch { data = null; }
@@ -78,26 +83,26 @@ export function hostedClient(transport: HostedTransport, request: typeof fetch =
     throw new HostedRefusal(code === '42501' || r.status === 401 || r.status === 403 ? 403 : 502, 'Hosted service refused the read.');
   };
   return {
-    async capability(actor) {
-      const cap = ok(await rpc(actor, 'meeting_capability', {})) as Capability;
+    async capability(actor, signal) {
+      const cap = ok(await rpc(actor, 'meeting_capability', {}, signal)) as Capability;
       // Same binding check as Mission Control's meetingRpc: the token must be this actor's.
       if (!cap || cap.actor !== actor) throw new HostedRefusal(403, 'Named credential binding mismatch.');
       return cap;
     },
-    async list(actor) {
-      const q = ok(await rpc(actor, 'meeting_queue', {action: 'list', payload: {}})) as Queue;
+    async list(actor, signal) {
+      const q = ok(await rpc(actor, 'meeting_queue', {action: 'list', payload: {}}, signal)) as Queue;
       if (!q || !Array.isArray(q.meetings) || q.capability?.actor !== actor) throw new HostedRefusal(403, 'Named credential binding mismatch.');
       return q;
     },
-    async context(actor, sourceId) {
-      return ok(await rpc(actor, 'meeting_queue', {action: 'context', payload: {sourceId}})) as Context;
+    async context(actor, sourceId, signal) {
+      return ok(await rpc(actor, 'meeting_queue', {action: 'context', payload: {sourceId}}, signal)) as Context;
     },
-    async documentRead(actor, taskId) {
-      const r = await rpc(actor, 'meeting_document', {action: 'read', task_id: taskId, payload: {}});
+    async documentRead(actor, taskId, signal) {
+      const r = await rpc(actor, 'meeting_document', {action: 'read', task_id: taskId, payload: {}}, signal);
       return {status: r.status, body: (r.data && typeof r.data === 'object' ? r.data : null) as Record<string, unknown> | null};
     },
-    async documentArtifact(actor, taskId, version) {
-      const r = await rpc(actor, 'meeting_document', {action: 'artifact', task_id: taskId, payload: {version}});
+    async documentArtifact(actor, taskId, version, signal) {
+      const r = await rpc(actor, 'meeting_document', {action: 'artifact', task_id: taskId, payload: {version}}, signal);
       return {status: r.status, body: (r.data && typeof r.data === 'object' ? r.data : null) as Record<string, unknown> | null};
     },
   };

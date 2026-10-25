@@ -156,6 +156,12 @@ export class CallIndex {
 
   count() { return Number((this.db.prepare('select count(distinct call_id) n from files').get() ?? {n: 0}).n); }
 
+  /** Every indexed record of a call (all searchable text), for whole-record eligibility checks. */
+  recordsFor(callId: string): {title: string; attendees: string; summary: string; analysis: string; body: string}[] {
+    return this.db.prepare('select f.title, f.attendees, f.summary, fts.analysis, fts.body from files f join fts on fts.rowid = f.id where f.call_id = ?').all(callId)
+      .map(r => ({title: String(r.title), attendees: String(r.attendees), summary: String(r.summary), analysis: String(r.analysis ?? ''), body: String(r.body ?? '')}));
+  }
+
   /** Best file for a call id (most turns), or null. */
   fileFor(callId: string): string | null {
     const row = this.db.prepare('select file from files where call_id = ? order by nturns desc, size desc limit 1').get(callId);

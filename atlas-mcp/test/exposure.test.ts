@@ -28,10 +28,12 @@ import type {Queue} from '../src/hosted.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BIN = join(here, '../bin/atlas-mcp.ts');
-const HOSTNAME = 'atlas-mcp.test-domain.invalid';
+const HOSTNAME = 'atlas-mcp.synthetic-test.example';
 const TEAM = 'testteam.cloudflareaccess.com';
 const AUD = 'a'.repeat(64);
-const SHIPPED = parseSensitivity(JSON.parse(readFileSync(join(here, '../config/sensitivity.json'), 'utf8')));
+const SHIPPED_BYTES = readFileSync(join(here, '../config/sensitivity.json'));
+const SHIPPED = parseSensitivity(JSON.parse(SHIPPED_BYTES.toString('utf8')));
+const SHIPPED_SHA = createHash('sha256').update(SHIPPED_BYTES).digest('hex');
 
 const {publicKey, privateKey} = generateKeyPairSync('rsa', {modulusLength: 2048});
 const KID = 'test-kid-1';
@@ -49,7 +51,7 @@ type Over = Partial<{limits: Record<string, number>; maxResponseBytes: number; r
 function exposureRaw(state: string, over: Over = {}): any {
   return {
     host: '127.0.0.1', port: 4029, brainCallsDir: makeBrain(), stateDir: state,
-    tokensFile: join(state, 'tokens.json'), sensitivityFile: join(state, 'sensitivity.json'), hostedTransportEnvFile: join(state, 'unused.env'),
+    tokensFile: join(state, 'tokens.json'), sensitivityFile: join(state, 'sensitivity.json'), sensitivitySha256: SHIPPED_SHA, hostedTransportEnvFile: join(state, 'unused.env'),
     principals: {grok_as_nat: {hostedActor: 'nat', scope: 'granted', label: 'Grok acting for Natalie', tools: ['whoami', 'capabilities', 'list_tasks', 'get_task']}},
     rateLimits: {toolCallsPerMinute: 600, askCallsPerHour: 0},
     askCall: {model: 'claude-sonnet-5-5', effort: 'low', maxOutputTokens: 3000, maxPromptCharacters: 300000, timeoutMs: 5000, keyFile: '/nonexistent/k', budgetFile: '/nonexistent/b', decisionReference: 'test'},
@@ -57,7 +59,7 @@ function exposureRaw(state: string, over: Over = {}): any {
       port: 48000 + Math.floor(Math.random() * 1500), publicHostname: HOSTNAME, allowedOrigins: over.allowedOrigins ?? [],
       principals: {grok_as_nat: {tools: ['whoami', 'capabilities', 'list_tasks', 'get_task']}},
       killSwitchFile: join(state, 'EXPOSURE-DISABLED'), maxBodyBytes: 4096, maxResponseBytes: over.maxResponseBytes ?? 262144, requestTimeoutMs: over.requestTimeoutMs ?? 5000,
-      limits: {perMinute: 100, perHour: 1000, perDay: 5000, maxConcurrent: 2, unauthenticatedPerMinute: 100, ...over.limits},
+      limits: {perMinute: 100, perHour: 1000, perDay: 5000, maxConcurrent: 2, unauthenticatedPerMinute: 100, bearerFailuresPerMinute: 100, ...over.limits},
       tokenMaxAgeDays: 30,
       cfAccess: over.cfAccess ?? {mode: 'jwt', teamDomain: TEAM, aud: AUD, serviceTokenClientIdSha256: createHash('sha256').update('grok-client-id.access').digest('hex')},
       serviceTokenHeaders: over.serviceTokenHeaders ?? null,
@@ -76,7 +78,7 @@ async function start(t: {skip: (m?: string) => void}, over: Over = {}, hostedDel
   hosted.list = async (actor: string): Promise<Queue> => {
     if (hostedDelayMs) await new Promise(r => setTimeout(r, hostedDelayMs));
     const q = await list(actor);
-    q.meetings.push({id: CLEAN, title: 'Bright Studio x Rhys', instant: '2026-10-20T01:00:00Z', state: 'ready', items: [{id: 'req-clean', title: 'Send Bright the onboarding checklist', due: null, owner: 'nat', state: 'approved',
+    q.meetings.push({id: CLEAN, title: 'Bright Studio x Rhys', instant: '2026-10-20T01:00:00Z', state: 'ready', classification: 'client_confidential', items: [{id: 'req-clean', title: 'Send Bright the onboarding checklist', due: null, owner: 'nat', state: 'approved',
       evidence: {quote: 'I will send the onboarding checklist tomorrow', start: 3}, task: {id: 'task-clean', title: 'Send Bright the onboarding checklist', client: 'bright', owner: 'nat', source_quote: 'I will send the onboarding checklist tomorrow'}}]});
     return q;
   };
@@ -215,7 +217,7 @@ test('Cloudflare Access JWT: required, signature, aud, iss, expiry, service-toke
     assert.ok(s.jwksFetches >= 1 && s.jwksFetches <= 3, 'JWKS fetched once and cached (bounded refetch for unknown kids)');
   });
   // JWKS unavailable on first use: refuse.
-  const v = new CfAccessVerifier({mode: 'jwt', teamDomain: TEAM, aud: AUD, serviceTokenClientIdSha256: null}, async () => { throw Error('down'); });
+  const v = new CfAccessVerifier({mode: 'jwt', teamDomain: TEAM, aud: AUD, serviceTokenClientIdSha256: 'b'.repeat(64)}, async () => { throw Error('down'); });
   assert.equal(await v.verifyJwt(jwt()), false);
   // Access check before the bearer: a valid JWT with a bad bearer is still 401, and vice versa 403.
   await withS(t, {}, async s => {
@@ -232,9 +234,12 @@ test('optional service-token header digests (constant time); off by default', as
     assert.equal((await s.send(s.rpc('tools/list'), {...s.auth, 'cf-access-client-id': id, 'cf-access-client-secret': 'wrong'})).status, 403);
     assert.equal((await s.send(s.rpc('tools/list'), {...s.auth, 'cf-access-client-id': id, 'cf-access-client-secret': secret})).status, 200);
   });
-  await withS(t, {cfAccess: {mode: 'off'}}, async s => {
-    assert.equal((await s.send(s.rpc('tools/list'), {...s.auth, 'cf-access-jwt-assertion': undefined})).status, 200, 'mode off relies on the edge + cloudflared access.required');
-  });
+  // R16: Access verification cannot be switched off, and the dedicated service-token identity is required.
+  const state = mkdtempSync(join(tmpdir(), 'atlas-exposure-off-'));
+  for (const cf of [{mode: 'off'}, {mode: 'jwt', teamDomain: TEAM, aud: AUD, serviceTokenClientIdSha256: null}]) {
+    const raw = exposureRaw(state); raw.exposure.cfAccess = cf;
+    assert.throws(() => parseConfig(raw), /cfAccess/);
+  }
 });
 
 // ---------- bearer tokens ----------
@@ -259,8 +264,8 @@ test('bearer: missing, malformed, unknown, revoked, expired, no-expiry, over-age
   });
 });
 
-test('unauthenticated attempts are rate limited globally', async t => {
-  await withS(t, {limits: {unauthenticatedPerMinute: 3}}, async s => {
+test('bearer failures have their own limit', async t => {
+  await withS(t, {limits: {bearerFailuresPerMinute: 3}}, async s => {
     const statuses = [];
     for (let i = 0; i < 5; i++) statuses.push((await s.send(s.rpc('tools/list'), {...s.auth, authorization: `Bearer ${newToken()}`})).status);
     assert.deepEqual(statuses, [401, 401, 401, 429, 429]);
@@ -385,7 +390,7 @@ test('audit: schema-bound rows for every outcome, no token, JWT, header value, b
       assert.ok(!/SENTINEL|onboarding checklist|Bright|evil\.example|yyyy/.test(log), 'no body, header or result text');
     }
     const rows = httpLog.trim().split('\n').map(l => JSON.parse(l));
-    for (const r of rows) assert.deepEqual(Object.keys(r).sort(), ['at', 'bytesIn', 'bytesOut', 'cfRay', 'kind', 'method', 'ms', 'principal', 'reason', 'status']);
+    for (const r of rows) assert.deepEqual(Object.keys(r).sort(), ['at', 'bytesIn', 'bytesOut', 'cfRay', 'kind', 'method', 'ms', 'principal', 'reason', 'status', 'suppressed']);
     assert.deepEqual(rows.map(r => r.reason), ['ok', 'ok', 'ok', 'unauthorized', 'bad_host', 'too_large', 'killed']);
     assert.ok(rows.every(r => ['grok_as_nat', null].includes(r.principal)));
   });

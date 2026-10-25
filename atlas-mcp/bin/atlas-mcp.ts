@@ -23,8 +23,8 @@ import {loadConfig} from '../src/config.ts';
 import {assemble, listen, readTokenFile, runStdio} from '../src/server.ts';
 import {CallIndex} from '../src/call-index.ts';
 import {mintEntry, readRegistry, revokePrincipal, writeRegistry} from '../src/auth.ts';
-import {loadSensitivity} from '../src/sensitivity.ts';
-import {engageKill, killed, listenExposure, releaseKill, requireExposure} from '../src/exposure.ts';
+import {PolicySource} from '../src/sensitivity.ts';
+import {assertDeployable, checkAuditSink, engageKill, killed, listenExposure, releaseKill, requireExposure} from '../src/exposure.ts';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -99,9 +99,13 @@ async function main() {
     return;
   }
   if (cmd === 'policy-check') {
-    const p = loadSensitivity(config.sensitivityFile).spec;
-    console.log(JSON.stringify({version: p.version, topics: p.topics.length, terms: p.topics.reduce((n, t) => n + t.terms.length, 0), patterns: p.patterns.length,
-      classifications: p.classifications, excluded: Object.fromEntries(Object.entries(p.excluded).map(([k, v]) => [k, v.length])),
+    // The same validation the server applies on every scoped call (owner-only file, strict
+    // schema, optional SHA-256 pin). Counts and the content hash only.
+    const st = PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current();
+    if (!st) throw Error('sensitivity policy invalid, insecure, missing or not matching sensitivitySha256: scoped callers are refused');
+    const p = st.policy.spec;
+    console.log(JSON.stringify({sha256: st.sha256, pinned: !!config.sensitivitySha256, version: p.version, topics: p.topics.length, terms: p.topics.reduce((n, t) => n + t.terms.length, 0), patterns: p.patterns.length,
+      classifications: p.classifications, unclassified: config.classificationEnforcement.unclassified, excluded: Object.fromEntries(Object.entries(p.excluded).map(([k, v]) => [k, v.length])),
       principals: Object.fromEntries(Object.entries(p.principals).map(([k, v]) => [k, {posture: v.posture, fullCallClients: v.fullCallClients.length}]))}));
     return;
   }
@@ -120,6 +124,11 @@ async function main() {
   if (cmd === 'exposure-resume') {
     const e = requireExposure(config);
     if (!flag('confirm')) throw Error('--confirm required');
+    // No stale-policy resume: deployable config, a valid pinned policy and a writable audit
+    // sink are re-verified before the kill switch is released.
+    assertDeployable(config);
+    if (!PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current()) throw Error('sensitivity policy invalid or not matching the pin: not resuming');
+    checkAuditSink(join(config.stateDir, 'exposure-audit.jsonl'));
     releaseKill(e);
     console.log(JSON.stringify({killed: killed(e)}));
     return;
@@ -129,19 +138,21 @@ async function main() {
     const reg = readRegistry(config.tokensFile);
     const now = Date.now();
     const active = reg.tokens.filter(t => !t.revoked && (t.expires === undefined || Date.parse(t.expires) > now));
-    let policy: string;
-    try { policy = loadSensitivity(config.sensitivityFile).spec.version; } catch { policy = 'INVALID (scoped callers refused)'; }
-    console.log(JSON.stringify({killed: killed(e), publicHostname: e.publicHostname, port: e.port, cfAccess: e.cfAccess.mode, serviceTokenHeaders: !!e.serviceTokenHeaders, policy,
-      principals: Object.fromEntries(Object.entries(e.principals).map(([k, v]) => [k, {tools: v.tools, activeTokens: active.filter(t => t.principal === k).map(t => ({sha256Prefix: t.sha256.slice(0, 12), expires: t.expires ?? null}))}]))}));
+    const st = PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current();
+    let deployable = 'yes';
+    try { assertDeployable(config); } catch (err) { deployable = err instanceof Error ? err.message.replace(/^atlas_mcp_exposure_not_deployable:/, 'no: ') : 'no'; }
+    console.log(JSON.stringify({killed: killed(e), hostedSource: config.hostedSource.mode, publicHostname: e.publicHostname, port: e.port, cfAccess: e.cfAccess.mode, serviceTokenHeaders: !!e.serviceTokenHeaders,
+      policy: st ? {sha256: st.sha256, version: st.policy.spec.version, pinned: !!config.sensitivitySha256} : 'INVALID (scoped callers refused)', unclassified: config.classificationEnforcement.unclassified, deployable,
+      principals: Object.fromEntries(Object.entries(e.principals).map(([k, v]) => [k, {hostedActor: config.principals[k].hostedActor, tools: v.tools, activeTokens: active.filter(t => t.principal === k).map(t => ({sha256Prefix: t.sha256.slice(0, 12), expires: t.expires ?? null}))}]))}));
     return;
   }
   if (cmd === 'exposure-http') {
-    requireExposure(config);
-    loadSensitivity(config.sensitivityFile); // refuse to start without a valid reviewed policy
-    // The exposed tools never touch the call index or brain: no refresh at start.
+    assertDeployable(config); // no placeholders, pinned policy, dedicated Access identity
+    if (!PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current()) throw Error('sensitivity policy invalid or not matching the pin: not starting');
+    // No index refresh: sensitivity decisions read the brain directory directly (BrainFiles).
     const a = assemble({config, refreshIndex: false});
     const srv = await listenExposure(a);
-    log({event: 'exposure_listening', host: '127.0.0.1', port: config.exposure!.port, killed: killed(config.exposure!)});
+    log({event: 'exposure_listening', host: '127.0.0.1', port: config.exposure!.port, hostedSource: config.hostedSource.mode, killed: killed(config.exposure!)});
     const stop = () => { srv.close(); log({event: 'exposure_stopped'}); process.exit(0); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;

@@ -22,8 +22,8 @@ import type {RateLimiter} from './auth.ts';
 import {maskJson, maskText, maskTurns, type MaskCounter} from './mask.ts';
 import {parseNote, type Turn} from './notes.ts';
 import {runAsk} from './ask-call.ts';
-import type {SensitivityPolicy} from './sensitivity.ts';
-import {relative} from 'node:path';
+import type {PolicySource, PolicyState, SensitivityPolicy} from './sensitivity.ts';
+import type {BrainFiles} from './brain-files.ts';
 
 export const SERVER_INFO = {name: 'atlas-mcp', title: 'Atlas (Rhys AI) — Phase A, read-only', version: '0.1.0'};
 
@@ -109,12 +109,15 @@ function validate(def: ToolDef, args: unknown): Record<string, string | number> 
 export type Deps = {
   config: McpConfig; budget: Budget; hosted: Hosted; index: CallIndex; audit: AuditLog; ledger: BudgetLedger; limiter: RateLimiter;
   askKey?: (signal: AbortSignal) => Promise<string>; askTransport?: typeof fetch;
-  /** The reviewed sensitivity policy; null when it could not be loaded (scoped callers then get nothing). */
-  sensitivity: SensitivityPolicy | null;
+  /** The reviewed sensitivity policy, re-read and validated on every scoped call and at release. */
+  sensitivity: PolicySource;
+  /** Authoritative brain-note metadata for path exclusions and whole-record checks (not the search cache). */
+  brain: BrainFiles;
 };
 /** policy: the sensitivity policy for scoped callers; null for the owner (never affected). */
-type Ctx = {principal: string; p: PrincipalConfig; cap: Capability; counter: MaskCounter; ids: string[]; costMicros: number; policy: SensitivityPolicy | null; tools: ToolName[]};
-export type CallOpts = {toolCeiling?: readonly ToolName[]};
+type Ctx = {principal: string; p: PrincipalConfig; cap: Capability; counter: MaskCounter; ids: string[]; costMicros: number; policy: SensitivityPolicy | null; tools: ToolName[]; signal?: AbortSignal};
+/** toolCeiling: transport narrowing (exposure). signal: the end-to-end deadline; aborted work releases nothing. */
+export type CallOpts = {toolCeiling?: readonly ToolName[]; signal?: AbortSignal};
 
 const firefliesLink = (id: string) => (/^[A-Za-z0-9_-]{6,64}$/.test(id) ? `https://app.fireflies.ai/view/${id}` : null);
 const usd = (micros: number) => Math.round(micros) / 1e6;
@@ -139,6 +142,20 @@ function taskViews(queue: Queue, counter: MaskCounter) {
 }
 const publicTask = <T extends {_item: unknown; _meeting: unknown}>(t: T) => { const {_item, _meeting, ...rest} = t; void _item; void _meeting; return rest; };
 
+type TaskView = ReturnType<typeof taskViews>[number];
+/**
+ * The ONE authoritative release decision for a request (R16 findings 1-4), computed before any
+ * output is selected:
+ *  - visible: tasks whose task-level fields may be released;
+ *  - full / fullIds: meetings whose transcript-derived output (quotes, drafts, search, ask)
+ *    may be released. For a scoped caller that needs ALL of: not task-only; classification
+ *    resolved and not denylisted; no excluded id/client/path; no denylisted meeting text; no
+ *    withheld task on the same call; a per-client full-call grant; and every brain note and
+ *    index record of the call free of denylisted text.
+ */
+type Decision = {queue: Queue; visible: TaskView[]; full: HostedMeeting[]; fullIds: 'all' | Set<string>};
+const CLASSIFICATION = /^[a-z][a-z_]{1,40}$/;
+
 export class AtlasMcp {
   deps: Deps;
   constructor(deps: Deps) { this.deps = deps; }
@@ -155,6 +172,10 @@ export class AtlasMcp {
     return TOOL_DEFS.filter(d => allowed.includes(d.name));
   }
 
+  private guard(signal?: AbortSignal) {
+    if (signal?.aborted) throw new ToolRefusal('cancelled', 'The request was cancelled.');
+  }
+
   async callTool(principal: string, name: string, rawArgs: unknown, transport: 'http' | 'stdio' | 'test' | 'exposure', opts: CallOpts = {}) {
     const started = Date.now();
     const ctxBase = {principal, counter: {spans: 0}, ids: [] as string[], costMicros: 0};
@@ -169,23 +190,29 @@ export class AtlasMcp {
       // Per-principal allowlist, enforced here in tools/call (not only in discovery).
       const tools = this.effectiveTools(principal, opts.toolCeiling);
       if (!tools.includes(d.name)) throw new ToolRefusal('forbidden', 'This tool is not enabled for this caller.');
-      // Scoped callers are ALWAYS subject to the sensitivity policy; without a valid policy
-      // (or a posture for this principal) they get nothing. The owner is never affected.
-      let policy: SensitivityPolicy | null = null;
+      // Scoped callers are ALWAYS subject to the CURRENT validated sensitivity policy, re-read
+      // now and again at release; without one (or without a posture) they get nothing.
+      let state: PolicyState | null = null;
       if (p.scope !== 'owner') {
-        policy = this.deps.sensitivity;
-        if (!policy || !policy.posture(principal)) throw new ToolRefusal('not_available', 'Not available to this caller.');
+        state = this.deps.sensitivity.current();
+        if (!state || !state.policy.posture(principal)) throw new ToolRefusal('not_available', 'Not available to this caller.');
       }
       if (!this.deps.limiter.take(`tool:${principal}`, this.deps.config.rateLimits.toolCallsPerMinute, 60_000)) throw new ToolRefusal('rate_limited', 'Too many requests; try again in a minute.');
       const args = validate(d, rawArgs);
+      this.guard(opts.signal);
       // Server-side hosted authorisation on every call, with this principal's own credential.
-      const cap = await this.deps.hosted.capability(p.hostedActor);
+      const cap = await this.deps.hosted.capability(p.hostedActor, opts.signal);
       if (p.scope === 'owner' && !(cap.review && cap.rhysActor === cap.actor)) throw new ToolRefusal('forbidden', 'Owner scope is not confirmed by the hosted service for this caller.');
-      ctx = {...ctxBase, p, cap, policy, tools};
+      ctx = {...ctxBase, p, cap, policy: state?.policy ?? null, tools, signal: opts.signal};
       result = await this.run(ctx, d.name, args);
-      if (policy) {
-        // Final safety net over every free-text value of the response, for every tool.
-        if (d.name !== 'whoami' && d.name !== 'capabilities' && policy.scan(result)) throw new Withheld(d.name === 'ask_call' ? NOT_FOUND_CALL : NOT_FOUND_TASK, EMPTY[d.name]);
+      this.guard(opts.signal);
+      if (state) {
+        // Release boundary: the policy in force NOW must be the one this result was computed
+        // under (deleted, insecure, edited or re-pinned policy => nothing is released).
+        const now = this.deps.sensitivity.current();
+        if (!now || now.sha256 !== state.sha256 || !now.policy.posture(principal)) throw new ToolRefusal('not_available', 'Not available to this caller.');
+        // Final safety net over every free-text value of the response, for every data tool.
+        if (d.name !== 'whoami' && d.name !== 'capabilities' && state.policy.scan(result)) throw new Withheld(d.name === 'ask_call' ? NOT_FOUND_CALL : NOT_FOUND_TASK, EMPTY[d.name]);
         result = {...result, sharingPolicy: SHARING_NOTE};
       }
     } catch (e) {
@@ -199,6 +226,7 @@ export class AtlasMcp {
       else { outcome = 'error'; reason = 'internal'; result = {error: 'internal', message: 'The request could not be completed; no diagnostic text was returned.'}; }
     }
     // Schema-bound audit: only a known tool enum is ever written; a rejected name is hashed.
+    // A failing audit write throws: callers (exposure) then release nothing.
     const known = (TOOL_NAMES as readonly string[]).includes(name);
     this.deps.audit.write({
       at: new Date().toISOString(), principal, transport, tool: known ? name : 'unknown_tool',
@@ -208,63 +236,69 @@ export class AtlasMcp {
     return {isError: outcome !== 'ok', structured: result};
   }
 
-  /**
-   * Full-call read permission ONLY. A taskOnly queue row (reviewed task context for a meeting
-   * the actor may not read) contributes nothing here: it never unlocks brain search, summaries,
-   * snippets, hosted transcript reads or model input. Task fields stay available via list_tasks.
-   */
-  private async allowedCalls(ctx: Ctx): Promise<{queue: Queue; full: HostedMeeting[]; allowed: 'all' | Set<string>}> {
-    const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-    let full = queue.meetings.filter(m => m.taskOnly !== true);
-    // Scoped callers: further narrowed by the sensitivity policy and per-client full-call grants.
-    if (ctx.policy) full = this.fullCallMeetings(ctx, queue, full);
-    return {queue, full, allowed: ctx.p.scope === 'owner' ? 'all' : new Set(full.map(m => m.id))};
+  /** Meeting-level withholding: classification, exclusions, paths and meeting text. */
+  private meetingBlocked(ctx: Ctx, m: HostedMeeting, paths: string[]): boolean {
+    const pol = ctx.policy!;
+    const mm = m as HostedMeeting & Record<string, unknown>;
+    const cls = mm.classification;
+    if (typeof cls !== 'string' || !CLASSIFICATION.test(cls)) {
+      if (this.deps.config.classificationEnforcement.unclassified === 'withhold') return true;
+    }
+    if (pol.excludedFacts({callId: m.id, clients: [m.clientLabel], classifications: [cls, mm.sensitivity], brainPaths: paths})) return true;
+    return pol.scan({title: m.title, clientLabel: m.clientLabel});
   }
 
-  private brainPath(callId: string): string | null {
-    const f = this.deps.index.fileFor(callId);
-    return f ? relative(this.deps.config.brainCallsDir, f) : null;
-  }
-
-  /** Sensitivity check of one task view against the RAW (pre-mask) hosted record. */
-  private taskWithheld(ctx: Ctx, t: ReturnType<typeof taskViews>[number]): boolean {
-    const pol = ctx.policy;
-    if (!pol) return false;
-    const m = t._meeting as HostedMeeting & Record<string, unknown>;
+  /** Task-level withholding against the RAW (pre-mask) hosted record. */
+  private taskWithheld(ctx: Ctx, t: TaskView): boolean {
+    const pol = ctx.policy!;
     const it = t._item as HostedItem & Record<string, unknown>;
     const task = (it.task ?? {}) as HostedTask;
     if (pol.excludedFacts({
-      callId: m.id, taskIds: [t.taskId, t.requestId], clients: [t.client, m.clientLabel, task.client],
-      classifications: [m.classification, m.sensitivity, it.classification, it.sensitivity, task.classification, task.sensitivity],
-      brainPath: this.brainPath(m.id),
+      callId: t.source.callId, taskIds: [t.taskId, t.requestId], clients: [t.client, task.client],
+      classifications: [it.classification, it.sensitivity, task.classification, task.sensitivity],
     })) return true;
-    return pol.scan({meeting: {title: m.title, clientLabel: m.clientLabel}, item: {title: it.title, evidence: it.evidence}, task});
+    return pol.scan({item: {title: it.title, evidence: it.evidence}, task});
   }
 
-  /** The tasks of a queue this caller may see (sensitivity-withheld ones removed). */
-  private visibleTasks(ctx: Ctx, queue: Queue) {
-    return taskViews(queue, ctx.counter).filter(t => !this.taskWithheld(ctx, t));
+  /** Every brain note (authoritative files) and index record of a call is free of denylisted text. */
+  private brainClean(ctx: Ctx, callId: string, paths: string[]): boolean {
+    const pol = ctx.policy!;
+    for (const rel of paths) {
+      const n = this.deps.brain.note(rel);
+      if (!n) return false;
+      if (pol.scan({title: n.title, attendees: n.attendees, summary: n.summary, analysis: n.analysis, turns: n.turns.map(t => [t.speaker, t.text])})) return false;
+    }
+    for (const r of this.deps.index.recordsFor(callId)) if (pol.scan(r)) return false;
+    return true;
   }
 
-  /**
-   * Full-call meetings a scoped caller may use for transcript-derived output (search, quotes,
-   * drafts, ask_call): only with a per-client full-call grant, and never for a meeting with
-   * an excluded id/client/classification/path or any withheld task. The owner keeps all.
-   */
-  private fullCallMeetings(ctx: Ctx, queue: Queue, full: HostedMeeting[]): HostedMeeting[] {
+  private async decide(ctx: Ctx): Promise<Decision> {
+    this.guard(ctx.signal);
+    const queue = await this.deps.hosted.list(ctx.p.hostedActor, ctx.signal);
+    this.guard(ctx.signal);
+    const views = taskViews(queue, ctx.counter);
     const pol = ctx.policy;
-    if (!pol) return full;
-    const views = taskViews(queue, {spans: 0});
-    return full.filter(m => {
+    if (!pol) return {queue, visible: views, full: queue.meetings.filter(m => m.taskOnly !== true), fullIds: 'all'};
+    // Brain paths come from the brain directory itself, never from the search cache. If it
+    // cannot be read and the policy has path rules, nothing is released.
+    const brain = this.deps.brain.snapshot();
+    if (!brain && pol.needsBrainPaths()) return {queue, visible: [], full: [], fullIds: new Set()};
+    const pathsOf = (id: string) => brain?.get(id) ?? [];
+    const blocked = new Set(queue.meetings.filter(m => this.meetingBlocked(ctx, m, pathsOf(m.id))).map(m => m.id));
+    const withheld = new Set(views.filter(v => blocked.has(v.source.callId) || this.taskWithheld(ctx, v)));
+    const visible = views.filter(v => !withheld.has(v));
+    const full = queue.meetings.filter(m => {
+      if (m.taskOnly === true || blocked.has(m.id)) return false;
       const mine = views.filter(v => v.source.callId === m.id);
+      if (mine.some(v => withheld.has(v))) return false;
       const client = mine.find(v => v.client)?.client ?? m.clientLabel ?? null;
       if (!pol.fullCallGranted(ctx.principal, client)) return false;
-      if (mine.some(v => this.taskWithheld(ctx, v))) return false;
-      const mm = m as HostedMeeting & Record<string, unknown>;
-      return !pol.excludedFacts({callId: m.id, clients: [m.clientLabel, client], classifications: [mm.classification, mm.sensitivity], brainPath: this.brainPath(m.id)})
-        && !pol.scan({title: m.title, clientLabel: m.clientLabel});
+      return this.brainClean(ctx, m.id, pathsOf(m.id));
     });
+    return {queue, visible, full, fullIds: new Set(full.map(m => m.id))};
   }
+
+  private fullCall(dec: Decision, callId: string) { return dec.fullIds === 'all' || dec.fullIds.has(callId); }
 
   private async run(ctx: Ctx, name: ToolName, args: Record<string, string | number>): Promise<Record<string, unknown>> {
     const {config, budget, ledger, index} = this.deps;
@@ -294,8 +328,7 @@ export class AtlasMcp {
           ...(ctx.p.scope === 'owner' ? {indexedCalls: index.count()} : {}),
         };
       case 'list_tasks': {
-        const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        let tasks = this.visibleTasks(ctx, queue);
+        let tasks = (await this.decide(ctx)).visible;
         if (args.owner) tasks = tasks.filter(t => (t.owner ?? '').toLowerCase() === String(args.owner).toLowerCase());
         if (args.status) tasks = tasks.filter(t => [t.requestState, t.workStatus].includes(String(args.status).toLowerCase()));
         if (args.client) tasks = tasks.filter(t => (t.client ?? '').toLowerCase().includes(String(args.client).toLowerCase()));
@@ -304,13 +337,12 @@ export class AtlasMcp {
         return {count: limited.length, totalMatching: tasks.length, tasks: limited};
       }
       case 'get_task': {
-        const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        const t = this.visibleTasks(ctx, queue).find(x => x.taskId === args.id || x.requestId === args.id);
+        const dec = await this.decide(ctx);
+        const t = dec.visible.find(x => x.taskId === args.id || x.requestId === args.id);
         if (!t) throw new ToolRefusal('not_found', NOT_FOUND_TASK);
         ctx.ids.push(t.id);
-        // task_fields_only posture: no call quotes and no draft read unless this client has a
-        // full-call grant from Rhys (none exist today).
-        const fullCall = !ctx.policy || ctx.policy.fullCallGranted(ctx.principal, t.client);
+        // Quotes and the draft read follow the SAME full-call decision as search and ask.
+        const fullCall = this.fullCall(dec, t.source.callId);
         const ev = fullCall ? t._item.evidence ?? {} : {};
         const task = (t._item.task ?? {}) as HostedTask;
         const draft = !fullCall ? {available: false, reason: 'Not available to this caller.'}
@@ -327,14 +359,15 @@ export class AtlasMcp {
         };
       }
       case 'get_draft': {
-        const queue = await this.deps.hosted.list(ctx.p.hostedActor);
-        const t = this.visibleTasks(ctx, queue).find(x => x.taskId === args.task_id);
+        const dec = await this.decide(ctx);
+        const t = dec.visible.find(x => x.taskId === args.task_id);
         if (!t || !t.taskId) throw new ToolRefusal('not_found', NOT_FOUND_TASK);
-        if (ctx.policy && !ctx.policy.fullCallGranted(ctx.principal, t.client)) throw new Withheld(NOT_FOUND_TASK);
+        if (!this.fullCall(dec, t.source.callId)) throw new Withheld(NOT_FOUND_TASK);
         ctx.ids.push(t.taskId);
         const status = await this.draftStatus(ctx, t.taskId);
         if (!status.available || !status.currentVersion) return {taskId: t.taskId, ...status, draft: null};
-        const art = await this.deps.hosted.documentArtifact(ctx.p.hostedActor, t.taskId, status.currentVersion);
+        this.guard(ctx.signal);
+        const art = await this.deps.hosted.documentArtifact(ctx.p.hostedActor, t.taskId, status.currentVersion, ctx.signal);
         if (art.status !== 200 || !art.body) return {taskId: t.taskId, ...status, draft: null, reason: 'The current draft version could not be read (authority changed or not permitted).'};
         const content = maskJson(art.body.content ?? null, ctx.counter) as Record<string, unknown> | null;
         const facts = content && Array.isArray(content.facts) ? content.facts : [];
@@ -343,17 +376,19 @@ export class AtlasMcp {
       case 'search_calls': {
         // A denylisted query or client gets the ordinary empty result (same as no match).
         if (ctx.policy && (ctx.policy.textHits(args.query) || ctx.policy.textHits(args.client) || ctx.policy.clientExcluded(args.client))) throw new Withheld(NOT_FOUND_CALL, EMPTY.search_calls);
-        const {full, allowed} = await this.allowedCalls(ctx);
+        const dec = await this.decide(ctx);
+        const full = dec.full;
         const limit = Number(args.limit ?? 8);
         const clientOf = new Map<string, string>();
         for (const m of full) for (const it of m.items ?? []) if (it.task?.client) clientOf.set(m.id, maskText(String(it.task.client), ctx.counter));
         const clientCallIds = args.client ? new Set([...clientOf].filter(([, c]) => c.toLowerCase().includes(String(args.client).toLowerCase())).map(([id]) => id)) : undefined;
+        // Eligibility is decided BEFORE ranking and limiting: only released calls compete, so a
+        // withheld call can never displace or change a visible result (R16 finding 4).
         const hits: (CallHit & {client: string | null; source: string})[] = index.search({
-          query: String(args.query), from: args.from as string | undefined, to: args.to as string | undefined, limit, client: args.client as string | undefined, clientCallIds, allowed,
-        }).map(h => ({...h, client: clientOf.get(h.callId) ?? null, source: 'brain'}))
-          // Per-hit sensitivity check: any denylisted text or path drops the whole hit.
-          .filter(h => !ctx.policy || !(ctx.policy.scan({title: h.title, summary: h.summary, attendees: h.attendees, quotes: h.quotes, client: h.client})
-            || ctx.policy.excludedFacts({callId: h.callId, clients: [h.client], brainPath: this.brainPath(h.callId)})));
+          query: String(args.query), from: args.from as string | undefined, to: args.to as string | undefined, limit, client: args.client as string | undefined, clientCallIds, allowed: dec.fullIds,
+        }).map(h => ({...h, client: clientOf.get(h.callId) ?? null, source: 'brain',
+          // Whole records are already clean; a clipped snippet that forms a denylisted word is dropped.
+          quotes: ctx.policy ? h.quotes.filter(q => !ctx.policy!.scan(q)) : h.quotes}));
         // Hosted catalog calls this caller may see that are not (yet) in the brain: title match only.
         const terms = queryTerms(String(args.query));
         for (const m of full) {
@@ -372,14 +407,16 @@ export class AtlasMcp {
         if (!this.deps.limiter.take(`ask:${ctx.principal}`, config.rateLimits.askCallsPerHour, 3_600_000)) throw new ToolRefusal('rate_limited', 'ask_call hourly limit reached for this caller.');
         // A denylisted question is refused exactly like an unknown call, before any read or spend.
         if (ctx.policy && ctx.policy.textHits(args.question)) throw new Withheld(NOT_FOUND_CALL);
-        const {full, allowed} = await this.allowedCalls(ctx);
+        const dec = await this.decide(ctx);
         const id = String(args.call_id);
         // Same refusal for unknown, ungranted, task-only and withheld ids, before any hosted read or dispatch.
-        if (allowed !== 'all' && !allowed.has(id)) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
-        const source = await this.callSource(ctx, full, id);
+        if (!this.fullCall(dec, id)) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
+        const source = await this.callSource(ctx, dec.full, id);
         if (!source) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
-        if (ctx.policy && (ctx.policy.scan(source.meta) || ctx.policy.excludedFacts({callId: id, brainPath: this.brainPath(id)}))) throw new Withheld(NOT_FOUND_CALL);
+        // The whole source (hosted passages included) is checked BEFORE dispatch: no spend, no release.
+        if (ctx.policy && ctx.policy.scan({meta: source.meta, turns: source.turns.map(t => [t.speaker, t.text])})) throw new Withheld(NOT_FOUND_CALL);
         ctx.ids.push(id);
+        this.guard(ctx.signal);
         const r = await runAsk({cfg: config.askCall, budget, ledger, principal: ctx.principal, meta: source.meta, turns: source.turns, question: String(args.question), key: this.deps.askKey, transport: this.deps.askTransport, counter: ctx.counter});
         ctx.costMicros = r.costMicros;
         const base = {callId: id, title: source.meta.title, date: source.meta.date, link: firefliesLink(id), transcriptSource: source.kind, costUsd: usd(r.costMicros), latencyMs: r.latencyMs};
@@ -400,8 +437,9 @@ export class AtlasMcp {
       // Hosted transcript (has timestamps), read with this caller's own hosted credential.
       // A hosted refusal is final: same "not found", and no fallback to the brain copy.
       let c;
-      try { c = await this.deps.hosted.context(ctx.p.hostedActor, id); } catch (e) {
-        if (e instanceof HostedRefusal) throw new ToolRefusal('not_found', 'No call with that id is visible to this caller.');
+      this.guard(ctx.signal);
+      try { c = await this.deps.hosted.context(ctx.p.hostedActor, id, ctx.signal); } catch (e) {
+        if (e instanceof HostedRefusal) throw new ToolRefusal('not_found', NOT_FOUND_CALL);
         throw e;
       }
       const passages = Array.isArray(c?.source?.passages) ? c.source.passages : [];
@@ -420,7 +458,8 @@ export class AtlasMcp {
   }
 
   private async draftStatus(ctx: Ctx, taskId: string): Promise<{available: boolean; reason?: string; status?: string; currentVersion?: number; title?: string; owner?: string; reviewer?: string}> {
-    const r = await this.deps.hosted.documentRead(ctx.p.hostedActor, taskId);
+    this.guard(ctx.signal);
+    const r = await this.deps.hosted.documentRead(ctx.p.hostedActor, taskId, ctx.signal);
     if (r.status === 401 || r.status === 403) return {available: false, reason: 'Draft access is not provisioned for this caller yet (the hosted service refused the read).'};
     if (r.status !== 200 || !r.body) return {available: false, reason: 'Draft status could not be read.'};
     if (r.body.available !== true) return {available: false, reason: typeof r.body.reason === 'string' ? maskText(r.body.reason.slice(0, 2000), ctx.counter).slice(0, 300) : 'No draft is set up for this task.'};

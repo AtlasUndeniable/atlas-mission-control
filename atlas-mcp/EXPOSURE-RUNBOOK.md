@@ -1,213 +1,186 @@
-# Atlas MCP exposure runbook: Natalie's Grok (grok_as_nat), Lane X
+# Atlas MCP exposure runbook: Natalie's Grok (grok_as_nat), Lane X / X2
 
-**Status: PREPARED ONLY. Nothing is exposed.** No Cloudflare or Tailscale account was created, no DNS was changed, no tunnel was started, the launchd job is not loaded and no token was minted for exposure. Authority: sprint-20261007 DECISIONS item 19(c) (build), with items 14(b) and 15 for context. **Enabling needs:** an independent review of the exact commit (Lane R16, gpt-6-astra), Dante's enable decision, and the human account steps below. Nothing is sent to Natalie until R16 accepts (item 19(c)).
+**Status: PREPARED ONLY. Nothing is exposed.** No account was created, no DNS changed, no tunnel started, no launchd job loaded, no exposure token minted. Authority: sprint-20261007 DECISIONS item 19(c) (build) and item 20 (policy list approved as built; L3 clients; task details may transit Cloudflare to Grok/xAI). **Lane R16 rejected the first candidate; X2 is the successor and needs Lane R16b acceptance.** Then, in this order: the classification decision (section 1), Rhys's written confirmation (item 20), Dante's enable decision, a **synthetic** remote acceptance pass (section 7), and only then a separately authorized switch to real data (section 8). Nothing is sent to Natalie before all of that.
 
-What Grok gets, once enabled: principal `grok_as_nat` (hosted actor `nat`), tools `whoami`, `capabilities`, `list_tasks` and `get_task` only. It sees task-level fields for clients Rhys has granted to Nat, never call quotes, transcript search, drafts or `ask_call` (no per-client full-call grant exists), and never anything the sensitivity policy (`config/sensitivity.json`) withholds. **Today Nat has no client grants, so Grok will see zero tasks** until Rhys grants clients from Nat's categorized L3 list.
+What Grok gets once enabled on real data: principal `grok_as_nat` (hosted actor `nat`), tools `whoami`, `capabilities`, `list_tasks`, `get_task` only; task-level fields only (no quotes, search, drafts, `ask_call`; no full-call grants exist); never anything the sensitivity policy withholds; never a record whose classification is unresolved (see section 1).
+
+**Real scope is NOT empty.** The installed client-mapping state (INSTALL-029 post-use capture, 2026-10-25T02:00Z, as verified by R16) records **121 active Nat workspace-client grants** and Nat's resolver active. A grant is not proof that a call/task is visible or that the client is level 3. A separate read-only audit of Nat's real grants against the approved L3 list is running; its result, not this runbook, defines the expected real scope. This lane changes no grant.
 
 ## Architecture
 
 ```
 Grok (xAI cloud)
-  │  HTTPS  POST https://<HOSTNAME>/mcp
-  │  headers: CF-Access-Client-Id, CF-Access-Client-Secret   (Cloudflare Access service token)
+  │  HTTPS POST https://<HOSTNAME>/mcp
+  │  headers: CF-Access-Client-Id, CF-Access-Client-Secret   (Access service token)
   │           Authorization: Bearer <grok_as_nat token>        (Atlas)
   ▼
-Cloudflare edge: Access application on <HOSTNAME>, policy "Service Auth" = the Grok service token only
-  │  (refuses everything else; adds Cf-Access-Jwt-Assertion)
+Cloudflare edge: Access app on <HOSTNAME>/mcp, one Service Auth policy (the Grok token),
+                 mandatory rate-limiting rule; adds Cf-Access-Jwt-Assertion
   ▼
-cloudflared on the Mac (outbound-only named tunnel; ingress /mcp only; access.required + audTag)
+cloudflared, user LaunchAgent ai.atlas.cloudflared-atlas-mcp-grok, named tunnel atlas-mcp-grok
+  (ingress /mcp only, access.required + audTag; credentials file, no token on the command line)
   ▼
-atlas-mcp exposure-http on 127.0.0.1:4020 (launchd job ai.atlas.atlas-mcp-exposure)
-  kill switch → loopback peer → Host == <HOSTNAME> → no Origin → POST /mcp → size cap
-  → Access JWT verify (team JWKS, aud, iss, exp, service-token common_name) → bearer (expiring)
-  → rate/concurrency limits → 4-tool ceiling → sensitivity policy → hosted reads as nat
+atlas-mcp exposure-http on 127.0.0.1:4020 (user LaunchAgent ai.atlas.atlas-mcp-exposure)
+  kill switch → global pre-auth failure limit → loopback → Host == <HOSTNAME> → no Origin
+  → POST /mcp → size cap → Access JWT (fresh JWKS, aud, iss, exp, dedicated service token)
+  → expiring bearer → limits + held concurrency slot → 4-tool ceiling → CURRENT pinned policy
+  → one release decision (classification, exclusions, brain paths from the brain itself)
+  → hosted reads as nat under the end-to-end deadline → audit first → capped reply
 ```
 
-Three independent gates: the Cloudflare edge (service token), cloudflared (Access JWT), the origin (Access JWT again plus the Atlas bearer). Separate files from the local Rhys install: `~/.config/atlas/atlas-mcp-exposure/` (config, token registry holding only `grok_as_nat`, sensitivity policy, kill-switch file) and `~/.local/state/atlas-mcp-exposure/` (audit, log). The installed Rhys stdio registration and `~/.config/atlas/atlas-mcp/` are not touched.
-
-## 0. What exists today (read-only checks, 2026-10-22)
+## 0. What exists today (read-only checks)
 
 | Item | Finding |
 |---|---|
-| `undeniablementoring.com` NS | `ns-cloud-d1..d4.googledomains.com` (Google Cloud DNS). **Not on Cloudflare.** |
-| Its MX | Google Workspace (`aspmx.l.google.com` …). Moving the zone risks email. |
-| Its apex A / `www` | apex `162.159.140.166` (a Cloudflare anycast address, i.e. the website host's own Cloudflare front), `www` CNAME `sites.ludicrous.cloud`. The site host, not Rhys, controls that Cloudflare front. |
-| Dante's `fluxgate.pro` | Porkbun NS. Not on Cloudflare, and it is Dante's internal namespace, not the client's. |
-| Cloudflare account for Rhys | **Unknown.** Nothing on the Mac indicates one. `cloudflared` is not installed. |
-| Tailscale on the Mac | Tailscale.app is installed and running; the node's capabilities include Funnel attributes. Not used by this lane. |
+| `undeniablementoring.com` (2026-10-22 snapshot) | NS Google Cloud DNS; MX Google Workspace; apex A a Cloudflare anycast address (the site host's front; it does not show who controls that account); `www` → `sites.ludicrous.cloud`. Not a zone this lane can use; do not move it. |
+| `cloudflared` | **Installed**: `/opt/homebrew/bin/cloudflared` 2026.3.0 (Homebrew, 2026-03-17). (The first receipt's "not installed" was wrong.) |
+| Existing tunnel | A **system** daemon `/Library/LaunchDaemons/com.cloudflare.cloudflared.plist` (root, since at least 2026-04-21) is running a **remotely-managed** tunnel (`tunnel run --token …`). So some Cloudflare account already exists. Its owner, zone and purpose are unknown here (possibly Mission Control's W1c Access setup). **This lane must not stop, edit or reuse it.** Note for the coordinator: its connector token is visible in the process arguments to every local user, and the plist is world-readable (0644); this lane did not read or record the token. |
+| `~/.cloudflared` | Exists, empty (0700). |
+| Tailscale | Running; Funnel attributes present (count only). Not used. |
 
-Consequence: a Cloudflare Tunnel public hostname needs a zone **on a Cloudflare account**. Free/Pro plans support only full (NS) setup; partial CNAME setup needs Business, and subdomain zones need Enterprise. Do **not** move `undeniablementoring.com` to Cloudflare for this; it carries Rhys's email and website.
+Human decision (step 2): use the existing Cloudflare account only if it is confirmed to be **Rhys's business account** with 2FA and an appropriate zone; otherwise create one. A tunnel public hostname needs a zone on that account (partial CNAME setup needs Business/Enterprise; subdomain zones need Enterprise), so the recommendation stands: a dedicated domain owned by Rhys's business, registered at Cloudflare Registrar, e.g. `mcp.<dedicated domain>` as `<HOSTNAME>`.
 
-**Recommended:** register a dedicated, low-cost domain owned by Rhys's business directly at Cloudflare Registrar (it is then on Cloudflare automatically), for example `undeniable-atlas.<tld>`, and use `mcp.<that domain>` as `<HOSTNAME>`. A human chooses and pays for the name.
+## 1. Decision required first: classification (R16 finding 2)
 
-## 1. Human: Cloudflare account and domain (Rhys or Dante with Rhys's approval)
+The installed `meeting_queue('list')` does not return any classification; intake classifications live in `intake_scope_bindings`, which Nat's read does not join. X2 therefore **fails closed**: every scoped record whose meeting row has no valid `classification` is withheld (`classificationEnforcement: {"unclassified": "withhold"}`, the default). With today's hosted contract, **Grok would see nothing from production.** Options for Dante:
 
-1. Create (or sign in to) a Cloudflare account **owned by Rhys's business**, with 2FA. Record who holds it. (Do not use a personal account of Dante's.)
-2. Register the dedicated domain in Cloudflare Registrar, or add an existing Rhys-controlled spare domain with full NS setup.
-3. Zero Trust: open Zero Trust, choose a team name (gives `<TEAM>.cloudflareaccess.com`), select the Free plan. Cloudflare may ask for a payment method even on Free (unverified here).
-4. Disclosure acknowledgement (R14 exposure requirement 1): Dante and Rhys confirm in DECISIONS that masked task text (titles, clients, owners, due dates, statuses) will transit Cloudflare and reach xAI's Grok. No call quotes or transcripts are exposed by this lane.
+- **(a) Hosted read projection (recommended):** a reviewed hosted change that adds `classification` to every `meeting_queue('list')` meeting row (full and task-only), taken from the intake binding. Needs its own implementation authority and review (it changes the hosted schema; this lane did not). The MCP then withholds `internal`, `client_financial` and `restricted` automatically.
+- **(b) Recorded acceptance:** a DECISIONS entry accepting term/id/path withholding without classification; the exposure config then sets `"classificationEnforcement": {"unclassified": "allow", "decisionReference": "<item>"}`. Residual: lexical screening misses things like "Discuss Sam's promotion", "Pay Sam 900 weekly", "Review the staff roster" (R16 probe).
 
-## 2. Human: Access application and service token (Cloudflare dashboard)
+## 2. Human: Cloudflare account, domain, Access (Rhys or Dante with Rhys's approval)
 
-1. Zero Trust → Access → Service Auth → **Service Tokens** → Create `atlas-grok-nat`, duration 1 year or shorter (shorter is better; 90 days suggested). Copy the Client ID and Client Secret **once** into the owner's password manager. Never paste them into Slack, email, a document or a chat with an assistant.
-2. Zero Trust → Access → Applications → Add → **Self-hosted**. Name `Atlas MCP (Grok)`; domain `<HOSTNAME>`; path `mcp`. Session duration: shortest. Turn off the App Launcher tile and identity-provider login (service-token only).
-3. Policy: Action **Service Auth**, Include → Service Token → `atlas-grok-nat`. No other policy, no Bypass, no "Everyone".
-4. Note the application's **AUD tag** (Overview → Application Audience (AUD) Tag). It is not a secret.
-5. Optional edge rate limiting (WAF → Rate limiting rules) on `<HOSTNAME>`: for example 60 requests/min per IP, block 10 min. The origin also limits.
+1. Decide the account (section 0). Business-owned, 2FA, owner recorded.
+2. Dedicated domain on that account (full NS setup).
+3. Zero Trust team (`<TEAM>.cloudflareaccess.com`), Free plan (may ask for a payment method; unverified).
+4. **Two** service tokens: `atlas-grok-acceptance` (synthetic phase, short duration, e.g. 7 days) and later `atlas-grok-nat` (real phase, 90 days or less). Client ID/Secret go straight to the owner's password manager; never into Slack, email, documents or an assistant chat.
+5. Self-hosted Access application `Atlas MCP (Grok)` on `<HOSTNAME>`, path `mcp`; App Launcher off; no IdP login; **one** policy: Service Auth, Include → the current phase's service token only. Note the AUD tag (not secret).
+6. **Mandatory** edge rate-limiting rule on `<HOSTNAME>` (R14 requirement 5), e.g. 60 requests/min per IP, block 10 min; use what the plan supports and record it.
+7. Logging: Access/HTTP logs are metadata; do not enable Logpush with bodies or any Worker that logs bodies. Set retention.
 
-## 3. Mac: stage config, policy and token (owner-only; supervised; after R16 ACCEPT)
+## 3. Mac: stage the SYNTHETIC acceptance origin (supervised; after R16b ACCEPT)
 
 ```sh
-cd <REVIEWED WORKTREE>          # the exact commit R16 accepted; verify `git rev-parse HEAD` and a clean tree
+cd <REVIEWED WORKTREE>          # exact R16b-accepted commit; check `git rev-parse HEAD` and a clean tree
 export PATH=/opt/homebrew/bin:$PATH
-install -d -m 700 ~/.config/atlas/atlas-mcp-exposure ~/.local/state/atlas-mcp-exposure
-install -m 600 atlas-mcp/config/exposure.example.json ~/.config/atlas/atlas-mcp-exposure/config.json
-install -m 600 atlas-mcp/config/sensitivity.json     ~/.config/atlas/atlas-mcp-exposure/sensitivity.json
-# Start disabled: the kill switch is ON until the acceptance test.
-node atlas-mcp/bin/atlas-mcp.ts exposure-kill --config ~/.config/atlas/atlas-mcp-exposure/config.json
+A=~/.config/atlas/atlas-mcp-exposure-acceptance
+install -d -m 700 $A $A/empty-brain ~/.local/state/atlas-mcp-exposure-acceptance
+install -m 600 atlas-mcp/config/exposure-acceptance.example.json $A/config.json
+install -m 600 atlas-mcp/config/sensitivity.json                 $A/sensitivity.json
+install -m 600 atlas-mcp/config/acceptance-fixture.json          $A/acceptance-fixture.json
+shasum -a 256 $A/sensitivity.json     # must equal sensitivitySha256 in the config (approved bytes c1611d8a…0d97)
+node atlas-mcp/bin/atlas-mcp.ts exposure-kill --config $A/config.json      # start killed
 ```
 
-Edit `~/.config/atlas/atlas-mcp-exposure/config.json`: `exposure.publicHostname` = `<HOSTNAME>` (lowercase, no port); `exposure.cfAccess.teamDomain` = `<TEAM>.cloudflareaccess.com`; `exposure.cfAccess.aud` = the AUD tag; optionally `serviceTokenClientIdSha256` = SHA-256 of the service token Client ID (computed locally with `printf %s '<id>' | shasum -a 256`, typed by the human, never pasted into a chat). Leave `serviceTokenHeaders` null unless step 7 proves Cloudflare forwards those headers to the origin. Then:
+Edit `$A/config.json`: `exposure.publicHostname`, `cfAccess.teamDomain`, `cfAccess.aud`, `cfAccess.serviceTokenClientIdSha256` = SHA-256 of the **acceptance** token's Client ID (computed locally: `printf %s '<id>' | shasum -a 256`, typed by the human). Leave `serviceTokenHeaders` null. The synthetic config uses hosted actor `synthetic_nat` and a local fixture: the loader refuses a non-synthetic actor in synthetic mode and a synthetic actor in production mode, and synthetic mode never reads Mission Control's transport file or any production JWT.
 
 ```sh
-C=~/.config/atlas/atlas-mcp-exposure/config.json
-node atlas-mcp/bin/atlas-mcp.ts policy-check --config $C            # counts only; must show nat + grok_as_nat task_fields_only
-node atlas-mcp/bin/atlas-mcp.ts mint-token --config $C --principal grok_as_nat \
-     --out ~/.config/atlas/atlas-mcp-exposure/grok_as_nat.token --expires-days 30 --label "Grok for Natalie"
-node atlas-mcp/bin/atlas-mcp.ts exposure-status --config $C          # killed: true, one active token (prefix + expiry only)
+node atlas-mcp/bin/atlas-mcp.ts policy-check    --config $A/config.json   # sha256 + pinned: true
+node atlas-mcp/bin/atlas-mcp.ts mint-token      --config $A/config.json --principal grok_as_nat --out $A/grok.token --expires-days 7
+node atlas-mcp/bin/atlas-mcp.ts exposure-status --config $A/config.json   # killed, hostedSource synthetic, deployable yes
 ```
 
-This is a **new** `grok_as_nat` token in the exposure registry. The older Phase A `grok_as_nat` token (`e8cdc8b3d1cb…`, local registry) is not valid here and should be revoked in the local registry when exposure is enabled.
+The server refuses to start or resume with placeholders, without the policy pin, with an invalid/insecure policy, or without a writable audit sink.
 
-Rhys's sensitivity review: the policy is a proposal. Rhys (via Dante) confirms or edits topics, adds client labels/task ids/call ids he excludes, and records any per-client full-call grants (there are none). Re-run `policy-check` after any edit; the exposure server refuses to start with an invalid policy, and scoped callers get nothing if it becomes invalid later.
-
-## 4. Mac: cloudflared and the tunnel (human-run; outbound only)
+## 4. Mac: this lane's own tunnel (human-run; outbound only; leaves the existing daemon alone)
 
 ```sh
-brew install cloudflared                    # installation is a separate authorization (CLAUDE.md); a human runs it
-cloudflared tunnel login                    # browser login to Rhys's Cloudflare account; writes ~/.cloudflared/cert.pem
-cloudflared tunnel create atlas-mcp-grok    # writes ~/.cloudflared/<TUNNEL_ID>.json (owner-only); never print it
+cloudflared tunnel login                     # browser login to the chosen account; writes ~/.cloudflared/cert.pem
+cloudflared tunnel create atlas-mcp-grok     # ~/.cloudflared/<TUNNEL_ID>.json (owner-only); never print it
 cloudflared tunnel route dns atlas-mcp-grok <HOSTNAME>
-cp atlas-mcp/deploy/cloudflared-config.example.yml ~/.cloudflared/config.yml
-# edit: TUNNEL_ID, HOSTNAME, TEAM (team name only, without .cloudflareaccess.com), AUD
-chmod 600 ~/.cloudflared/config.yml ~/.cloudflared/*.json ~/.cloudflared/cert.pem
-cloudflared tunnel ingress validate
-cloudflared tunnel ingress rule https://<HOSTNAME>/mcp     # must match the 127.0.0.1:4020 rule
+cp atlas-mcp/deploy/cloudflared-config.example.yml ~/.cloudflared/atlas-mcp-grok.yml   # NOT config.yml
+# edit TUNNEL_ID, HOSTNAME, TEAM (team name only), AUD
+chmod 600 ~/.cloudflared/atlas-mcp-grok.yml ~/.cloudflared/*.json ~/.cloudflared/cert.pem
+cloudflared tunnel --config ~/.cloudflared/atlas-mcp-grok.yml ingress validate
+cloudflared tunnel --config ~/.cloudflared/atlas-mcp-grok.yml ingress rule https://<HOSTNAME>/mcp
 ```
 
-Run it as a **user** LaunchAgent (no sudo) only at step 6. Never use a quick tunnel (`trycloudflare.com`). Do not set `httpHostHeader`, `noTLSVerify` or any bypass. The ingress serves `/mcp` only; everything else returns 404 at the tunnel.
+No quick tunnel (`trycloudflare.com`, including the vendor's generic Grok example), no `httpHostHeader`, no `noTLSVerify`, no token on a command line.
 
-## 5. Origin smoke on the Mac (still killed, then local only)
+## 5. Mac: local origin smoke (still killed)
 
 ```sh
-cp atlas-mcp/deploy/ai.atlas.atlas-mcp-exposure.plist /tmp/ && sed -i '' "s#WORKTREE#$PWD#g" /tmp/ai.atlas.atlas-mcp-exposure.plist
-plutil -lint /tmp/ai.atlas.atlas-mcp-exposure.plist
-node atlas-mcp/bin/atlas-mcp.ts exposure-http --config $C &      # foreground test run
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:4020/mcp -H "Host: <HOSTNAME>"   # expect 503 (killed)
+for f in ai.atlas.atlas-mcp-exposure ai.atlas.cloudflared-atlas-mcp-grok; do
+  cp atlas-mcp/deploy/$f.plist /tmp/ && sed -i '' "s#WORKTREE#$PWD#g" /tmp/$f.plist && plutil -lint /tmp/$f.plist; done
+# For the acceptance phase, point the origin plist's --config at $A/config.json.
+node atlas-mcp/bin/atlas-mcp.ts exposure-http --config $A/config.json &
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:4020/mcp -H "Host: <HOSTNAME>"   # 503 (killed)
 kill %1
 ```
 
-## 6. Enable (Dante's explicit go after R16 ACCEPT)
+## 6. Enable the acceptance window (Dante's explicit go)
 
 ```sh
-cp /tmp/ai.atlas.atlas-mcp-exposure.plist ~/Library/LaunchAgents/
+cp /tmp/ai.atlas.atlas-mcp-exposure.plist /tmp/ai.atlas.cloudflared-atlas-mcp-grok.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.atlas.atlas-mcp-exposure.plist
-lsof -nP -iTCP:4020 -sTCP:LISTEN            # must show 127.0.0.1:4020 only
-cloudflared service install                  # or a user LaunchAgent running `cloudflared tunnel run atlas-mcp-grok`
-node atlas-mcp/bin/atlas-mcp.ts exposure-resume --config $C --confirm   # only for the acceptance test window
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.atlas.cloudflared-atlas-mcp-grok.plist
+lsof -nP -iTCP:4020 -sTCP:LISTEN            # 127.0.0.1:4020 only
+node atlas-mcp/bin/atlas-mcp.ts exposure-resume --config $A/config.json --confirm   # re-validates config, policy pin, audit sink
 ```
 
-## 7. Supervised synthetic remote acceptance (R14 requirement 8), before Natalie gets anything
+## 7. Supervised SYNTHETIC remote acceptance (R14 requirement 8; R16 finding 6)
 
-Run from a machine **outside** the Mac's network, with the human holding the secrets (they are typed from the password manager into environment variables, never echoed). Expected results:
+Non-production service token, synthetic hosted actor, synthetic fixture: no real business data can be read or released. Run from outside the Mac's network; secrets typed from the password manager into environment variables, never echoed. Grok compatibility is tested here too (Natalie or Dante adds the connector with the **acceptance** credentials), never with production secrets.
 
 | # | Request | Expect |
 |---|---|---|
-| 1 | `POST https://<HOSTNAME>/mcp` with no headers | 403 from Cloudflare Access (no origin audit row) |
-| 2 | Access headers only, no bearer | 401 at origin (`unauthorized` row) |
-| 3 | Access headers + wrong bearer | 401 |
-| 4 | Access headers + bearer, `tools/list` | 200, exactly `whoami capabilities list_tasks get_task` |
-| 5 | `tools/call whoami` | principal `grok_as_nat`, hosted actor `nat`, `sharingPolicy` present |
-| 6 | `tools/call list_tasks` | 0 tasks today (no grants) |
-| 7 | `tools/call search_calls` / `ask_call` / `get_draft` | `isError`, `forbidden` |
-| 8 | `GET /mcp`, `POST /other` | 405 / 404 (tunnel 404 for other paths) |
-| 9 | 20 KB body | 413 |
-| 10 | 25 quick requests | 429 after the per-minute limit |
-| 11 | `exposure-kill` on the Mac, repeat #4 | 503 immediately |
-| 12 | Revoke the service token in Cloudflare, repeat #4 | 403 at the edge |
-| 13 | `rotate`, old bearer | 401; new bearer 200 |
-| 14 | Direct origin bypass attempt (`curl http://127.0.0.1:4020/mcp` from another local user, or with `Host: <HOSTNAME>` and no JWT) | 403 (`access_denied`) |
-| 15 | Inspect `~/.local/state/atlas-mcp-exposure/exposure-audit.jsonl` | one schema-bound row per request; no token, JWT, body or task text |
+| 1 | `POST https://<HOSTNAME>/mcp`, no headers | 401 or 403 from Cloudflare Access (both are documented); no origin row |
+| 2 | Access headers only, no bearer | 401 at origin (`unauthorized`) |
+| 3 | Access headers + wrong bearer, repeated | 401, then 429 (`bearer_rate`) after `bearerFailuresPerMinute` |
+| 4 | Access headers + bearer, `tools/list` | 200; exactly `whoami capabilities list_tasks get_task` |
+| 5 | `tools/call whoami` | principal `grok_as_nat`, hosted actor **`synthetic_nat`**, `sharingPolicy` present |
+| 6 | `tools/call list_tasks` | exactly 3 synthetic items: `task-syn-alpha-1`, `req-syn-alpha-2`, `req-syn-taskonly-1` (Beta "revenue", the `client_financial` row and the unclassified Delta row withheld) |
+| 7 | `get_task` on `task-syn-beta-1` / `task-syn-fin-1` / an unknown id | identical `not_found` |
+| 8 | `search_calls`, `ask_call`, `get_draft` | `isError`, `forbidden` |
+| 9 | `GET /mcp`; `POST /other` | 405 at origin; 404 from the tunnel ingress |
+| 10 | 20 KB body; 2,000-character JSON-RPC id | 413; small `Invalid id.` error |
+| 11 | 25 quick requests | 429 after the per-minute limit; the edge rule also fires at its threshold |
+| 12 | On the Mac: `exposure-kill`; repeat #4 | 503 at once |
+| 13 | Revoke the acceptance service token in Cloudflare; repeat #4 | 401/403 at the edge |
+| 14 | `rotate`; old bearer / new bearer | 401 / 200 |
+| 15 | On the Mac: `curl -X POST http://127.0.0.1:4020/mcp` (no public Host) | **421** (`bad_host`) |
+| 16 | On the Mac: same with `-H "Host: <HOSTNAME>"`, no Access JWT | **403** (`access_denied`); after 30 failures/min, 429 |
+| 17 | Make the policy file group-readable for one request, then restore | `not_available` for that request (current policy enforced) |
+| 18 | `~/.local/state/atlas-mcp-exposure-acceptance/exposure-audit.jsonl` | one schema-bound row per request (flood rows aggregated with `suppressed`); no token, JWT, body or task text |
+| 19 | `sh atlas-mcp/deploy/kill-switch.sh --revoke` | origin 503, both user jobs verified stopped, existing system tunnel untouched |
 
-Also confirm Cloudflare's own logs for the hostname hold no request bodies (Access and HTTP request logs carry metadata only; do not enable Logpush with bodies or any Worker that logs them).
+Record status codes and counts only. Then stop the acceptance jobs, revoke the acceptance bearer and service token.
 
-Record results (status codes and counts only) in the lane receipt. Only after this passes, and Dante says so, does Natalie receive anything.
+## 8. Separate switch to real data (its own authorization)
 
-## 8. Natalie adds the connector in Grok
+Only after section 7 passes, the section-1 classification decision is implemented or recorded, Rhys's item-20 confirmation is recorded, the Nat-grant audit is reconciled with the approved L3 list, and Dante authorizes the switch:
 
-**Unknowns, to be verified in a supervised session with Natalie** (nothing here was tested against Grok):
-- whether Grok Pro's connectors tab accepts a **custom remote MCP server URL** at all, or only listed partners;
-- which transport it speaks (streamable HTTP `POST` with JSON responses is what this server supports; SSE `GET` streams are refused with 405);
-- whether it can send **custom static headers**, and **how many** (this design needs three: `Authorization`, `CF-Access-Client-Id`, `CF-Access-Client-Secret`);
-- whether it only supports OAuth (then this design does not fit: see "If Grok cannot send headers" below);
-- the MCP protocol version it negotiates (server supports 2025-06-18, 2025-03-26, 2024-11-05);
-- whether Grok calls tools only on Natalie's prompt or autonomously (for example her 2-hourly Slack scan), which sets the rate limits;
-- where xAI stores the connector secrets, who at Natalie's end can see them, and whether xAI retains tool results;
-- Grok's egress IPs (only relevant to the Funnel fallback).
+1. Stage `~/.config/atlas/atlas-mcp-exposure/` from `config/exposure.example.json` (production `hostedSource`, actor `nat`), same pinned policy, the **real** service token's Client ID hash, killed by default; mint a new expiring bearer there.
+2. Point the origin plist at the production config; Access policy → the real service token only.
+3. Re-run checks 2–6, 12, 15, 16, 18 with the real credentials. Expected `list_tasks`: **the observed authorized scope** (classified, non-withheld tasks of Nat's granted clients), not zero, not synthetic.
+4. Natalie updates the connector to the real credentials and runs the first prompt below under supervision.
 
-If supported, Natalie enters (Dante or Rhys gives her the secrets through a one-time secret link or in person, never in Slack/email):
+## 9. Natalie's connector
+
+Known from vendor docs (as cited by R16): Grok documents custom MCP connectors with a URL and Streamable HTTP. **Still unverified for her account:** sending three static headers (`Authorization`, `CF-Access-Client-Id`, `CF-Access-Client-Secret`), any OAuth requirement, Origin behaviour, secret custody/retention at xAI, and whether Grok invokes tools autonomously (her 2-hourly Slack scan). Verify in section 7 with acceptance credentials. If incompatible, stop: a relay or OAuth front is a new, separately reviewed design; never weaken a gate.
 
 | Field | Value |
 |---|---|
-| Name | Atlas (Rhys's tasks) |
 | URL | `https://<HOSTNAME>/mcp` |
-| Header | `Authorization: Bearer <grok_as_nat token>` |
-| Header | `CF-Access-Client-Id: <service token Client ID>` |
-| Header | `CF-Access-Client-Secret: <service token Client Secret>` |
+| Header | `Authorization: Bearer <token for the current phase>` |
+| Header | `CF-Access-Client-Id: <current phase service token ID>` |
+| Header | `CF-Access-Client-Secret: <current phase service token secret>` |
 
-**First test prompt for Natalie** (read-only, no spend, works with zero grants):
+First prompt (read-only, no spend):
 
 > Using the Atlas connector only: call `whoami` and tell me which principal you are connected as and which tools you can use. Then call `list_tasks` and give me just the task titles, clients and due dates, exactly as returned. If the list is empty, say it is empty. Do not guess or add anything that is not in the tool results.
 
-Expected: principal `grok_as_nat`, the four tools, and an empty task list until Rhys grants clients.
+Expected: synthetic phase as in section 7 #5–6; real phase the observed authorized scope.
 
-**If Grok cannot send custom headers:** do not weaken the gates. Options for a later decision: (a) Cloudflare Access with an OAuth-capable front (for example Cloudflare's MCP server portal / Access for SaaS, unverified) once Grok's exact OAuth flow is known; (b) the hosted relay (EXPOSURE.md option C); (c) the Slack door (option D). Each needs its own review.
+## 10. Kill switch, policy edits, rotation, rollback
 
-## 9. Kill switch and rollback
+**Kill switch:** `sh <WORKTREE>/atlas-mcp/deploy/kill-switch.sh [--revoke]` (set `ATLAS_MCP_EXPOSURE_CONFIG` for the acceptance config). Kill file first (503 to everything, results completed after it are dropped), then boots out **only** `ai.atlas.atlas-mcp-exposure` and `ai.atlas.cloudflared-atlas-mcp-grok`, kills only `cloudflared … run atlas-mcp-grok`, verifies each is gone (non-zero exit if not), and prints status. It never touches the existing system tunnel. Then revoke the service token / disable the Access app in Cloudflare.
 
-**Kill switch (one command, refuses every external request immediately, including in-flight responses):**
+**Policy edits:** the policy is re-read on every scoped call and checked again before release; an edit that does not match `sensitivitySha256`, a missing or non-owner-only file, or invalid JSON makes scoped callers get `not_available` immediately (no restart, no stale policy). To change the policy: kill, edit, update the pin in the config (after review), `policy-check`, then `exposure-resume --confirm` (which re-validates).
 
-```sh
-sh <WORKTREE>/atlas-mcp/deploy/kill-switch.sh            # add --revoke to also revoke every exposed token
-```
+**Rotation / revocation:** `rotate --principal grok_as_nat --out <new> --expires-days ≤ tokenMaxAgeDays`; `revoke-principal`; `revoke --sha256-prefix`. A bearer revoked while a request is in flight gets 401 instead of the result. Watch the hosted `nat` JWT expiry (2027-01-18T06:01Z; Lane H alert 2027-01-04).
 
-It writes the kill file (the origin answers 503 to everything from that moment), boots out the origin launchd job and the user cloudflared agent, kills `cloudflared tunnel` processes, prints status, and reminds the human to revoke the service token / disable the Access application in Cloudflare. A system-level cloudflared daemon needs `sudo launchctl bootout system/com.cloudflare.cloudflared` (printed, not run). Equivalent single step without the script: `node atlas-mcp/bin/atlas-mcp.ts exposure-kill --config $C`.
+**Rollback:** kill switch with `--revoke`; in Cloudflare revoke both service tokens, delete the Access app, the `<HOSTNAME>` DNS record and tunnel `atlas-mcp-grok`; on the Mac remove the two user plists and this tunnel's credentials/config; keep the audit files; Natalie removes the connector. The local Rhys install and the existing system tunnel are unaffected.
 
-In-flight behaviour: the exposed tools make no model calls and no writes; a request already reading the hosted queue finishes its read, but its result is dropped (503) if the kill file exists when it completes.
+## 11. Alternative: Tailscale Funnel (not accepted on its own)
 
-**Rotation:** `node atlas-mcp/bin/atlas-mcp.ts rotate --config $C --principal grok_as_nat --out <new file> --expires-days 30` (new token valid at once, all previous ones revoked in the same write; Natalie updates the header). Tokens must expire within `tokenMaxAgeDays` (30). Rotate the Cloudflare service token in the dashboard on its own schedule. Watch the hosted `nat` JWT expiry (2027-01-18T06:01Z; Lane H alert 2027-01-04).
-
-**Revocation:** `revoke-principal --principal grok_as_nat` (all tokens) or `revoke --sha256-prefix <hex>` (one).
-
-**Full rollback:**
-1. `kill-switch.sh --revoke`.
-2. Cloudflare: revoke the `atlas-grok-nat` service token; delete the Access application; `cloudflared tunnel route dns` record → delete the DNS record for `<HOSTNAME>`; `cloudflared tunnel delete atlas-mcp-grok`.
-3. Mac: `rm ~/Library/LaunchAgents/ai.atlas.atlas-mcp-exposure.plist`; `cloudflared service uninstall` if installed as a service; remove `~/.cloudflared/` credentials for this tunnel.
-4. Keep `~/.local/state/atlas-mcp-exposure/` audit files as evidence. The local Rhys install is unaffected throughout.
-5. Natalie removes the connector in Grok.
-
-## 10. Alternative: Tailscale Funnel (not recommended on its own)
-
-How: `tailscale funnel --bg --https=443 http://127.0.0.1:4020` publishes `https://<mac>.<tailnet>.ts.net/` to the internet; set `exposure.publicHostname` to that name and `cfAccess.mode` to `off`.
-
-| | Cloudflare Tunnel + Access | Tailscale Funnel |
-|---|---|---|
-| Accounts | New Cloudflare account + a domain on it | Existing tailnet (Funnel attributes appear present on the Mac) |
-| Independent second gate | Yes: Access service token at the edge, JWT re-checked by cloudflared and origin | **No.** Funnel has no client authentication; the only gates are our origin checks and bearer |
-| Hostname | Custom, on Rhys's domain | `*.ts.net`, reveals the tailnet name; guessable |
-| Edge rate limiting / WAF | Yes | No |
-| Who terminates TLS | Cloudflare (sees masked task text) | The Mac (Tailscale relays encrypted traffic) |
-| Policy blast radius | Per-application Access policy | A tailnet ACL/attr change can widen or remove Funnel |
-| Grok header needs | 3 headers | 1 header (bearer), or 2 with `serviceTokenHeaders` as a second shared secret |
-
-R14 rejected a bare Funnel (no second layer, even for a short demo). Funnel is acceptable only with an independent second gate reviewed by R16, for example an IP allowlist of verified, fixed Grok egress addresses (unknown) or a relay in front. Using `serviceTokenHeaders` as an extra static header with Funnel adds a second secret, not an independent gate; it does not meet R14 by itself. The Funnel advantage is TLS ending on the Mac (no third party sees task text) and no new account.
+Unchanged conclusion: Funnel has no independent client-auth gate, so it fails R14 unless paired with a reviewed independent gate (verified fixed Grok egress IPs, or a relay). X2 removed the `cfAccess` "off" mode entirely, so a Funnel variant would need its own reviewed design. Advantage: TLS ends on the Mac; no new account.

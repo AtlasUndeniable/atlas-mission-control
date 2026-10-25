@@ -25,7 +25,7 @@ function withTaskOnlyB(s: ReturnType<typeof setup>) {
   const list = s.hosted.list.bind(s.hosted);
   s.hosted.list = async (actor: string): Promise<Queue> => {
     const q = await list(actor);
-    if (actor === 'nat') q.meetings.push({id: B, title: 'Reviewed task context only', instant: '2026-10-05T01:00:00Z', state: 'ready', taskOnly: true, clientLabel: 'Zenith',
+    if (actor === 'nat') q.meetings.push({id: B, title: 'Reviewed task context only', instant: '2026-10-05T01:00:00Z', state: 'ready', taskOnly: true, clientLabel: 'Zenith', classification: 'client_confidential',
       items: [{id: 'task-only-request', title: 'Reviewed task only', due: null, owner: 'nat', state: 'approved', task: null, evidence: {quote: 'Reviewed excerpt only.'}}]});
     return q;
   };

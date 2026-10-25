@@ -24,6 +24,15 @@ export type McpConfig = {
   sensitivityFile: string;
   /** Present only in the exposure server's own config file (Lane X). */
   exposure: ExposureConfig | null;
+  /** Optional pin: the policy file must have exactly this SHA-256 (required for exposure). */
+  sensitivitySha256: string | null;
+  /**
+   * What to do with a hosted record whose classification cannot be resolved from the queue
+   * projection (R16 finding 2). Default 'withhold' (fail closed); 'allow' needs a decision.
+   */
+  classificationEnforcement: {unclassified: 'withhold'} | {unclassified: 'allow'; decisionReference: string};
+  /** Hosted data source. 'synthetic' = a local fixture for remote acceptance; never production data. */
+  hostedSource: {mode: 'production'} | {mode: 'synthetic'; fixtureFile: string; decisionReference: string};
 };
 
 /**
@@ -40,9 +49,11 @@ export type ExposureConfig = {
   principals: Record<string, {tools: ExposedTool[]}>;
   killSwitchFile: string;
   maxBodyBytes: number; maxResponseBytes: number; requestTimeoutMs: number;
-  limits: {perMinute: number; perHour: number; perDay: number; maxConcurrent: number; unauthenticatedPerMinute: number};
+  /** unauthenticatedPerMinute: ALL pre-auth failures (host, origin, path, size, Access, bearer), checked before any auth work. bearerFailuresPerMinute: bearer failures only. */
+  limits: {perMinute: number; perHour: number; perDay: number; maxConcurrent: number; unauthenticatedPerMinute: number; bearerFailuresPerMinute: number};
   tokenMaxAgeDays: number;
-  cfAccess: {mode: 'off'} | {mode: 'jwt'; teamDomain: string; aud: string; serviceTokenClientIdSha256: string | null};
+  /** Access JWT verification is mandatory (R16): there is no 'off' mode, and the token must be the dedicated service token. */
+  cfAccess: {mode: 'jwt'; teamDomain: string; aud: string; serviceTokenClientIdSha256: string};
   serviceTokenHeaders: {clientIdSha256: string; clientSecretSha256: string} | null;
   decisionReference: string;
 };
@@ -86,17 +97,12 @@ export function parseExposure(raw: unknown, principals: Record<string, Principal
   // The exposure config file may hold ONLY exposable principals: a separate token registry
   // that cannot contain an owner token.
   for (const [name, pc] of Object.entries(principals)) if (pc.scope !== 'granted' || !outP[name]) fail(`exposure.config_principal_not_exposable:${name}`);
-  const l = exactKeys(e.limits, ['perMinute', 'perHour', 'perDay', 'maxConcurrent', 'unauthenticatedPerMinute'], 'exposure.limits');
-  const cf = e.cfAccess as Record<string, unknown> | null;
-  let cfAccess: ExposureConfig['cfAccess'];
-  if (cf && typeof cf === 'object' && cf.mode === 'off') { exactKeys(cf, ['mode'], 'exposure.cfAccess'); cfAccess = {mode: 'off'}; }
-  else {
-    const c = exactKeys(cf, ['mode', 'teamDomain', 'aud', 'serviceTokenClientIdSha256'], 'exposure.cfAccess');
-    if (c.mode !== 'jwt') fail('exposure.cfAccess.mode');
-    if (typeof c.teamDomain !== 'string' || !/^[a-z0-9-]{1,63}\.cloudflareaccess\.com$/.test(c.teamDomain)) fail('exposure.cfAccess.teamDomain');
-    if (typeof c.aud !== 'string' || !/^[0-9a-f]{64}$/.test(c.aud)) fail('exposure.cfAccess.aud');
-    cfAccess = {mode: 'jwt', teamDomain: c.teamDomain as string, aud: c.aud as string, serviceTokenClientIdSha256: c.serviceTokenClientIdSha256 === null ? null : hex64(c.serviceTokenClientIdSha256, 'exposure.cfAccess.serviceTokenClientIdSha256')};
-  }
+  const l = exactKeys(e.limits, ['perMinute', 'perHour', 'perDay', 'maxConcurrent', 'unauthenticatedPerMinute', 'bearerFailuresPerMinute'], 'exposure.limits');
+  const c = exactKeys(e.cfAccess, ['mode', 'teamDomain', 'aud', 'serviceTokenClientIdSha256'], 'exposure.cfAccess');
+  if (c.mode !== 'jwt') fail('exposure.cfAccess.mode_must_be_jwt');
+  if (typeof c.teamDomain !== 'string' || !/^[a-z0-9-]{1,63}\.cloudflareaccess\.com$/.test(c.teamDomain)) fail('exposure.cfAccess.teamDomain');
+  if (typeof c.aud !== 'string' || !/^[0-9a-f]{64}$/.test(c.aud)) fail('exposure.cfAccess.aud');
+  const cfAccess: ExposureConfig['cfAccess'] = {mode: 'jwt', teamDomain: c.teamDomain as string, aud: c.aud as string, serviceTokenClientIdSha256: hex64(c.serviceTokenClientIdSha256, 'exposure.cfAccess.serviceTokenClientIdSha256')};
   let sth: ExposureConfig['serviceTokenHeaders'] = null;
   if (e.serviceTokenHeaders !== null) {
     const s = exactKeys(e.serviceTokenHeaders, ['clientIdSha256', 'clientSecretSha256'], 'exposure.serviceTokenHeaders');
@@ -113,16 +119,43 @@ export function parseExposure(raw: unknown, principals: Record<string, Principal
       perMinute: int(l.perMinute, 1, 120, 'exposure.limits.perMinute'), perHour: int(l.perHour, 1, 2000, 'exposure.limits.perHour'),
       perDay: int(l.perDay, 1, 10000, 'exposure.limits.perDay'), maxConcurrent: int(l.maxConcurrent, 1, 8, 'exposure.limits.maxConcurrent'),
       unauthenticatedPerMinute: int(l.unauthenticatedPerMinute, 1, 600, 'exposure.limits.unauthenticatedPerMinute'),
+      bearerFailuresPerMinute: int(l.bearerFailuresPerMinute, 1, 120, 'exposure.limits.bearerFailuresPerMinute'),
     },
     tokenMaxAgeDays: int(e.tokenMaxAgeDays, 1, 90, 'exposure.tokenMaxAgeDays'),
     cfAccess, serviceTokenHeaders: sth, decisionReference: e.decisionReference as string,
   };
 }
 
+function parseClassification(v: unknown): McpConfig['classificationEnforcement'] {
+  if (v === undefined || v === null) return {unclassified: 'withhold'};
+  const o = v as Record<string, unknown>;
+  if (o && typeof o === 'object' && o.unclassified === 'withhold') { exactKeys(o, ['unclassified'], 'classificationEnforcement'); return {unclassified: 'withhold'}; }
+  const x = exactKeys(v, ['unclassified', 'decisionReference'], 'classificationEnforcement');
+  if (x.unclassified !== 'allow' || typeof x.decisionReference !== 'string' || x.decisionReference.trim().length < 8) fail('classificationEnforcement');
+  return {unclassified: 'allow', decisionReference: x.decisionReference as string};
+}
+
+const SYNTHETIC_ACTOR = /^synthetic_[a-z0-9_]{1,20}$/;
+function parseHostedSource(v: unknown, principals: Record<string, PrincipalConfig>): McpConfig['hostedSource'] {
+  const actors = Object.values(principals).map(p => p.hostedActor);
+  if (v === undefined || v === null || (v as {mode?: unknown}).mode === 'production') {
+    if (v) exactKeys(v, ['mode'], 'hostedSource');
+    // Production never serves a synthetic actor.
+    if (actors.some(a => SYNTHETIC_ACTOR.test(a))) fail('hostedSource:synthetic_actor_in_production');
+    return {mode: 'production'};
+  }
+  const x = exactKeys(v, ['mode', 'fixtureFile', 'decisionReference'], 'hostedSource');
+  if (x.mode !== 'synthetic') fail('hostedSource.mode');
+  // Synthetic mode only serves synthetic actors, so it can never read a production JWT.
+  if (!actors.every(a => SYNTHETIC_ACTOR.test(a))) fail('hostedSource:non_synthetic_actor');
+  if (typeof x.decisionReference !== 'string' || x.decisionReference.trim().length < 8) fail('hostedSource.decisionReference');
+  return {mode: 'synthetic', fixtureFile: absolute(x.fixtureFile, 'hostedSource.fixtureFile'), decisionReference: x.decisionReference as string};
+}
+
 export function parseConfig(raw: unknown): McpConfig {
   // sensitivityFile and exposure are optional, so the installed Phase A config stays valid.
   const keys = ['host', 'port', 'brainCallsDir', 'stateDir', 'tokensFile', 'hostedTransportEnvFile', 'principals', 'rateLimits', 'askCall'];
-  const optional = ['sensitivityFile', 'exposure'].filter(k => raw && typeof raw === 'object' && k in (raw as object));
+  const optional = ['sensitivityFile', 'exposure', 'sensitivitySha256', 'classificationEnforcement', 'hostedSource'].filter(k => raw && typeof raw === 'object' && k in (raw as object));
   const c = exactKeys(raw, [...keys, ...optional], 'root');
   // Phase A rule: never exposed beyond loopback. There is no option to change this.
   if (c.host !== '127.0.0.1') fail('host_must_be_127.0.0.1');
@@ -153,6 +186,9 @@ export function parseConfig(raw: unknown): McpConfig {
     tokensFile,
     sensitivityFile: 'sensitivityFile' in c ? absolute(c.sensitivityFile, 'sensitivityFile') : join(dirname(tokensFile), 'sensitivity.json'),
     exposure: 'exposure' in c && c.exposure !== null ? parseExposure(c.exposure, principals, port) : null,
+    sensitivitySha256: 'sensitivitySha256' in c && c.sensitivitySha256 !== null ? hex64(c.sensitivitySha256, 'sensitivitySha256') : null,
+    classificationEnforcement: parseClassification(c.classificationEnforcement),
+    hostedSource: parseHostedSource(c.hostedSource, principals),
     hostedTransportEnvFile: absolute(c.hostedTransportEnvFile, 'hostedTransportEnvFile'),
     principals,
     rateLimits: {toolCallsPerMinute: int(r.toolCallsPerMinute, 1, 600, 'toolCallsPerMinute'), askCallsPerHour: int(r.askCallsPerHour, 0, 100, 'askCallsPerHour')},
