@@ -5,7 +5,7 @@
   (/Library/LaunchDaemons/com.cloudflare.cloudflared.plist), which must not be changed by this lane.
   Credentials come from ~/.cloudflared/<TUNNEL_ID>.json via config.yml (owner-only), never from a
   token on the command line (a command-line token is visible to every local user in `ps`).
-  Copy into ~/Library/LaunchAgents only in EXPOSURE-RUNBOOK.md step 6.
+  STATE_DIR must be replaced per phase (runbook section 5). Copy into ~/Library/LaunchAgents only in step 6.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -36,8 +36,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/cloudflared.log</string>
+  <string>STATE_DIR/cloudflared.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/cloudflared.log</string>
+  <string>STATE_DIR/cloudflared.log</string>
 </dict>
 </plist>

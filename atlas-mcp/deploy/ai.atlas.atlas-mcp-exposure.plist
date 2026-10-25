@@ -3,7 +3,7 @@
   Lane X: PREPARED, NOT LOADED. Do not copy into ~/Library/LaunchAgents until Lane R16 has
   reviewed the exact commit and Dante has given the enable decision (EXPOSURE-RUNBOOK.md step 6).
   Anything in ~/Library/LaunchAgents loads at the next login, so it must not be placed there early.
-  WORKTREE below must be replaced with the reviewed, installed worktree path.
+  WORKTREE, CONFIG_FILE and STATE_DIR must be replaced per phase (acceptance or production; runbook section 5).
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -17,7 +17,7 @@
     <string>WORKTREE/atlas-mcp/bin/atlas-mcp.ts</string>
     <string>exposure-http</string>
     <string>--config</string>
-    <string>/Users/atlasai/.config/atlas/atlas-mcp-exposure/config.json</string>
+    <string>CONFIG_FILE</string>
   </array>
   <key>WorkingDirectory</key>
   <string>WORKTREE</string>
@@ -40,8 +40,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/server.log</string>
+  <string>STATE_DIR/server.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/atlasai/.local/state/atlas-mcp-exposure/server.log</string>
+  <string>STATE_DIR/server.log</string>
 </dict>
 </plist>

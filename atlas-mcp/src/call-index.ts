@@ -180,12 +180,33 @@ export class CallIndex {
         and (? is null or f.date >= ?) and (? is null or f.date <= ?)
         and (? is null or f.call_id in (select value from json_each(?)))
       order by score, f.date desc limit ?`);
+    // Scoped callers (an explicit allowed set): eligibility-first ranking (R16b B1). bm25()
+    // uses corpus-wide statistics, so a withheld document could reorder visible ones. Instead
+    // every matching ELIGIBLE row is fetched (FTS matching is per document) and ranked by a
+    // deterministic score computed from that document's own text only.
+    const local = input.allowed !== 'all';
+    const scopedStmt = local ? this.db.prepare(`
+      select f.id, f.call_id, f.title, f.date, f.attendees, f.link, f.summary, f.nturns, fts.title ft, fts.attendees fa, fts.analysis fan, fts.body fb
+      from fts join files f on f.id = fts.rowid
+      where fts match ?
+        and (? is null or f.date >= ?) and (? is null or f.date <= ?)
+        and f.call_id in (select value from json_each(?))
+      limit 5000`) : null;
+    const stems = terms.map(stem);
+    const own = (r: Record<string, unknown>) => {
+      const hits = (text: unknown) => { let n = 0; for (const tok of String(text ?? '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) if (stems.some(st => tok.startsWith(st))) n++; return n; };
+      return 6 * hits(r.ft) + 3 * hits(r.fa) + 1.5 * hits(r.fan) + hits(r.fb);
+    };
+    const rankLocal = (rows: Record<string, unknown>[]) => rows
+      .map((r): Record<string, unknown> & {score: number} => ({...r, score: -own(r)}))
+      .sort((a, b) => a.score - b.score || String(b.date ?? '').localeCompare(String(a.date ?? '')) || String(a.call_id).localeCompare(String(b.call_id)) || Number(a.id) - Number(b.id));
     const run = (match: string, allowed: 'all' | Set<string>) => {
       const j = allowed === 'all' ? null : JSON.stringify([...allowed]);
+      if (local) return rankLocal(scopedStmt!.all(match, input.from ?? null, input.from ?? null, input.to ?? null, input.to ?? null, j) as Record<string, unknown>[]);
       return stmt.all(match, input.from ?? null, input.from ?? null, input.to ?? null, input.to ?? null, j, j, fetch);
     };
     const client = input.client ? queryTerms(input.client) : [];
-    let rows;
+    let rows: Record<string, unknown>[];
     if (!client.length) rows = run(ftsQuery(terms), input.allowed);
     else {
       // The client filter is part of the FTS query (prefix match on title/attendees), so it
@@ -193,7 +214,10 @@ export class CallIndex {
       // second query restricted to those ids (and still to the caller's allowed set).
       rows = run(`(${ftsQuery(terms)}) AND ({title attendees} : (${client.map(t => `"${t}"*`).join(' AND ')}))`, input.allowed);
       const mapped = [...(input.clientCallIds ?? [])].filter(id => input.allowed === 'all' || input.allowed.has(id));
-      if (mapped.length) rows = [...rows, ...run(ftsQuery(terms), new Set(mapped))].sort((a, b) => Number(a.score) - Number(b.score));
+      if (mapped.length) {
+        rows = [...rows, ...run(ftsQuery(terms), new Set(mapped))];
+        rows = local ? rankLocal(rows as Record<string, unknown>[]) : rows.sort((a, b) => Number(a.score) - Number(b.score));
+      }
     }
     const out: CallHit[] = [];
     const seen = new Set<string>();

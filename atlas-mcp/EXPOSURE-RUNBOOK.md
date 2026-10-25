@@ -1,10 +1,10 @@
 # Atlas MCP exposure runbook: Natalie's Grok (grok_as_nat), Lane X / X2
 
-**Status: PREPARED ONLY. Nothing is exposed.** No account was created, no DNS changed, no tunnel started, no launchd job loaded, no exposure token minted. Authority: sprint-20261007 DECISIONS item 19(c) (build) and item 20 (policy list approved as built; L3 clients; task details may transit Cloudflare to Grok/xAI). **Lane R16 rejected the first candidate; X2 is the successor and needs Lane R16b acceptance.** Then, in this order: the classification decision (section 1), Rhys's written confirmation (item 20), Dante's enable decision, a **synthetic** remote acceptance pass (section 7), and only then a separately authorized switch to real data (section 8). Nothing is sent to Natalie before all of that.
+**Status: PREPARED ONLY. Nothing is exposed.** No account was created, no DNS changed, no tunnel started, no launchd job loaded, no exposure token minted. Authority: sprint-20261007 DECISIONS item 19(c) (build) and item 20 (policy list approved as built; L3 clients; task details may transit Cloudflare to Grok/xAI). **Lane R16 rejected the first candidate and R16b the second (X2); X3 is the successor and needs Lane R16c acceptance.** Then, in this order: the classification decision (section 1), Rhys's written confirmation (item 20), Dante's enable decision, a **synthetic** remote acceptance pass (section 7), and only then a separately authorized switch to real data (section 8). Nothing is sent to Natalie before all of that.
 
 What Grok gets once enabled on real data: principal `grok_as_nat` (hosted actor `nat`), tools `whoami`, `capabilities`, `list_tasks`, `get_task` only; task-level fields only (no quotes, search, drafts, `ask_call`; no full-call grants exist); never anything the sensitivity policy withholds; never a record whose classification is unresolved (see section 1).
 
-**Real scope is NOT empty.** The installed client-mapping state (INSTALL-029 post-use capture, 2026-10-25T02:00Z, as verified by R16) records **121 active Nat workspace-client grants** and Nat's resolver active. A grant is not proof that a call/task is visible or that the client is level 3. A separate read-only audit of Nat's real grants against the approved L3 list is running; its result, not this runbook, defines the expected real scope. This lane changes no grant.
+**Real scope.** The read-only Nat access audit (DECISIONS 25) found 121 active Nat workspace-client grants (all of Rhys's clients) plus a stale task grant; earlier "no grants" statements were wrong. Under DECISIONS 26 those grants and Nat's resolver are being deactivated and the local nat/grok_as_nat tokens revoked, in a separate lane; only Rhys-confirmed level-3 clients are to be re-granted. The real scope is therefore whatever is granted at the time of the real-data switch, observed, not assumed (it may be empty). This lane changes no grant.
 
 ## Architecture
 
@@ -57,10 +57,10 @@ The installed `meeting_queue('list')` does not return any classification; intake
 6. **Mandatory** edge rate-limiting rule on `<HOSTNAME>` (R14 requirement 5), e.g. 60 requests/min per IP, block 10 min; use what the plan supports and record it.
 7. Logging: Access/HTTP logs are metadata; do not enable Logpush with bodies or any Worker that logs bodies. Set retention.
 
-## 3. Mac: stage the SYNTHETIC acceptance origin (supervised; after R16b ACCEPT)
+## 3. Mac: stage the SYNTHETIC acceptance origin (supervised; after R16c ACCEPT)
 
 ```sh
-cd <REVIEWED WORKTREE>          # exact R16b-accepted commit; check `git rev-parse HEAD` and a clean tree
+cd <REVIEWED WORKTREE>          # exact R16c-accepted commit; check `git rev-parse HEAD` and a clean tree
 export PATH=/opt/homebrew/bin:$PATH
 A=~/.config/atlas/atlas-mcp-exposure-acceptance
 install -d -m 700 $A $A/empty-brain ~/.local/state/atlas-mcp-exposure-acceptance
@@ -96,67 +96,110 @@ cloudflared tunnel --config ~/.cloudflared/atlas-mcp-grok.yml ingress rule https
 
 No quick tunnel (`trycloudflare.com`, including the vendor's generic Grok example), no `httpHostHeader`, no `noTLSVerify`, no token on a command line.
 
-## 5. Mac: local origin smoke (still killed)
+## 5. Mac: prepare both user jobs for the ACCEPTANCE phase (still killed)
+
+Both templates carry placeholders for the worktree, the config and the state directory, so the acceptance phase never writes into production paths (R16b B4):
 
 ```sh
+W=$PWD; A=~/.config/atlas/atlas-mcp-exposure-acceptance; AS=~/.local/state/atlas-mcp-exposure-acceptance
 for f in ai.atlas.atlas-mcp-exposure ai.atlas.cloudflared-atlas-mcp-grok; do
-  cp atlas-mcp/deploy/$f.plist /tmp/ && sed -i '' "s#WORKTREE#$PWD#g" /tmp/$f.plist && plutil -lint /tmp/$f.plist; done
-# For the acceptance phase, point the origin plist's --config at $A/config.json.
-node atlas-mcp/bin/atlas-mcp.ts exposure-http --config $A/config.json &
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:4020/mcp -H "Host: <HOSTNAME>"   # 503 (killed)
-kill %1
+  sed -e "s#WORKTREE#$W#g" -e "s#CONFIG_FILE#$A/config.json#g" -e "s#STATE_DIR#$AS#g" atlas-mcp/deploy/$f.plist > /tmp/$f.plist
+  plutil -lint /tmp/$f.plist
+  grep -c "atlas-mcp-exposure-acceptance" /tmp/$f.plist        # >= 1: logs (and, for the origin, --config) point at acceptance paths
+  ! grep -q "WORKTREE\|CONFIG_FILE\|STATE_DIR\|/atlas-mcp-exposure/" /tmp/$f.plist && echo "no production paths or placeholders left"
+done
 ```
 
-## 6. Enable the acceptance window (Dante's explicit go)
+## 6. Start the acceptance window (Dante's explicit go)
+
+The origin starts **killed** (the kill file from section 3 is present) and records which config it runs (`exposure-runtime.json`). `exposure-resume` releases the kill switch only for a live `exposure-http` process started with exactly the config file passed to it; any config change needs a restart first (R16b B2).
 
 ```sh
 cp /tmp/ai.atlas.atlas-mcp-exposure.plist /tmp/ai.atlas.cloudflared-atlas-mcp-grok.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.atlas.atlas-mcp-exposure.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.atlas.cloudflared-atlas-mcp-grok.plist
-lsof -nP -iTCP:4020 -sTCP:LISTEN            # 127.0.0.1:4020 only
-node atlas-mcp/bin/atlas-mcp.ts exposure-resume --config $A/config.json --confirm   # re-validates config, policy pin, audit sink
+lsof -nP -iTCP:4020 -sTCP:LISTEN                                                     # 127.0.0.1:4020 only
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:4020/mcp -H "Host: <HOSTNAME>"   # 503 (killed)
+node atlas-mcp/bin/atlas-mcp.ts exposure-resume --config $A/config.json --confirm     # prints boundPid = the origin job's pid
 ```
 
-## 7. Supervised SYNTHETIC remote acceptance (R14 requirement 8; R16 finding 6)
+## 7. Supervised SYNTHETIC remote acceptance: ordered checklist (R14 requirement 8; R16 #6; R16b B4)
 
-Non-production service token, synthetic hosted actor, synthetic fixture: no real business data can be read or released. Run from outside the Mac's network; secrets typed from the password manager into environment variables, never echoed. Grok compatibility is tested here too (Natalie or Dante adds the connector with the **acceptance** credentials), never with production secrets.
+Non-production service token `atlas-grok-acceptance`, synthetic hosted actor, synthetic fixture: no real business data can be read or released. Run from outside the Mac's network; secrets typed from the password manager into environment variables, never echoed. **Every Mac command names `--config $A/config.json` (or `ATLAS_MCP_EXPOSURE_CONFIG=$A/config.json`).** Run the phases in order; each phase starts from the state the previous one leaves. Record status codes and counts only.
+
+**Phase A — resumed, below every limit**
 
 | # | Request | Expect |
 |---|---|---|
-| 1 | `POST https://<HOSTNAME>/mcp`, no headers | 401 or 403 from Cloudflare Access (both are documented); no origin row |
-| 2 | Access headers only, no bearer | 401 at origin (`unauthorized`) |
-| 3 | Access headers + wrong bearer, repeated | 401, then 429 (`bearer_rate`) after `bearerFailuresPerMinute` |
-| 4 | Access headers + bearer, `tools/list` | 200; exactly `whoami capabilities list_tasks get_task` |
-| 5 | `tools/call whoami` | principal `grok_as_nat`, hosted actor **`synthetic_nat`**, `sharingPolicy` present |
-| 6 | `tools/call list_tasks` | exactly 3 synthetic items: `task-syn-alpha-1`, `req-syn-alpha-2`, `req-syn-taskonly-1` (Beta "revenue", the `client_financial` row and the unclassified Delta row withheld) |
-| 7 | `get_task` on `task-syn-beta-1` / `task-syn-fin-1` / an unknown id | identical `not_found` |
-| 8 | `search_calls`, `ask_call`, `get_draft` | `isError`, `forbidden` |
-| 9 | `GET /mcp`; `POST /other` | 405 at origin; 404 from the tunnel ingress |
-| 10 | 20 KB body; 2,000-character JSON-RPC id | 413; small `Invalid id.` error |
-| 11 | 25 quick requests | 429 after the per-minute limit; the edge rule also fires at its threshold |
-| 12 | On the Mac: `exposure-kill`; repeat #4 | 503 at once |
-| 13 | Revoke the acceptance service token in Cloudflare; repeat #4 | 401/403 at the edge |
-| 14 | `rotate`; old bearer / new bearer | 401 / 200 |
-| 15 | On the Mac: `curl -X POST http://127.0.0.1:4020/mcp` (no public Host) | **421** (`bad_host`) |
-| 16 | On the Mac: same with `-H "Host: <HOSTNAME>"`, no Access JWT | **403** (`access_denied`); after 30 failures/min, 429 |
-| 17 | Make the policy file group-readable for one request, then restore | `not_available` for that request (current policy enforced) |
-| 18 | `~/.local/state/atlas-mcp-exposure-acceptance/exposure-audit.jsonl` | one schema-bound row per request (flood rows aggregated with `suppressed`); no token, JWT, body or task text |
-| 19 | `sh atlas-mcp/deploy/kill-switch.sh --revoke` | origin 503, both user jobs verified stopped, existing system tunnel untouched |
+| A1 | Access headers + bearer, `tools/list` | 200; exactly `whoami capabilities list_tasks get_task` |
+| A2 | `tools/call whoami` | principal `grok_as_nat`, hosted actor `synthetic_nat`, `sharingPolicy` present |
+| A3 | `tools/call list_tasks` | exactly `task-syn-alpha-1`, `req-syn-alpha-2`, `req-syn-taskonly-1` |
+| A4 | `get_task` on `task-syn-beta-1`, `task-syn-fin-1`, an unknown id | identical `not_found` |
+| A5 | `search_calls`, `ask_call`, `get_draft` | `isError`, `forbidden` |
+| A6 | `GET /mcp`; `POST /other` | 405 at origin; 404 from the tunnel ingress |
+| A7 | 20 KB body; 2,000-character JSON-RPC id | 413; small `Invalid id.` error |
+| A8 | On the Mac: `curl -X POST http://127.0.0.1:4020/mcp` (no public Host) | 421 (`bad_host`) |
+| A9 | On the Mac: same with `-H "Host: <HOSTNAME>"`, no Access JWT | 403 (`access_denied`) |
+| A10 | No headers at all, from outside | 401 or 403 from Cloudflare Access; no origin audit row |
+| A11 | Access headers only (no bearer), then 3 wrong bearers | 401 ×4 (below `bearerFailuresPerMinute` 10) |
 
-Record status codes and counts only. Then stop the acceptance jobs, revoke the acceptance bearer and service token.
+**Phase B — limits, then a defined recovery**
+
+| # | Step | Expect |
+|---|---|---|
+| B1 | After a 70 s pause, 25 valid requests within one minute | 200 ×20, then 429 (`rate_minute`, origin limit 20/min) |
+| B2 | 35 wrong bearers within one minute | 401 ×10, then 429 `bearer_rate`, then 429 `unauth_rate` once 30 pre-auth failures accumulate in the minute (no further JWT work); the audit shows one aggregated row per reason per 10 s with `suppressed` counts. Valid requests are also 429 until the window clears |
+| B3 | Separately, the configured **edge** rule threshold (e.g. 60/min per IP) | Cloudflare 429 at that threshold; record the rule and provenance |
+| B4 | **Wait 70 s** (per-minute, bearer and global pre-auth windows expire), then A1 | 200 again |
+
+**Phase C — kill and bound resume**
+
+| # | Step | Expect |
+|---|---|---|
+| C1 | Start a slow request (A3), and during it run `exposure-kill --config $A/config.json` | that request and every later one 503 |
+| C2 | `exposure-resume --config $A/config.json --confirm` | exit 0, `boundPid` = origin pid; A1 → 200 |
+| C3 | Edit `$A/config.json` (e.g. perMinute 19) | next request 503 `config_changed`; `exposure-kill`; `exposure-resume` **refused** (`config_changed_since_server_start`), kill kept |
+| C4 | Restore the exact previous bytes (or restart the origin job with the edited config: `launchctl kickstart -k gui/$(id -u)/ai.atlas.atlas-mcp-exposure`), then `exposure-resume` | exit 0; A1 → 200 |
+| C5 | Make `$A/sensitivity.json` group-readable for one request, then restore 0600 | that request `not_available`; next one normal |
+
+**Phase D — bearer rotation and in-flight revocation**
+
+| # | Step | Expect |
+|---|---|---|
+| D1 | `rotate --config $A/config.json --principal grok_as_nat --out $A/grok-2.token --expires-days 7`; old bearer, new bearer | 401 / 200 (update the Grok connector's bearer) |
+| D2 | During a slow request, `revoke-principal --config $A/config.json --principal grok_as_nat` | that request 401 (`revoked_in_flight`), later ones 401 |
+| D3 | `mint-token --config $A/config.json --principal grok_as_nat --out $A/grok-3.token --expires-days 7` | 200 with the new bearer |
+
+**Phase E — audit**
+
+E1: `$AS/exposure-audit.jsonl` has one schema-bound row per request, with flood reasons aggregated; it contains no token, JWT, body or task text. E2: Cloudflare logs for the hostname hold metadata only.
+
+**Phase F — irrevocable credential step (last)**
+
+F1: revoke the `atlas-grok-acceptance` service token in Cloudflare; A1 → 401/403 at the edge. **To repeat any earlier phase after F1:** create a new acceptance service token, add it to the Access policy, put its Client ID hash in `$A/config.json`, restart the origin job (`launchctl kickstart -k …`; the binding changes), then `exposure-resume`. Never use the production token for synthetic acceptance.
+
+**Phase G — stop, with separate pre-stop and post-stop checks**
+
+| # | Step | Expect |
+|---|---|---|
+| G1 | `node atlas-mcp/bin/atlas-mcp.ts exposure-kill --config $A/config.json` then A1 | **503** (pre-stop observation) |
+| G2 | `sh atlas-mcp/deploy/kill-switch.sh --config $A/config.json --revoke` | exit 0; both user jobs reported stopped and verified; `hostedSource: synthetic` in the status line; the existing system tunnel untouched |
+| G3 | A1 from outside | unreachable (Cloudflare tunnel error such as 502/530, or Access 401/403 if F1 done); `lsof -iTCP:4020` empty |
+
+Then remove the two acceptance plists from `~/Library/LaunchAgents`.
 
 ## 8. Separate switch to real data (its own authorization)
 
-Only after section 7 passes, the section-1 classification decision is implemented or recorded, Rhys's item-20 confirmation is recorded, the Nat-grant audit is reconciled with the approved L3 list, and Dante authorizes the switch:
+Only after section 7 passes, the section-1 classification decision is implemented or recorded, Rhys's item-20 confirmation is recorded, Nat's access is re-established under DECISIONS 26 (her 121 grants and resolver are being deactivated and the local nat/grok tokens revoked in a separate lane; only Rhys-confirmed level-3 clients are to be re-granted), and Dante authorizes the switch:
 
-1. Stage `~/.config/atlas/atlas-mcp-exposure/` from `config/exposure.example.json` (production `hostedSource`, actor `nat`), same pinned policy, the **real** service token's Client ID hash, killed by default; mint a new expiring bearer there.
-2. Point the origin plist at the production config; Access policy → the real service token only.
-3. Re-run checks 2–6, 12, 15, 16, 18 with the real credentials. Expected `list_tasks`: **the observed authorized scope** (classified, non-withheld tasks of Nat's granted clients), not zero, not synthetic.
+1. Stage `~/.config/atlas/atlas-mcp-exposure/` (config from `config/exposure.example.json`: production `hostedSource`, actor `nat`) and `~/.local/state/atlas-mcp-exposure/`, same pinned policy, the **real** service token's Client ID hash, kill file present; mint a new expiring bearer in **that** registry.
+2. Regenerate both plists with `CONFIG_FILE=~/.config/atlas/atlas-mcp-exposure/config.json` and `STATE_DIR=~/.local/state/atlas-mcp-exposure`; bootstrap; Access policy → the real token only; `exposure-resume --config <production config> --confirm`.
+3. Re-run phases A (expected `list_tasks` = **the observed authorized scope**: classified, non-withheld tasks of Nat's re-granted clients; possibly empty), B4 recovery as needed, C1–C2, E, and G1 with the **production** config named explicitly.
 4. Natalie updates the connector to the real credentials and runs the first prompt below under supervision.
 
 ## 9. Natalie's connector
 
-Known from vendor docs (as cited by R16): Grok documents custom MCP connectors with a URL and Streamable HTTP. **Still unverified for her account:** sending three static headers (`Authorization`, `CF-Access-Client-Id`, `CF-Access-Client-Secret`), any OAuth requirement, Origin behaviour, secret custody/retention at xAI, and whether Grok invokes tools autonomously (her 2-hourly Slack scan). Verify in section 7 with acceptance credentials. If incompatible, stop: a relay or OAuth front is a new, separately reviewed design; never weaken a gate.
+Known from vendor docs (as cited by R16): Grok documents custom MCP connectors with a URL and Streamable HTTP. **Still unverified for her account:** sending three static headers (`Authorization`, `CF-Access-Client-Id`, `CF-Access-Client-Secret`), any OAuth requirement, Origin behaviour, secret custody/retention at xAI, and whether Grok invokes tools autonomously (her 2-hourly Slack scan). Verify in section 7 (phase A) with acceptance credentials. If incompatible, stop: a relay or OAuth front is a new, separately reviewed design; never weaken a gate.
 
 | Field | Value |
 |---|---|
@@ -169,17 +212,19 @@ First prompt (read-only, no spend):
 
 > Using the Atlas connector only: call `whoami` and tell me which principal you are connected as and which tools you can use. Then call `list_tasks` and give me just the task titles, clients and due dates, exactly as returned. If the list is empty, say it is empty. Do not guess or add anything that is not in the tool results.
 
-Expected: synthetic phase as in section 7 #5–6; real phase the observed authorized scope.
+Expected: synthetic phase as in section 7 A2–A3; real phase the observed authorized scope.
 
-## 10. Kill switch, policy edits, rotation, rollback
+## 10. Kill switch, config/policy changes, rotation, rollback
 
-**Kill switch:** `sh <WORKTREE>/atlas-mcp/deploy/kill-switch.sh [--revoke]` (set `ATLAS_MCP_EXPOSURE_CONFIG` for the acceptance config). Kill file first (503 to everything, results completed after it are dropped), then boots out **only** `ai.atlas.atlas-mcp-exposure` and `ai.atlas.cloudflared-atlas-mcp-grok`, kills only `cloudflared … run atlas-mcp-grok`, verifies each is gone (non-zero exit if not), and prints status. It never touches the existing system tunnel. Then revoke the service token / disable the Access app in Cloudflare.
+**Kill switch:** `sh <WORKTREE>/atlas-mcp/deploy/kill-switch.sh --config <phase config> [--revoke]`. The config is **required** (no default), so the acceptance and production registries cannot be confused. It writes the kill file first (503 to everything; results completed after it are dropped), boots out only `ai.atlas.atlas-mcp-exposure` and `ai.atlas.cloudflared-atlas-mcp-grok`, kills only `cloudflared … run atlas-mcp-grok`, verifies each is gone (non-zero exit if not), and prints the status for that config. The existing system cloudflared daemon is outside this lane: the script never stops it and does not suggest stopping it. Then revoke the service token or disable the Access app in Cloudflare.
 
-**Policy edits:** the policy is re-read on every scoped call and checked again before release; an edit that does not match `sensitivitySha256`, a missing or non-owner-only file, or invalid JSON makes scoped callers get `not_available` immediately (no restart, no stale policy). To change the policy: kill, edit, update the pin in the config (after review), `policy-check`, then `exposure-resume --confirm` (which re-validates).
+**After a kill:** `exposure-resume --config <phase config> --confirm` works only while the **same** origin process (the one that recorded `exposure-runtime.json`) is running with byte-identical config, and its own pinned policy validates. If the jobs were stopped, bootstrap them again (they start killed), then resume.
 
-**Rotation / revocation:** `rotate --principal grok_as_nat --out <new> --expires-days ≤ tokenMaxAgeDays`; `revoke-principal`; `revoke --sha256-prefix`. A bearer revoked while a request is in flight gets 401 instead of the result. Watch the hosted `nat` JWT expiry (2027-01-18T06:01Z; Lane H alert 2027-01-04).
+**Config or policy changes (any key, including `sensitivityFile`, `sensitivitySha256`, `classificationEnforcement`, Access values):** a running server answers 503 `config_changed` as soon as its config file changes, and `exposure-resume` refuses. The procedure is kill → edit (after review) → `policy-check` → restart the origin job with the edited config (`launchctl kickstart -k gui/$(id -u)/ai.atlas.atlas-mcp-exposure`) → `exposure-resume`. The policy file itself is still re-read on every scoped call: a deleted, insecure, invalid or not-matching-the-pin policy gives `not_available` immediately.
 
-**Rollback:** kill switch with `--revoke`; in Cloudflare revoke both service tokens, delete the Access app, the `<HOSTNAME>` DNS record and tunnel `atlas-mcp-grok`; on the Mac remove the two user plists and this tunnel's credentials/config; keep the audit files; Natalie removes the connector. The local Rhys install and the existing system tunnel are unaffected.
+**Rotation / revocation:** `rotate --config <phase config> --principal grok_as_nat --out <new> --expires-days ≤ tokenMaxAgeDays`; `revoke-principal`; `revoke --sha256-prefix`. A bearer revoked while a request is in flight gets 401 instead of the result. Watch the hosted `nat` JWT expiry (2027-01-18T06:01Z; Lane H alert 2027-01-04).
+
+**Rollback:** kill switch with `--revoke` for each phase config; in Cloudflare revoke both service tokens, delete the Access app, the `<HOSTNAME>` DNS record and tunnel `atlas-mcp-grok`; on the Mac remove the two user plists and this tunnel's credentials/config; keep the audit files; Natalie removes the connector. The local Rhys install and the existing system tunnel are unaffected.
 
 ## 11. Alternative: Tailscale Funnel (not accepted on its own)
 

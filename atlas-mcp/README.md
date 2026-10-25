@@ -201,3 +201,9 @@ Tests: `test/sensitivity.test.ts` (17) and `test/exposure.test.ts` (13), in addi
 - **Current policy**: `PolicySource` re-reads the owner-only policy (optionally pinned by `sensitivitySha256`) on every scoped call and again at release.
 - **Hosted reads take the caller's deadline signal**; `src/synthetic-hosted.ts` provides the isolated synthetic source (`hostedSource: synthetic`, actors `synthetic_*` only) for remote acceptance.
 - Tests: `test/r16.test.ts` (16) turns every R16 reproduction into a regression.
+
+## Lane X3 changes (after R16b)
+
+- Scoped search ranks eligible rows only, by a deterministic score computed from each document itself; owner search keeps BM25.
+- exposure-http records exposure-runtime.json and serves only the config it started with; exposure-resume requires that live, byte-identical binding.
+- Pre-auth bound: reservations before Access work; bearer_rate, auth_timeout and parser errors count; flood audit aggregated. Tests: test/x3.test.ts (8).

@@ -354,7 +354,9 @@ test('CLI: exposure-kill (with token revocation), exposure-resume, rotate and re
     assert.deepEqual(k, {killed: true, revokedTokens: 1});
     assert.equal((await s.send(s.rpc('ping'), auth2)).status, 503);
     assert.throws(() => cli('exposure-resume'), 'resume needs --confirm');
-    assert.equal(cli('exposure-resume', '--confirm').killed, false);
+    assert.throws(() => cli('exposure-resume', '--confirm'), 'no running server is bound to this config: resume refused, kill kept');
+    assert.ok(existsSync(s.config.exposure!.killSwitchFile));
+    releaseKill(s.config.exposure!); // the bound-resume path is covered end to end in x3.test.ts
     assert.equal((await s.send(s.rpc('ping'), auth2)).status, 401, 'tokens stay revoked after resume');
     const st = cli('exposure-status');
     assert.equal(st.killed, false);

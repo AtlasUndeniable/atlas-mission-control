@@ -24,7 +24,7 @@ import {assemble, listen, readTokenFile, runStdio} from '../src/server.ts';
 import {CallIndex} from '../src/call-index.ts';
 import {mintEntry, readRegistry, revokePrincipal, writeRegistry} from '../src/auth.ts';
 import {PolicySource} from '../src/sensitivity.ts';
-import {assertDeployable, checkAuditSink, engageKill, killed, listenExposure, releaseKill, requireExposure} from '../src/exposure.ts';
+import {assertDeployable, checkAuditSink, clearRuntimeBinding, engageKill, exposureProcessAlive, fileSha256, killed, listenExposure, releaseKill, requireExposure, verifyResumeBinding, writeRuntimeBinding} from '../src/exposure.ts';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -124,13 +124,14 @@ async function main() {
   if (cmd === 'exposure-resume') {
     const e = requireExposure(config);
     if (!flag('confirm')) throw Error('--confirm required');
-    // No stale-policy resume: deployable config, a valid pinned policy and a writable audit
-    // sink are re-verified before the kill switch is released.
+    // No stale-policy resume (R16b B2): the kill switch is released only for a LIVE
+    // exposure-http process bound to exactly this config file (same bytes), whose own policy
+    // path and pin validate now. A changed config needs a restart with it first.
     assertDeployable(config);
-    if (!PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current()) throw Error('sensitivity policy invalid or not matching the pin: not resuming');
+    const binding = verifyResumeBinding(config, configFile, exposureProcessAlive);
     checkAuditSink(join(config.stateDir, 'exposure-audit.jsonl'));
     releaseKill(e);
-    console.log(JSON.stringify({killed: killed(e)}));
+    console.log(JSON.stringify({killed: killed(e), boundPid: binding.pid, configSha256: binding.configSha256, sensitivitySha256: binding.sensitivitySha256}));
     return;
   }
   if (cmd === 'exposure-status') {
@@ -150,10 +151,14 @@ async function main() {
     assertDeployable(config); // no placeholders, pinned policy, dedicated Access identity
     if (!PolicySource.file(config.sensitivityFile, config.sensitivitySha256).current()) throw Error('sensitivity policy invalid or not matching the pin: not starting');
     // No index refresh: sensitivity decisions read the brain directory directly (BrainFiles).
+    const configSha256 = fileSha256(configFile);
     const a = assemble({config, refreshIndex: false});
-    const srv = await listenExposure(a);
-    log({event: 'exposure_listening', host: '127.0.0.1', port: config.exposure!.port, hostedSource: config.hostedSource.mode, killed: killed(config.exposure!)});
-    const stop = () => { srv.close(); log({event: 'exposure_stopped'}); process.exit(0); };
+    // Serves only this config (503 config_changed if the file changes) and records the binding
+    // that exposure-resume must match.
+    const srv = await listenExposure(a, {configFile, configSha256});
+    writeRuntimeBinding(config, configFile, configSha256);
+    log({event: 'exposure_listening', host: '127.0.0.1', port: config.exposure!.port, hostedSource: config.hostedSource.mode, killed: killed(config.exposure!), configSha256});
+    const stop = () => { srv.close(); clearRuntimeBinding(config); log({event: 'exposure_stopped'}); process.exit(0); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;
   }
